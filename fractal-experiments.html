@@ -589,6 +589,20 @@ function render(ts){
   }
 }
 
+function randomizeControls(ids){
+  ids.forEach(id=>{
+    const el=$(id),vEl=$(id+'Val');
+    const min=+el.min,max=+el.max,step=+el.step||1;
+    const val=min+Math.floor(Math.random()*((max-min)/step+1))*step;
+    el.value=val;
+    if(vEl)vEl.textContent=val;
+  });
+}
+function randomizeSelect(id){
+  const el=$(id);
+  el.selectedIndex=Math.floor(Math.random()*el.options.length);
+}
+
 function generate(){
   perlin=new PerlinNoise((Math.random()*1e5)|0);
   time=0;render(performance.now());
@@ -614,7 +628,18 @@ $('playPause').addEventListener('click',togglePlay);
 // ═══════════════════════════════════════
 // EVENTS
 // ═══════════════════════════════════════
-$('generate').addEventListener('click',()=>{if(playing)togglePlay();generate()});
+$('generate').addEventListener('click',()=>{
+  if(playing)togglePlay();
+  randomizeSelect('fractal');
+  randomizeSelect('palette');
+  randomizeControls(['depth','noiseScale','amplitude','scale','stroke','rotation']);
+  // Clamp depth to fractal limit
+  const f=$('fractal').value;
+  const limit=depthLimits[f]||10;
+  if(+$('depth').value>limit){$('depth').value=limit;$('depthVal').textContent=limit;}
+  renderExtras(f);
+  generate();
+});
 $('resetBtn').addEventListener('click',()=>{
   targetX=W/2;targetY=H/2;smoothX=W/2;smoothY=H/2;
   $('rotation').value=0;$('rotationVal').textContent='0';

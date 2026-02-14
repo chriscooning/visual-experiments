@@ -332,8 +332,26 @@ function togglePlay(){
 // ═══════════════════════════════════════
 // CONTROLS
 // ═══════════════════════════════════════
+function randomizeControls(ids){
+  ids.forEach(id=>{
+    const el=$(id),vEl=$(id+'Val');
+    const min=+el.min,max=+el.max,step=+el.step||1;
+    const val=min+Math.floor(Math.random()*((max-min)/step+1))*step;
+    el.value=val;
+    if(vEl)vEl.textContent=val;
+  });
+}
+function randomizeSelect(id){
+  const el=$(id);
+  el.selectedIndex=Math.floor(Math.random()*el.options.length);
+}
+
 $('playPause').addEventListener('click',togglePlay);
 $('generate').addEventListener('click',()=>{
+  randomizeSelect('palette');
+  randomizeSelect('drawMode');
+  randomizeControls(['relax','noise','nSpeed','edgeW']);
+  $('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);
   perlin=new PerlinNoise((Math.random()*1e5)|0);
   time=0;
   initSeeds(+$('count').value);

@@ -275,8 +275,27 @@ function togglePlay(){
 // ═══════════════════════════════════════
 // CONTROLS
 // ═══════════════════════════════════════
+function randomizeControls(ids){
+  ids.forEach(id=>{
+    const el=$(id),vEl=$(id+'Val');
+    const min=+el.min,max=+el.max,step=+el.step||1;
+    const val=min+Math.floor(Math.random()*((max-min)/step+1))*step;
+    el.value=val;
+    if(vEl)vEl.textContent=val;
+  });
+}
+function randomizeSelect(id){
+  const el=$(id);
+  el.selectedIndex=Math.floor(Math.random()*el.options.length);
+}
+
 $('playPause').addEventListener('click',togglePlay);
-$('generate').addEventListener('click',()=>{initAgents(+$('count').value);if(!playing)render();});
+$('generate').addEventListener('click',()=>{
+  randomizeSelect('palette');
+  randomizeControls(['sep','ali','coh','perc','spd','trail','size']);
+  initAgents(+$('count').value);
+  if(!playing)render();
+});
 $('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='boids-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
 
 ['count','sep','ali','coh','perc','spd','trail','size'].forEach(id=>{

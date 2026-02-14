@@ -28,7 +28,7 @@ Index page sections: "Noise & Fractals" (3 cards), "Swarm & Emergence" (3 cards)
 
 ---
 
-## Next task: Randomize controls on Generate
+## Completed: Randomize controls on Generate
 
 ### Problem
 

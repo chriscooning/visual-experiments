@@ -262,8 +262,36 @@ function togglePlay(){
 // ═══════════════════════════════════════
 // CONTROLS
 // ═══════════════════════════════════════
+function randomizeControls(ids){
+  ids.forEach(id=>{
+    const el=$(id),vEl=$(id+'Val');
+    const min=+el.min,max=+el.max,step=+el.step||1;
+    const val=min+Math.floor(Math.random()*((max-min)/step+1))*step;
+    el.value=val;
+    if(vEl)vEl.textContent=val;
+  });
+}
+function randomizeSelect(id){
+  const el=$(id);
+  el.selectedIndex=Math.floor(Math.random()*el.options.length);
+}
+
 $('playPause').addEventListener('click',togglePlay);
-$('generate').addEventListener('click',()=>{initGrid();if(!playing)render();});
+$('generate').addEventListener('click',()=>{
+  randomizeSelect('palette');
+  randomizeSelect('preset');
+  // Apply preset's feed/kill values
+  const p=presets[$('preset').value];
+  if(p){
+    const feedV=Math.round(p.feed*1000);
+    const killV=Math.round(p.kill*1000);
+    $('feed').value=feedV;$('feedVal').textContent=feedV;
+    $('kill').value=killV;$('killVal').textContent=killV;
+  }
+  randomizeControls(['dA','dB']);
+  initGrid();
+  if(!playing)render();
+});
 $('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='reaction-diffusion-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
 
 $('preset').addEventListener('change',()=>{
