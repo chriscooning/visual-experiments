@@ -23,8 +23,11 @@ Live at: `https://chriscooning.github.io/visual-experiments/`
 | `curl-noise.html` | Done | Divergence-free Perlin curl flow field, interactive attractors |
 | `reaction-diffusion.html` | Done | Gray-Scott model, presets (mitosis/coral/spots/stripes/worms), brush |
 | `voronoi.html` | Done | Lloyd's relaxation, 3 draw modes, noise perturbation |
+| `data-conversion.html` | Done | Streaming rivers, funnel flow, A/B split |
+| `model-evaluation.html` | Done | Radar charts, score clouds, divergence view |
+| `agent-observability.html` | Done | Trace tree, agent flow, tool timeline |
 
-Index page sections: "Noise & Fractals" (3 cards), "Swarm & Emergence" (3 cards), "Fields & Patterns" (3 cards).
+Index page sections: "Noise & Fractals" (3 cards), "Swarm & Emergence" (3 cards), "Fields & Patterns" (3 cards), "Data & AI" (3 cards).
 
 ---
 
@@ -115,3 +118,80 @@ Which controls to randomize (exclude count/speed/sim-speed for performance/UX):
 - **Palettes**: Monochrome, Cool Blues, Warm Ember, Neon, Cyber, Gold
 - **Slider pattern**: `<label>Name <span class="val" id="fooVal">default</span></label><input type="range" id="foo" min="..." max="..." value="...">`
 - **Wiring pattern**: `$(id).addEventListener('input', () => { $(id+'Val').textContent = el.value; if(!playing) render(); })`
+
+---
+
+## Planned: Data & AI Section
+
+Add a fourth section **"Data & AI"** to the index with exactly 3 cards. Each card links to a new single-file experiment with multiple modes (like fractal-experiments.html or reaction-diffusion.html). No integration into existing experiments.
+
+### Index changes
+
+Update `index.html` to add the new section after "Fields & Patterns":
+
+```html
+<div class="section-label">Data &amp; AI</div>
+<a class="card" href="data-conversion.html">
+  <h2>Data &amp; Conversion</h2>
+  <p>Streaming rivers, funnel flow, and A/B split. Particles flow, aggregate, and convert — visualizing throughput, churn, and split tests.</p>
+  <span class="tag">Flow · Funnel · Conversion</span>
+</a>
+<a class="card" href="model-evaluation.html">
+  <h2>Model Evaluation</h2>
+  <p>Radar charts, score clouds, and divergence view. Compare models by accuracy, latency, and hallucination with animated overlays.</p>
+  <span class="tag">LLM · Metrics · Comparison</span>
+</a>
+<a class="card" href="agent-observability.html">
+  <h2>Agent Observability</h2>
+  <p>Trace trees, agent flow, and tool timelines. Recursive branches and flow paths show tool calls, nesting, and parallel execution.</p>
+  <span class="tag">Traces · Agents · Tools</span>
+</a>
+```
+
+### New file 1: data-conversion.html
+
+**Modes (select dropdown):**
+
+- **Streaming Rivers** — Dense particle streams flowing from edges, aggregating into clusters. Throughput = density; clusters = hotspots. Reuse curl-noise flow logic with directional bias and higher particle count.
+- **Funnel Flow** — Particles enter a wide funnel, some drop out along the way (different color/fade). Width = stage; dropouts = churn. Flow field with attractor toward narrow exit.
+- **A/B Split** — Two parallel streams branching from one source. Flow rate and color = conversion. Particles can "convert" between streams. Branch from curl-noise or simple directional flow.
+
+**Shared controls:** Palette, particle count, speed, trail fade. Mode-specific: funnel width, dropout rate, split ratio.
+
+**Reference implementations:** curl-noise.html (flow, particles, attractors), physarum.html (trails).
+
+### New file 2: model-evaluation.html
+
+**Modes (select dropdown):**
+
+- **Radar Charts** — Overlapping polygons for 3–5 "models" with axes: accuracy, latency, cost, hallucination rate. Animated transitions when scores change. Simulated scores driven by Perlin or sliders.
+- **Score Clouds** — Particles (evaluation runs) that cluster by score. Color = model; clustering = agreement; outliers = anomalies. Similar to particle-life but with explicit score dimension.
+- **Divergence View** — Two parallel streams (ground truth vs model output) that diverge on mismatch, converge on match. Divergence = hallucination. Flow-based with branching.
+
+**Shared controls:** Palette, speed. Mode-specific: number of models, metric weights, score ranges.
+
+**Reference implementations:** particle-life.html (clustering, species colors), fractal-experiments.html (radial drawing), curl-noise.html (flow).
+
+### New file 3: agent-observability.html
+
+**Modes (select dropdown):**
+
+- **Trace Tree** — Recursive branching (like twin-tree or cyber-fern). Each branch = tool call; depth = nesting; length = duration; color = status (success/error/timeout). Reuse fractal recursion + noise displacement.
+- **Agent Flow** — Flow-field paths where particles split at decision points. Branches = tools/agents; width = traffic; color = outcome. Curl-noise with explicit branching logic.
+- **Tool Timeline** — Horizontal timeline with vertical spikes for tool calls. Overlapping = parallel; height = duration. Bars or arcs. Optional radial "clock" layout.
+
+**Shared controls:** Palette, speed, depth/iterations. Mode-specific: branch count, error rate, parallel vs sequential bias.
+
+**Reference implementations:** fractal-experiments.html (twinTree, cyberFern, recursion), curl-noise.html (flow, particles).
+
+### Conventions for new files
+
+All three files must follow shared conventions: dark theme #0a0a0c, Space Mono + Outfit fonts, fullscreen canvas, glassmorphism panel (H toggle), hint pill, FPS counter, Play/Pause + Generate + Save PNG buttons, palette select, randomizeControls/randomizeSelect on Generate, mode selector as first control.
+
+### Implementation order
+
+1. **data-conversion.html** — Easiest; builds directly on curl-noise flow + attractors.
+2. **agent-observability.html** — Trace tree reuses fractal recursion; agent flow reuses curl-noise.
+3. **model-evaluation.html** — Radar is custom drawing; score clouds and divergence build on particle/flow patterns.
+4. **index.html** — Add section and 3 cards.
+5. **plan.md** — Update file inventory with new files. **README.md** — Add Data & AI section with descriptions for each experiment and their modes.

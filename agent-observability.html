@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Agent Observability</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0c;overflow:hidden;color:#ccc;font-family:'Outfit',sans-serif}
+canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block}
+
+.panel{position:fixed;bottom:20px;right:20px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;}
+.panel.hidden{transform:translateX(calc(100% + 40px))}
+
+.hint{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;color:#444;pointer-events:none;z-index:10;animation:hintFade 4s forwards}
+@keyframes hintFade{0%,60%{opacity:1}100%{opacity:0}}
+
+#fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+
+label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555;display:block}
+.val{font-size:9px;color:#777;float:right}
+
+input[type=range]{-webkit-appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;margin-top:4px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #0a0a0c;cursor:pointer}
+input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #0a0a0c;cursor:pointer}
+
+select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;width:100%;outline:none;cursor:pointer}
+
+.btn{width:100%;padding:8px 0;border:1px solid #2a2a2f;border-radius:6px;background:#151518;color:#888;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;transition:all .15s ease}
+.btn:hover{border-color:#444}
+.btn.playing{background:#2ecc40;color:#fff;border-color:#2ecc40}
+.btn.primary{background:#fff;color:#000;border-color:#fff}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fps">0 FPS</div>
+<div class="hint">Press H to toggle controls</div>
+
+<div class="panel" id="panel">
+  <label>MODE<span class="val" id="modeVal"></span></label>
+  <select id="mode">
+    <option value="tree">Trace Tree</option>
+    <option value="flow">Agent Flow</option>
+    <option value="timeline">Tool Timeline</option>
+  </select>
+
+  <label>PALETTE<span class="val" id="palVal"></span></label>
+  <select id="pal">
+    <option value="mono">Monochrome</option>
+    <option value="cool">Cool Blues</option>
+    <option value="warm">Warm Ember</option>
+    <option value="neon">Neon</option>
+    <option value="cyber">Cyber</option>
+    <option value="gold">Gold</option>
+  </select>
+
+  <label>SPEED<span class="val" id="spdVal"></span></label>
+  <input type="range" id="spd" min="1" max="100" value="30">
+
+  <label>DEPTH<span class="val" id="depthVal"></span></label>
+  <input type="range" id="depth" min="2" max="10" value="6">
+
+  <label>BRANCHES<span class="val" id="branchesVal"></span></label>
+  <input type="range" id="branches" min="2" max="6" value="3">
+
+  <label>ERROR RATE<span class="val" id="errRateVal"></span></label>
+  <input type="range" id="errRate" min="0" max="50" value="10">
+
+  <label>NOISE SCALE<span class="val" id="nScaleVal"></span></label>
+  <input type="range" id="nScale" min="0" max="100" value="25">
+
+  <label>AMPLITUDE<span class="val" id="ampVal"></span></label>
+  <input type="range" id="amp" min="0" max="200" value="40">
+
+  <label>STROKE<span class="val" id="strokeVal"></span></label>
+  <input type="range" id="stroke" min="1" max="20" value="5">
+
+  <button class="btn" id="playBtn" onclick="togglePlay()">Play</button>
+  <button class="btn primary" id="genBtn" onclick="generate()">Generate</button>
+  <button class="btn" onclick="savePNG()">Save PNG</button>
+</div>
+
+<script>
+function $(id){return document.getElementById(id)}
+
+/* ── Perlin Noise ── */
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+/* ── Palettes ── */
+const palettes={
+  mono:(t,a)=>{const v=180+t*75|0;return`rgba(${v},${v},${v},${a})`;},
+  cool:(t,a)=>`rgba(${30+t*50|0},${140+t*70|0},${200+t*55|0},${a})`,
+  warm:(t,a)=>`rgba(${200+t*55|0},${50+t*110|0},${15+t*40|0},${a})`,
+  neon:(t,a)=>`hsla(${(t*280+180)%360},100%,58%,${a})`,
+  cyber:(t,a)=>`rgba(${20+t*40|0},${220+t*35|0},${180+t*60|0},${a})`,
+  gold:(t,a)=>`rgba(${200+t*55|0},${160+t*60|0},${20+t*60|0},${a})`
+};
+
+/* ── State ── */
+const canvas=$('c'), ctx=canvas.getContext('2d');
+let W,H,playing=false,time=0,noise,seed=1337;
+let treeNodes=[],flowParticles=null,flowSplits=[],timelineBars=[];
+let originX=0.5,originY=1.0; // normalized origin for tree
+let dragActive=false,dragStartX=0,dragStartY=0,origStartX=0,origStartY=0;
+let lastFrameTime=0,frameCount=0,fpsTime=0,fpsDisplay=0;
+
+/* ── Resize ── */
+function resize(){
+  const dpr=window.devicePixelRatio||1;
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.width=W*dpr; canvas.height=H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',()=>{resize();rebuildCurrentMode()});
+resize();
+
+/* ── Helpers ── */
+function rand(a,b){return Math.random()*(b-a)+a}
+function randInt(a,b){return Math.floor(rand(a,b+1))}
+function clamp(v,lo,hi){return v<lo?lo:v>hi?hi:v}
+
+function randomizeControls(){
+  const sliders=['depth','branches','errRate','nScale','amp','stroke'];
+  sliders.forEach(id=>{
+    const el=$(id);
+    const mn=+el.min, mx=+el.max;
+    el.value=randInt(mn,mx);
+  });
+  updateLabels();
+}
+function randomizeSelect(){
+  const modeOpts=$('mode').options;
+  $('mode').selectedIndex=randInt(0,modeOpts.length-1);
+  const palOpts=$('pal').options;
+  $('pal').selectedIndex=randInt(0,palOpts.length-1);
+}
+
+function updateLabels(){
+  $('spdVal').textContent=$('spd').value;
+  $('depthVal').textContent=$('depth').value;
+  $('branchesVal').textContent=$('branches').value;
+  $('errRateVal').textContent=$('errRate').value+'%';
+  $('nScaleVal').textContent=$('nScale').value;
+  $('ampVal').textContent=$('amp').value;
+  $('strokeVal').textContent=$('stroke').value;
+  $('modeVal').textContent='';
+  $('palVal').textContent='';
+}
+
+// Listen on sliders
+['spd','depth','branches','errRate','nScale','amp','stroke'].forEach(id=>{
+  $(id).addEventListener('input',updateLabels);
+});
+$('mode').addEventListener('change',()=>{rebuildCurrentMode()});
+updateLabels();
+
+/* ── Controls Toggle ── */
+document.addEventListener('keydown',e=>{
+  if(e.key==='h'||e.key==='H'){$('panel').classList.toggle('hidden')}
+});
+
+/* ── Play/Pause ── */
+function togglePlay(){
+  playing=!playing;
+  const btn=$('playBtn');
+  btn.textContent=playing?'Pause':'Play';
+  btn.classList.toggle('playing',playing);
+  if(playing) requestAnimationFrame(loop);
+}
+
+/* ── Save ── */
+function savePNG(){
+  const link=document.createElement('a');
+  link.download='agent-observability-'+Date.now()+'.png';
+  link.href=canvas.toDataURL('image/png');
+  link.click();
+}
+
+/* ── Generate ── */
+function generate(){
+  randomizeSelect();
+  randomizeControls();
+  seed=Math.floor(Math.random()*2147483647)||1;
+  noise=new PerlinNoise(seed);
+  time=0;
+  originX=0.5;originY=1.0;
+  rebuildCurrentMode();
+}
+
+function rebuildCurrentMode(){
+  const mode=$('mode').value;
+  if(mode==='tree') buildTree();
+  else if(mode==='flow') buildFlow();
+  else buildTimeline();
+}
+
+/* ═══════════════════════════════════════════
+   MODE 1: TRACE TREE
+   ═══════════════════════════════════════════ */
+function buildTree(){
+  treeNodes=[];
+  const maxDepth=+$('depth').value;
+  const maxBranches=+$('branches').value;
+  const errRate=+$('errRate').value/100;
+  const baseX=originX*W;
+  const baseY=originY*H;
+  const baseLen=Math.min(W,H)*0.18;
+
+  function addBranch(x,y,angle,len,depth,delayBase){
+    if(depth>maxDepth||len<3) return;
+    // status
+    let status='success';
+    const r=Math.random();
+    if(r<errRate) status='error';
+    else if(r<errRate+0.03) status='timeout';
+
+    const duration=rand(0.6,1.4);
+    const node={
+      x,y,angle,length:len*duration,depth,status,
+      growthProgress:0,
+      growthDelay:delayBase,
+      ex:x+Math.cos(angle)*len*duration,
+      ey:y+Math.sin(angle)*len*duration,
+      children:[]
+    };
+    treeNodes.push(node);
+
+    // child branches
+    const nChildren=randInt(Math.max(1,maxBranches-1),maxBranches);
+    const spreadAngle=Math.PI*0.6;
+    const childDelay=delayBase+rand(0.3,0.6);
+    for(let i=0;i<nChildren;i++){
+      if(status==='error'&&Math.random()<0.7) continue; // errors often don't spawn children
+      const t=nChildren===1?0:(i/(nChildren-1)-0.5)*2;
+      const childAngle=angle+t*spreadAngle/2+rand(-0.15,0.15);
+      const childLen=len*rand(0.55,0.75);
+      addBranch(node.ex,node.ey,childAngle,childLen,depth+1,childDelay);
+    }
+  }
+
+  addBranch(baseX,baseY,-Math.PI/2,baseLen,0,0);
+}
+
+function drawTree(dt){
+  const pal=palettes[$('pal').value];
+  const nScale=+$('nScale').value/100;
+  const ampVal=+$('amp').value;
+  const strokeW=+$('stroke').value;
+  const speed=+$('spd').value/30;
+
+  for(const node of treeNodes){
+    if(time<node.growthDelay) continue;
+    node.growthProgress=clamp(node.growthProgress+(dt*speed*2),0,1);
+    const gp=node.growthProgress;
+    if(gp<=0) continue;
+
+    const noiseOff=noise.n2(node.x*nScale*0.005+time*0.3,node.y*nScale*0.005)*ampVal;
+    const noiseOff2=noise.n2(node.y*nScale*0.005+time*0.3,node.x*nScale*0.005)*ampVal;
+
+    const ex=node.x+(node.ex-node.x)*gp+noiseOff*0.3;
+    const ey=node.y+(node.ey-node.y)*gp+noiseOff2*0.3;
+
+    let color;
+    if(node.status==='error') color=`rgba(230,60,60,${0.5+gp*0.5})`;
+    else if(node.status==='timeout') color=`rgba(230,180,40,${0.4+gp*0.5})`;
+    else color=pal(node.depth/10,0.4+gp*0.5);
+
+    const lw=Math.max(1,strokeW*(1-node.depth*0.1))*clamp(gp*2,0,1);
+    ctx.beginPath();
+    ctx.moveTo(node.x+noiseOff*0.1,node.y+noiseOff2*0.1);
+
+    // Quadratic curve for organic feel
+    const mx=(node.x+ex)/2+noiseOff*0.5;
+    const my=(node.y+ey)/2+noiseOff2*0.5;
+    ctx.quadraticCurveTo(mx,my,ex,ey);
+
+    ctx.strokeStyle=color;
+    ctx.lineWidth=lw;
+    ctx.lineCap='round';
+    ctx.stroke();
+
+    // Glow for terminal nodes or errors
+    if(gp>0.95&&(node.status==='error'||node.status==='timeout')){
+      ctx.beginPath();
+      ctx.arc(ex,ey,lw*2+2,0,Math.PI*2);
+      ctx.fillStyle=node.status==='error'?'rgba(230,60,60,0.3)':'rgba(230,180,40,0.25)';
+      ctx.fill();
+    }
+
+    // Bright tip dot
+    if(gp>0.9&&gp<1){
+      ctx.beginPath();
+      ctx.arc(ex,ey,lw*0.8,0,Math.PI*2);
+      ctx.fillStyle='rgba(255,255,255,0.6)';
+      ctx.fill();
+    }
+  }
+
+  // Check if all grown — if so, slowly regrow
+  const allDone=treeNodes.every(n=>n.growthProgress>=1);
+  if(allDone&&treeNodes.length>0){
+    if(!drawTree._regenTimer) drawTree._regenTimer=0;
+    drawTree._regenTimer+=dt;
+    if(drawTree._regenTimer>2){
+      drawTree._regenTimer=0;
+      time=0;
+      buildTree();
+    }
+  } else {
+    drawTree._regenTimer=0;
+  }
+}
+
+/* ═══════════════════════════════════════════
+   MODE 2: AGENT FLOW
+   ═══════════════════════════════════════════ */
+const MAX_PARTICLES=6000;
+let flowX,flowY,flowVX,flowVY,flowAge,flowPath,flowActive;
+
+function buildFlow(){
+  const depthVal=+$('depth').value;
+  const branchVal=+$('branches').value;
+
+  flowX=new Float32Array(MAX_PARTICLES);
+  flowY=new Float32Array(MAX_PARTICLES);
+  flowVX=new Float32Array(MAX_PARTICLES);
+  flowVY=new Float32Array(MAX_PARTICLES);
+  flowAge=new Float32Array(MAX_PARTICLES);
+  flowPath=new Float32Array(MAX_PARTICLES); // 0-1 path identifier for color
+  flowActive=new Uint8Array(MAX_PARTICLES);
+
+  // Split zones: horizontal positions where particles split
+  flowSplits=[];
+  const numSplits=clamp(depthVal-1,1,8);
+  for(let i=0;i<numSplits;i++){
+    const yFrac=(i+1)/(numSplits+1);
+    flowSplits.push({
+      y:yFrac*H,
+      spread:rand(0.08,0.15)*W,
+      branches:clamp(branchVal,2,6)
+    });
+  }
+
+  // Initialize particles
+  for(let i=0;i<MAX_PARTICLES;i++){
+    resetParticle(i);
+  }
+}
+
+function resetParticle(i){
+  flowX[i]=W*0.3+Math.random()*W*0.4;
+  flowY[i]=-Math.random()*100;
+  flowVX[i]=0;
+  flowVY[i]=0;
+  flowAge[i]=0;
+  flowPath[i]=Math.random();
+  flowActive[i]=1;
+}
+
+function drawFlow(dt){
+  const pal=palettes[$('pal').value];
+  const nScale=+$('nScale').value/1000;
+  const ampVal=+$('amp').value*0.02;
+  const speed=+$('spd').value/20;
+  const strokeW=+$('stroke').value;
+  const errRate=+$('errRate').value/100;
+
+  if(!flowX) return;
+
+  ctx.lineWidth=1;
+
+  for(let i=0;i<MAX_PARTICLES;i++){
+    if(!flowActive[i]) continue;
+    const px=flowX[i], py=flowY[i];
+
+    // Curl noise
+    const eps=1;
+    const n1=noise.fbm((px+eps)*nScale,py*nScale+time*0.2,3);
+    const n2=noise.fbm((px-eps)*nScale,py*nScale+time*0.2,3);
+    const n3=noise.fbm(px*nScale,(py+eps)*nScale+time*0.2,3);
+    const n4=noise.fbm(px*nScale,(py-eps)*nScale+time*0.2,3);
+    const curlX=(n3-n4)/(2*eps)*ampVal*200;
+    const curlY=-(n1-n2)/(2*eps)*ampVal*200;
+
+    let vx=curlX*0.3;
+    let vy=speed*2+curlY*0.1;
+
+    // Apply splits
+    for(const split of flowSplits){
+      const dy=py-split.y;
+      if(Math.abs(dy)<30){
+        const pathIdx=Math.floor(flowPath[i]*split.branches);
+        const offset=(pathIdx/(split.branches-1||1)-0.5)*split.spread;
+        vx+=(offset-flowVX[i]*5)*0.05;
+      }
+    }
+
+    flowVX[i]=flowVX[i]*0.95+vx*dt;
+    flowVY[i]=flowVY[i]*0.95+vy*dt;
+    const nx=px+flowVX[i];
+    const ny=py+flowVY[i];
+
+    // Draw line segment
+    const age=flowAge[i];
+    const alpha=clamp(1-age/600,0.05,0.6);
+    const isErr=flowPath[i]<errRate;
+    const col=isErr?`rgba(230,60,60,${alpha})`:pal(flowPath[i],alpha);
+    ctx.beginPath();
+    ctx.moveTo(px,py);
+    ctx.lineTo(nx,ny);
+    ctx.strokeStyle=col;
+    ctx.lineWidth=clamp(strokeW*0.3*(1-age/800),0.3,strokeW);
+    ctx.stroke();
+
+    flowX[i]=nx;
+    flowY[i]=ny;
+    flowAge[i]=age+1;
+
+    // Reset if out of bounds
+    if(ny>H+50||nx<-100||nx>W+100||age>800){
+      resetParticle(i);
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════
+   MODE 3: TOOL TIMELINE
+   ═══════════════════════════════════════════ */
+const TOOL_TYPES=['LLM Call','Web Search','Code Exec','DB Query','File Read','API Call','Transform','Validate'];
+const TOOL_LANES=8;
+let timelineOffset=0;
+let lastBarTime=0;
+
+function buildTimeline(){
+  timelineBars=[];
+  timelineOffset=0;
+  lastBarTime=0;
+  // Seed initial bars
+  for(let i=0;i<40;i++){
+    addTimelineBar(i*rand(20,60));
+  }
+}
+
+function addTimelineBar(xOffset){
+  const errRate=+$('errRate').value/100;
+  const lane=randInt(0,TOOL_LANES-1);
+  const duration=rand(20,180);
+  const toolType=randInt(0,TOOL_TYPES.length-1);
+  let status='success';
+  if(Math.random()<errRate) status='error';
+  else if(Math.random()<0.03) status='timeout';
+  timelineBars.push({
+    x:xOffset||(W+timelineOffset+rand(0,100)),
+    lane,
+    width:duration,
+    height:rand(30,H*0.08),
+    toolType,
+    status,
+    pulse:Math.random()*Math.PI*2,
+    birth:time
+  });
+}
+
+function drawTimeline(dt){
+  const pal=palettes[$('pal').value];
+  const speed=+$('spd').value/15;
+  const strokeW=+$('stroke').value;
+  const nScale=+$('nScale').value/100;
+  const ampVal=+$('amp').value;
+
+  timelineOffset+=speed*dt*60;
+
+  // Add new bars periodically
+  lastBarTime+=dt;
+  const barInterval=0.3/Math.max(speed,0.1);
+  if(lastBarTime>barInterval){
+    lastBarTime=0;
+    const nBars=randInt(1,3);
+    for(let i=0;i<nBars;i++) addTimelineBar();
+  }
+
+  // Lane height
+  const laneH=H/TOOL_LANES;
+  const margin=laneH*0.1;
+
+  // Draw lane lines
+  ctx.strokeStyle='rgba(255,255,255,0.03)';
+  ctx.lineWidth=1;
+  for(let i=0;i<=TOOL_LANES;i++){
+    const y=i*laneH;
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+  }
+
+  // Draw time markers
+  const markerSpacing=200;
+  ctx.fillStyle='rgba(255,255,255,0.04)';
+  ctx.font="9px 'Space Mono',monospace";
+  for(let x=-timelineOffset%markerSpacing;x<W;x+=markerSpacing){
+    ctx.fillRect(x,0,1,H);
+    const tVal=Math.floor((x+timelineOffset)/60);
+    ctx.fillText(tVal+'s',x+4,H-6);
+  }
+
+  // Draw bars
+  for(let i=timelineBars.length-1;i>=0;i--){
+    const bar=timelineBars[i];
+    const screenX=bar.x-timelineOffset;
+
+    // Cull offscreen bars
+    if(screenX+bar.width<-50){
+      timelineBars.splice(i,1);
+      continue;
+    }
+    if(screenX>W+50) continue;
+
+    const laneY=bar.lane*laneH+margin;
+    const barH=laneH-margin*2;
+    const age=time-bar.birth;
+    const fadeIn=clamp(age*3,0,1);
+
+    // Noise displacement
+    const ny=noise.n2(screenX*nScale*0.01+time*0.5,bar.lane*0.5)*ampVal*0.15;
+
+    // Pulsing glow
+    bar.pulse+=dt*2;
+    const pulseAlpha=0.05*Math.sin(bar.pulse)*fadeIn;
+
+    let color;
+    if(bar.status==='error') color=`rgba(230,60,60,${(0.7+pulseAlpha)*fadeIn})`;
+    else if(bar.status==='timeout') color=`rgba(230,180,40,${(0.6+pulseAlpha)*fadeIn})`;
+    else color=pal(bar.toolType/TOOL_TYPES.length,(0.6+pulseAlpha)*fadeIn);
+
+    // Bar body
+    const rx=screenX, ry=laneY+ny, rw=bar.width, rh=bar.height;
+    ctx.fillStyle=color;
+    roundRect(ctx,rx,ry+(barH-rh)/2,rw,rh,4);
+    ctx.fill();
+
+    // Glow
+    if(bar.status!=='success'){
+      ctx.shadowColor=bar.status==='error'?'rgba(230,60,60,0.4)':'rgba(230,180,40,0.3)';
+      ctx.shadowBlur=12;
+      ctx.fillStyle='transparent';
+      roundRect(ctx,rx,ry+(barH-rh)/2,rw,rh,4);
+      ctx.fill();
+      ctx.shadowBlur=0;
+    }
+
+    // Top edge highlight
+    ctx.fillStyle=`rgba(255,255,255,${0.08*fadeIn})`;
+    roundRect(ctx,rx,ry+(barH-rh)/2,rw,2,1);
+    ctx.fill();
+
+    // Tool label
+    if(rw>50){
+      ctx.fillStyle=`rgba(255,255,255,${0.4*fadeIn})`;
+      ctx.font="9px 'Space Mono',monospace";
+      ctx.fillText(TOOL_TYPES[bar.toolType],rx+6,ry+(barH-rh)/2+rh/2+3);
+    }
+  }
+}
+
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.lineTo(x+w-r,y);
+  ctx.arcTo(x+w,y,x+w,y+r,r);
+  ctx.lineTo(x+w,y+h-r);
+  ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+  ctx.lineTo(x+r,y+h);
+  ctx.arcTo(x,y+h,x,y+h-r,r);
+  ctx.lineTo(x,y+r);
+  ctx.arcTo(x,y,x+r,y,r);
+  ctx.closePath();
+}
+
+/* ── Mouse / Touch ── */
+canvas.addEventListener('mousedown',e=>{
+  dragActive=true;
+  dragStartX=e.clientX;dragStartY=e.clientY;
+  origStartX=originX;origStartY=originY;
+});
+window.addEventListener('mousemove',e=>{
+  if(!dragActive) return;
+  const dx=(e.clientX-dragStartX)/W;
+  const dy=(e.clientY-dragStartY)/H;
+  originX=clamp(origStartX+dx,0.1,0.9);
+  originY=clamp(origStartY+dy,0.3,1.0);
+  if($('mode').value==='tree'){time=0;buildTree();}
+});
+window.addEventListener('mouseup',()=>{dragActive=false});
+
+canvas.addEventListener('touchstart',e=>{
+  const t=e.touches[0];
+  dragActive=true;
+  dragStartX=t.clientX;dragStartY=t.clientY;
+  origStartX=originX;origStartY=originY;
+},{passive:true});
+window.addEventListener('touchmove',e=>{
+  if(!dragActive) return;
+  const t=e.touches[0];
+  const dx=(t.clientX-dragStartX)/W;
+  const dy=(t.clientY-dragStartY)/H;
+  originX=clamp(origStartX+dx,0.1,0.9);
+  originY=clamp(origStartY+dy,0.3,1.0);
+  if($('mode').value==='tree'){time=0;buildTree();}
+},{passive:true});
+window.addEventListener('touchend',()=>{dragActive=false});
+
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const d=e.deltaY>0?-1:1;
+  const el=$('depth');
+  el.value=clamp(+el.value+d,+el.min,+el.max);
+  updateLabels();
+  rebuildCurrentMode();
+},{passive:false});
+
+/* ── Main Loop ── */
+function loop(ts){
+  if(!playing) return;
+  const dt=Math.min((ts-lastFrameTime)/1000,0.1);
+  lastFrameTime=ts;
+  time+=dt;
+
+  // FPS
+  frameCount++;
+  fpsTime+=dt;
+  if(fpsTime>=0.5){
+    fpsDisplay=Math.round(frameCount/fpsTime);
+    $('fps').textContent=fpsDisplay+' FPS';
+    frameCount=0;fpsTime=0;
+  }
+
+  const mode=$('mode').value;
+
+  // Fade trails
+  ctx.fillStyle='rgba(10,10,12,0.15)';
+  ctx.fillRect(0,0,W,H);
+
+  if(mode==='tree') drawTree(dt);
+  else if(mode==='flow') drawFlow(dt);
+  else drawTimeline(dt);
+
+  requestAnimationFrame(loop);
+}
+
+/* ── Init ── */
+noise=new PerlinNoise(seed);
+buildTree();
+togglePlay();
+</script>
+</body>
+</html>

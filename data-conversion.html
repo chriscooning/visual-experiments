@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Data &amp; Conversion</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0c;overflow:hidden;color:#ccc;font-family:'Outfit',sans-serif}
+canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block}
+
+.panel{position:fixed;bottom:20px;right:20px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;}
+.panel.hidden{transform:translateX(calc(100% + 40px))}
+
+.hint{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;color:#555;pointer-events:none;animation:fadeHint 4s forwards}
+@keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+
+#fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+
+.lbl{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555;display:flex;justify-content:space-between;align-items:center}
+.val{font-size:9px;color:#777;float:right}
+
+input[type=range]{-webkit-appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #0a0a0c;cursor:pointer}
+input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #0a0a0c;cursor:pointer}
+
+select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;width:100%;outline:none;cursor:pointer}
+
+button{width:100%;padding:8px 0;border:1px solid #2a2a2f;border-radius:6px;background:#151518;color:#ccc;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;transition:background .2s,color .2s}
+button:hover{background:#1e1e24}
+button.playing{background:#2ecc40;color:#000;border-color:#2ecc40}
+button.primary{background:#fff;color:#000;border-color:#fff}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fps">0 FPS</div>
+<div class="hint">[ H ] toggle controls</div>
+
+<div class="panel" id="panel">
+  <div class="lbl">MODE</div>
+  <select id="mode">
+    <option value="rivers">Streaming Rivers</option>
+    <option value="funnel">Funnel Flow</option>
+    <option value="ab">A/B Split</option>
+  </select>
+
+  <div class="lbl">PALETTE</div>
+  <select id="pal">
+    <option value="mono">Monochrome</option>
+    <option value="cool">Cool Blues</option>
+    <option value="warm">Warm Ember</option>
+    <option value="neon">Neon</option>
+    <option value="cyber">Cyber</option>
+    <option value="gold">Gold</option>
+  </select>
+
+  <div class="lbl">PARTICLES <span class="val" id="countV">8000</span></div>
+  <input type="range" id="count" min="1000" max="30000" value="8000" step="500">
+
+  <div class="lbl">SPEED <span class="val" id="spdV">3.0</span></div>
+  <input type="range" id="spd" min="5" max="100" value="30">
+
+  <div class="lbl">TRAIL LENGTH <span class="val" id="trailV">80</span></div>
+  <input type="range" id="trail" min="0" max="100" value="80">
+
+  <div class="lbl">NOISE SCALE <span class="val" id="nScaleV">30</span></div>
+  <input type="range" id="nScale" min="1" max="100" value="30">
+
+  <div class="lbl">NOISE SPEED <span class="val" id="nSpeedV">20</span></div>
+  <input type="range" id="nSpeed" min="0" max="100" value="20">
+
+  <div class="lbl">SIZE <span class="val" id="sizeV">1.0</span></div>
+  <input type="range" id="size" min="5" max="40" value="10">
+
+  <div class="lbl">FUNNEL WIDTH <span class="val" id="funnelV">70</span></div>
+  <input type="range" id="funnel" min="10" max="100" value="70">
+
+  <div class="lbl">DROPOUT RATE <span class="val" id="dropoutV">30</span></div>
+  <input type="range" id="dropout" min="0" max="100" value="30">
+
+  <div class="lbl">SPLIT RATIO <span class="val" id="splitV">50</span></div>
+  <input type="range" id="split" min="10" max="90" value="50">
+
+  <button id="playBtn" onclick="togglePlay()">Play</button>
+  <button class="primary" onclick="generate()">Generate</button>
+  <button onclick="savePNG()">Save PNG</button>
+</div>
+
+<script>
+function $(id){return document.getElementById(id)}
+
+/* ── Palettes ── */
+const palettes={
+  mono:(t,a)=>{const v=180+t*75|0;return`rgba(${v},${v},${v},${a})`;},
+  cool:(t,a)=>`rgba(${30+t*50|0},${140+t*70|0},${200+t*55|0},${a})`,
+  warm:(t,a)=>`rgba(${200+t*55|0},${50+t*110|0},${15+t*40|0},${a})`,
+  neon:(t,a)=>`hsla(${(t*280+180)%360},100%,58%,${a})`,
+  cyber:(t,a)=>`rgba(${20+t*40|0},${220+t*35|0},${180+t*60|0},${a})`,
+  gold:(t,a)=>`rgba(${200+t*55|0},${160+t*60|0},${20+t*60|0},${a})`
+};
+
+/* ── Perlin Noise ── */
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+/* ── State ── */
+const canvas=$('c'), ctx=canvas.getContext('2d');
+let W,H,playing=false,time=0,raf=null;
+let perlin=new PerlinNoise(Math.random()*1e6|0);
+let px,py,pVx,pVy,pLife,pStream; // Float32Arrays
+let mouseX=-9999,mouseY=-9999,mouseForce=0; // 1=attract, -1=repel, 0=none
+
+/* ── Helpers ── */
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+}
+window.addEventListener('resize',resize);
+resize();
+
+function val(id){return +$(id).value}
+function palFn(){return palettes[$('pal').value]}
+function modeStr(){return $('mode').value}
+
+/* ── Slider display updates ── */
+const sliders=['count','spd','trail','nScale','nSpeed','size','funnel','dropout','split'];
+sliders.forEach(id=>{
+  $(id).addEventListener('input',()=>{
+    if(id==='spd') $(id+'V').textContent=(val(id)/10).toFixed(1);
+    else if(id==='size') $(id+'V').textContent=(val(id)/10).toFixed(1);
+    else $(id+'V').textContent=$(id).value;
+  });
+});
+
+/* ── Particle init ── */
+function initParticles(){
+  const n=val('count');
+  px=new Float32Array(n);
+  py=new Float32Array(n);
+  pVx=new Float32Array(n);
+  pVy=new Float32Array(n);
+  pLife=new Float32Array(n);
+  pStream=new Float32Array(n); // for A/B: 0=left, 1=right
+  const m=modeStr();
+  for(let i=0;i<n;i++) spawnParticle(i,m,true);
+}
+
+function spawnParticle(i,m,scatter){
+  pVx[i]=0; pVy[i]=0;
+  pLife[i]=Math.random();
+  if(m==='rivers'){
+    px[i]=scatter?Math.random()*W:Math.random()*20;
+    py[i]=Math.random()*H;
+  }else if(m==='funnel'){
+    const fw=val('funnel')/100;
+    const spread=W*fw*0.5;
+    px[i]=W/2+(Math.random()-0.5)*spread*2;
+    py[i]=scatter?Math.random()*H:Math.random()*H*0.1;
+  }else{ // ab
+    const ratio=val('split')/100;
+    const isLeft=Math.random()<ratio;
+    pStream[i]=isLeft?0:1;
+    px[i]=W/2+(Math.random()-0.5)*60;
+    py[i]=scatter?Math.random()*H:Math.random()*H*0.05;
+  }
+}
+
+/* ── Curl noise ── */
+function curl(x,y,t,sc,ns){
+  const e=0.5;
+  const n=perlin.fbm(x*sc+t*ns,y*sc,3);
+  const nx=perlin.fbm((x+e)*sc+t*ns,y*sc,3);
+  const ny=perlin.fbm(x*sc+t*ns,(y+e)*sc,3);
+  const dndx=(nx-n)/e;
+  const dndy=(ny-n)/e;
+  return{ x:dndy, y:-dndx };
+}
+
+/* ── Update & Draw ── */
+function update(dt){
+  const n=px.length;
+  const m=modeStr();
+  const sp=val('spd')/10;
+  const sc=val('nScale')/1000;
+  const ns=val('nSpeed')/500;
+  const sz=val('size')/10;
+  const pal=palFn();
+  const fw=val('funnel')/100;
+  const drop=val('dropout')/1000;
+  const ratio=val('split')/100;
+  const t=time;
+
+  // Trail fade
+  const trail=val('trail');
+  const alpha=1-trail/105;
+  ctx.fillStyle=`rgba(10,10,12,${alpha})`;
+  ctx.fillRect(0,0,W,H);
+
+  for(let i=0;i<n;i++){
+    const x=px[i], y=py[i];
+    let fx=0, fy=0;
+
+    if(m==='rivers'){
+      const c=curl(x/W,y/H,t,sc*40,ns);
+      fx=c.x*sp*2+sp*0.8; // rightward bias
+      fy=c.y*sp*2;
+    }else if(m==='funnel'){
+      const c=curl(x/W,y/H,t,sc*30,ns);
+      // Attractor toward bottom center
+      const targetX=W/2;
+      const targetY=H;
+      const progress=y/H; // 0 at top, 1 at bottom
+      const funnelStrength=0.3+progress*0.7;
+      const dx=targetX-x, dy=targetY-y;
+      const dist=Math.sqrt(dx*dx+dy*dy)+1;
+      fx=c.x*sp*0.8+(dx/dist)*sp*funnelStrength*0.5;
+      fy=c.y*sp*0.8+sp*0.6+(dy/dist)*sp*funnelStrength*0.3;
+
+      // Dropout: particles slow down and drift sideways
+      if(progress>0.2 && pLife[i]<drop*progress){
+        fx=c.x*sp*0.3+(Math.random()-0.5)*sp*0.5;
+        fy*=0.1;
+        pLife[i]-=0.001;
+      }
+    }else{ // ab
+      const c=curl(x/W,y/H,t,sc*30,ns);
+      const stream=pStream[i]; // 0=left, 1=right
+      const separation=W*0.2;
+      const targetX=stream<0.5?W/2-separation:W/2+separation;
+      const targetY=H;
+      const progress=y/H;
+      const dx=targetX-x, dy=targetY-y;
+      const dist=Math.sqrt(dx*dx+dy*dy)+1;
+      const splitForce=0.2+progress*0.5;
+      fx=c.x*sp*0.5+(dx/dist)*sp*splitForce*0.6;
+      fy=c.y*sp*0.3+sp*0.5;
+
+      // Conversion: some particles cross streams
+      if(Math.random()<0.0003){
+        pStream[i]=1-pStream[i];
+      }
+    }
+
+    // Mouse interaction
+    if(mouseForce!==0){
+      const mdx=mouseX-x, mdy=mouseY-y;
+      const md=Math.sqrt(mdx*mdx+mdy*mdy)+1;
+      if(md<200){
+        const mf=mouseForce*(1-md/200)*sp*3;
+        fx+=mdx/md*mf;
+        fy+=mdy/md*mf;
+      }
+    }
+
+    // Velocity with damping
+    pVx[i]=pVx[i]*0.9+fx*0.1;
+    pVy[i]=pVy[i]*0.9+fy*0.1;
+
+    px[i]+=pVx[i];
+    py[i]+=pVy[i];
+
+    // Speed for coloring
+    const speed=Math.sqrt(pVx[i]*pVx[i]+pVy[i]*pVy[i]);
+    const sNorm=Math.min(speed/(sp*2),1);
+
+    // Draw
+    let a=0.7;
+    let colorT=sNorm;
+
+    if(m==='funnel'){
+      const progress=y/H;
+      if(progress>0.2 && pLife[i]<drop*progress){
+        a=Math.max(0.05,0.3-progress*0.3);
+        colorT=0.1;
+      }
+    }
+    if(m==='ab'){
+      colorT=pStream[i]<0.5?sNorm*0.5:0.5+sNorm*0.5;
+      a=0.6+sNorm*0.3;
+    }
+
+    ctx.fillStyle=pal(colorT,a);
+    const r=sz*(0.5+sNorm*0.5);
+    ctx.fillRect(px[i]-r*0.5,py[i]-r*0.5,r,r);
+
+    // Respawn logic
+    let respawn=false;
+    if(m==='rivers'){
+      if(px[i]>W+20||py[i]<-20||py[i]>H+20||px[i]<-20) respawn=true;
+    }else if(m==='funnel'){
+      if(py[i]>H+20||px[i]<-20||px[i]>W+20||pLife[i]<-0.5) respawn=true;
+    }else{
+      if(py[i]>H+20||px[i]<-50||px[i]>W+50) respawn=true;
+    }
+    if(respawn) spawnParticle(i,m,false);
+  }
+}
+
+/* ── FPS ── */
+let fpsFrames=0,fpsLast=performance.now();
+function updateFPS(){
+  fpsFrames++;
+  const now=performance.now();
+  if(now-fpsLast>=500){
+    $('fps').textContent=Math.round(fpsFrames*1000/(now-fpsLast))+' FPS';
+    fpsFrames=0;fpsLast=now;
+  }
+}
+
+/* ── Animation loop ── */
+function loop(){
+  time+=0.016;
+  update(0.016);
+  updateFPS();
+  if(playing) raf=requestAnimationFrame(loop);
+}
+
+function togglePlay(){
+  playing=!playing;
+  const btn=$('playBtn');
+  if(playing){
+    btn.textContent='Pause';
+    btn.classList.add('playing');
+    loop();
+  }else{
+    btn.textContent='Play';
+    btn.classList.remove('playing');
+    if(raf) cancelAnimationFrame(raf);
+  }
+}
+
+/* ── Randomize ── */
+function randomizeSelect(id){
+  const sel=$(id);
+  sel.selectedIndex=Math.random()*sel.options.length|0;
+}
+
+function randomizeControls(){
+  const randomize=['trail','nScale','nSpeed','size','funnel','dropout','split'];
+  randomize.forEach(id=>{
+    const el=$(id);
+    const mn=+el.min, mx=+el.max, st=+el.step||1;
+    const range=mx-mn;
+    const v=mn+Math.round(Math.random()*range/st)*st;
+    el.value=Math.min(mx,Math.max(mn,v));
+    // Update display
+    if(id==='size') $(id+'V').textContent=(+el.value/10).toFixed(1);
+    else $(id+'V').textContent=el.value;
+  });
+  // Also update spd and count displays (not randomized, but ensure correct)
+  $('spdV').textContent=(val('spd')/10).toFixed(1);
+  $('countV').textContent=$('count').value;
+}
+
+function generate(){
+  randomizeSelect('mode');
+  randomizeSelect('pal');
+  randomizeControls();
+  perlin=new PerlinNoise(Math.random()*1e6|0);
+  time=0;
+  ctx.fillStyle='#0a0a0c';
+  ctx.fillRect(0,0,W,H);
+  initParticles();
+}
+
+/* ── Save PNG ── */
+function savePNG(){
+  const link=document.createElement('a');
+  link.download='data-conversion-'+Date.now()+'.png';
+  link.href=canvas.toDataURL('image/png');
+  link.click();
+}
+
+/* ── Keyboard ── */
+document.addEventListener('keydown',e=>{
+  if(e.key==='h'||e.key==='H') $('panel').classList.toggle('hidden');
+});
+
+/* ── Mouse / Touch ── */
+canvas.addEventListener('mousedown',e=>{
+  e.preventDefault();
+  mouseForce=e.button===2?-1:1;
+  mouseX=e.clientX;mouseY=e.clientY;
+});
+canvas.addEventListener('mousemove',e=>{
+  if(mouseForce!==0){mouseX=e.clientX;mouseY=e.clientY;}
+});
+canvas.addEventListener('mouseup',()=>{mouseForce=0;mouseX=-9999;mouseY=-9999;});
+canvas.addEventListener('mouseleave',()=>{mouseForce=0;mouseX=-9999;mouseY=-9999;});
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const el=$('nScale');
+  let v=+el.value+(e.deltaY>0?-2:2);
+  v=Math.max(+el.min,Math.min(+el.max,v));
+  el.value=v;
+  $('nScaleV').textContent=v;
+},{passive:false});
+
+// Touch
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  mouseForce=1;
+  const t=e.touches[0];
+  mouseX=t.clientX;mouseY=t.clientY;
+},{passive:false});
+canvas.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  mouseX=t.clientX;mouseY=t.clientY;
+},{passive:false});
+canvas.addEventListener('touchend',()=>{mouseForce=0;mouseX=-9999;mouseY=-9999;});
+
+/* ── Mode & palette change ── */
+$('mode').addEventListener('change',()=>{
+  time=0;
+  ctx.fillStyle='#0a0a0c';
+  ctx.fillRect(0,0,W,H);
+  initParticles();
+});
+
+/* ── Init ── */
+initParticles();
+togglePlay();
+</script>
+</body>
+</html>

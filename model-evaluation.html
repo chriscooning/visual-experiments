@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Model Evaluation</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0c;overflow:hidden;color:#ccc;font-family:'Outfit',sans-serif}
+canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block}
+.panel{position:fixed;bottom:20px;right:20px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;}
+.panel.hidden{transform:translateX(calc(100% + 40px))}
+.hint{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;color:#444;pointer-events:none;animation:fadeHint 4s forwards}
+@keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+#fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555;display:block}
+.val{font-size:9px;color:#777;float:right}
+input[type=range]{width:100%;-webkit-appearance:none;height:3px;background:#222;border-radius:2px;outline:none;margin-top:4px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #0a0a0c;cursor:pointer}
+input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid #0a0a0c;cursor:pointer}
+select{width:100%;background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;outline:none;cursor:pointer}
+.btn{width:100%;padding:8px 0;border:1px solid #2a2a2f;border-radius:6px;background:#151518;color:#ccc;font-family:'Space Mono',monospace;font-size:11px;cursor:pointer;letter-spacing:1px;text-transform:uppercase;transition:background .2s,color .2s}
+.btn:hover{background:#1e1e24}
+.btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}
+.btn.primary{background:#fff;color:#000;border-color:#fff}
+.panel::-webkit-scrollbar{width:4px}
+.panel::-webkit-scrollbar-track{background:transparent}
+.panel::-webkit-scrollbar-thumb{background:#222;border-radius:2px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="fps"></div>
+<div class="hint">Press H to toggle controls</div>
+
+<div class="panel" id="panel">
+  <label>Mode<span class="val" id="modeVal"></span></label>
+  <select id="mode">
+    <option value="radar">Radar Charts</option>
+    <option value="clouds">Score Clouds</option>
+    <option value="diverge">Divergence View</option>
+  </select>
+
+  <label>Palette<span class="val" id="palVal"></span></label>
+  <select id="pal">
+    <option value="mono">Monochrome</option>
+    <option value="cool">Cool Blues</option>
+    <option value="warm">Warm Ember</option>
+    <option value="neon">Neon</option>
+    <option value="cyber">Cyber</option>
+    <option value="gold">Gold</option>
+  </select>
+
+  <label>Speed<span class="val" id="spdVal"></span></label>
+  <input type="range" id="spd" min="1" max="100" value="30">
+
+  <label>Models<span class="val" id="modelsVal"></span></label>
+  <input type="range" id="models" min="2" max="6" value="4">
+
+  <label>Noise Amount<span class="val" id="noiseVal"></span></label>
+  <input type="range" id="noise" min="0" max="100" value="40">
+
+  <label>Noise Speed<span class="val" id="nSpeedVal"></span></label>
+  <input type="range" id="nSpeed" min="0" max="100" value="20">
+
+  <label>Size<span class="val" id="sizeVal"></span></label>
+  <input type="range" id="size" min="5" max="40" value="15">
+
+  <label>Trail<span class="val" id="trailVal"></span></label>
+  <input type="range" id="trail" min="0" max="100" value="50">
+
+  <label>Divergence<span class="val" id="divergeVal"></span></label>
+  <input type="range" id="diverge" min="0" max="100" value="40">
+
+  <button class="btn" id="playBtn" onclick="togglePlay()">Play</button>
+  <button class="btn primary" id="genBtn" onclick="generate()">Generate</button>
+  <button class="btn" onclick="savePNG()">Save PNG</button>
+</div>
+
+<script>
+function $(id){return document.getElementById(id)}
+
+/* ── Perlin Noise ── */
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+/* ── Palettes ── */
+const palettes={
+  mono:(t,a)=>{const v=180+t*75|0;return`rgba(${v},${v},${v},${a})`;},
+  cool:(t,a)=>`rgba(${30+t*50|0},${140+t*70|0},${200+t*55|0},${a})`,
+  warm:(t,a)=>`rgba(${200+t*55|0},${50+t*110|0},${15+t*40|0},${a})`,
+  neon:(t,a)=>`hsla(${(t*280+180)%360},100%,58%,${a})`,
+  cyber:(t,a)=>`rgba(${20+t*40|0},${220+t*35|0},${180+t*60|0},${a})`,
+  gold:(t,a)=>`rgba(${200+t*55|0},${160+t*60|0},${20+t*60|0},${a})`
+};
+
+/* ── Globals ── */
+const canvas=$('c'),ctx=canvas.getContext('2d');
+let W,H,playing=false,time=0,perlin,raf;
+let pulses=[];
+const modelHues=[0,60,120,200,280,340];
+const axisLabels=['ACC','LAT','COST','HALL','THRU'];
+
+/* ── Cloud particles ── */
+let cloudParticles=[];
+/* ── Divergence particles ── */
+let divParticles=[];
+
+function resize(){
+  W=canvas.width=window.innerWidth;
+  H=canvas.height=window.innerHeight;
+}
+window.addEventListener('resize',()=>{resize();initMode()});
+resize();
+
+/* ── Helpers ── */
+function modelHue(i,n){return modelHues[i%modelHues.length]/360}
+function currentPalette(){return palettes[$('pal').value]||palettes.mono}
+function val(id){return+$(id).value}
+
+function randomizeControls(){
+  const sliders=['models','noise','nSpeed','size','trail','diverge'];
+  sliders.forEach(id=>{
+    const el=$(id);
+    const mn=+el.min,mx=+el.max;
+    el.value=Math.round(mn+Math.random()*(mx-mn));
+  });
+  updateLabels();
+}
+function randomizeSelect(){
+  const modeEl=$('mode');
+  modeEl.selectedIndex=Math.floor(Math.random()*modeEl.options.length);
+  const palEl=$('pal');
+  palEl.selectedIndex=Math.floor(Math.random()*palEl.options.length);
+}
+
+function updateLabels(){
+  $('spdVal').textContent=val('spd');
+  $('modelsVal').textContent=val('models');
+  $('noiseVal').textContent=val('noise');
+  $('nSpeedVal').textContent=val('nSpeed');
+  $('sizeVal').textContent=val('size');
+  $('trailVal').textContent=val('trail');
+  $('divergeVal').textContent=val('diverge');
+  $('modeVal').textContent='';
+  $('palVal').textContent='';
+}
+
+/* ── Init mode-specific data ── */
+function initMode(){
+  const mode=$('mode').value;
+  const nModels=val('models');
+  if(mode==='clouds') initClouds(nModels);
+  else if(mode==='diverge') initDivergence(nModels);
+}
+
+function initClouds(nModels){
+  cloudParticles=[];
+  const count=nModels*60;
+  for(let i=0;i<count;i++){
+    const m=i%nModels;
+    cloudParticles.push({
+      x:W*0.15+Math.random()*W*0.7,
+      y:H*0.15+Math.random()*H*0.7,
+      vx:(Math.random()-0.5)*0.5,
+      vy:(Math.random()-0.5)*0.5,
+      model:m,
+      baseX:W*(0.25+0.5*(m/(nModels-1||1))),
+      baseY:H*0.5
+    });
+  }
+}
+
+function initDivergence(nModels){
+  divParticles=[];
+  const count=nModels*80;
+  for(let i=0;i<count;i++){
+    const m=i%nModels;
+    const isTop=m%2===0;
+    divParticles.push({
+      x:Math.random()*W,
+      y:0,
+      vx:1+Math.random()*2,
+      model:m,
+      stream:isTop?0:1,
+      confidence:0.3+Math.random()*0.7
+    });
+  }
+}
+
+/* ── Toggle play ── */
+function togglePlay(){
+  playing=!playing;
+  $('playBtn').textContent=playing?'Pause':'Play';
+  $('playBtn').classList.toggle('playing',playing);
+  if(playing) loop();
+  else cancelAnimationFrame(raf);
+}
+
+/* ── Generate ── */
+function generate(){
+  randomizeSelect();
+  randomizeControls();
+  perlin=new PerlinNoise(Math.random()*2147483647|0);
+  time=0;
+  initMode();
+  if(!playing) togglePlay();
+}
+
+/* ── Save PNG ── */
+function savePNG(){
+  const link=document.createElement('a');
+  link.download='model-evaluation-'+Date.now()+'.png';
+  link.href=canvas.toDataURL('image/png');
+  link.click();
+}
+
+/* ── H key toggle ── */
+document.addEventListener('keydown',e=>{
+  if(e.key==='h'||e.key==='H') $('panel').classList.toggle('hidden');
+});
+
+/* ── Mouse/Touch pulse ── */
+function addPulse(x,y){
+  pulses.push({x,y,r:0,maxR:Math.min(W,H)*0.3,alpha:1});
+}
+canvas.addEventListener('click',e=>addPulse(e.clientX,e.clientY));
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t=e.touches[0];
+  addPulse(t.clientX,t.clientY);
+},{passive:false});
+
+/* ── Scroll adjusts noise amount ── */
+window.addEventListener('wheel',e=>{
+  const el=$('noise');
+  el.value=Math.max(0,Math.min(100,+el.value-(e.deltaY>0?3:-3)));
+  updateLabels();
+},{passive:true});
+
+/* ── Label updates ── */
+document.querySelectorAll('input[type=range]').forEach(el=>el.addEventListener('input',updateLabels));
+$('mode').addEventListener('change',()=>{updateLabels();initMode()});
+$('pal').addEventListener('change',updateLabels);
+$('models').addEventListener('input',()=>initMode());
+
+/* ── FPS ── */
+let fpsFrames=0,fpsLast=performance.now();
+function updateFPS(){
+  fpsFrames++;
+  const now=performance.now();
+  if(now-fpsLast>=500){
+    $('fps').textContent=Math.round(fpsFrames/((now-fpsLast)/1000))+' fps';
+    fpsFrames=0;fpsLast=now;
+  }
+}
+
+/* ══════════════════════════════════
+   DRAWING
+   ══════════════════════════════════ */
+
+function drawRadar(){
+  const nModels=val('models');
+  const noiseAmt=val('noise')/100;
+  const noiseSpd=val('nSpeed')/1000;
+  const sz=val('size');
+  const pal=currentPalette();
+  const cx=W/2,cy=H/2;
+  const maxR=Math.min(W,H)*0.32*(sz/20);
+  const axes=5;
+
+  /* ── Draw axis lines & labels ── */
+  ctx.save();
+  ctx.lineWidth=1;
+  for(let a=0;a<axes;a++){
+    const angle=-Math.PI/2+a*(Math.PI*2/axes);
+    const ex=cx+Math.cos(angle)*maxR;
+    const ey=cy+Math.sin(angle)*maxR;
+    ctx.strokeStyle='rgba(255,255,255,0.08)';
+    ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(ex,ey);ctx.stroke();
+
+    /* Concentric rings */
+    for(let r=0.25;r<=1;r+=0.25){
+      if(a===0){
+        ctx.beginPath();
+        for(let b=0;b<=axes;b++){
+          const ba=-Math.PI/2+b*(Math.PI*2/axes);
+          const px=cx+Math.cos(ba)*maxR*r;
+          const py=cy+Math.sin(ba)*maxR*r;
+          b===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+        }
+        ctx.strokeStyle='rgba(255,255,255,0.04)';
+        ctx.stroke();
+      }
+    }
+
+    /* Labels */
+    const lx=cx+Math.cos(angle)*(maxR+18);
+    const ly=cy+Math.sin(angle)*(maxR+18);
+    ctx.fillStyle='rgba(255,255,255,0.35)';
+    ctx.font="9px 'Space Mono',monospace";
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(axisLabels[a],lx,ly);
+  }
+
+  /* ── Draw model polygons ── */
+  for(let m=0;m<nModels;m++){
+    const hue=modelHue(m,nModels);
+    const scores=[];
+    for(let a=0;a<axes;a++){
+      const raw=perlin.fbm(m*3.7+a*10+time*noiseSpd,m*5.3+a*7.1+time*noiseSpd*0.7,3);
+      const score=0.2+(raw*0.5+0.5)*0.8*noiseAmt+(1-noiseAmt)*0.6;
+      scores.push(Math.max(0.1,Math.min(1,score)));
+    }
+
+    ctx.beginPath();
+    for(let a=0;a<axes;a++){
+      const angle=-Math.PI/2+a*(Math.PI*2/axes);
+      const r=scores[a]*maxR;
+      const px=cx+Math.cos(angle)*r;
+      const py=cy+Math.sin(angle)*r;
+      a===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.closePath();
+    ctx.fillStyle=pal(hue,0.12);
+    ctx.fill();
+    ctx.strokeStyle=pal(hue,0.7);
+    ctx.lineWidth=1.5;
+    ctx.stroke();
+
+    /* Dots at vertices */
+    for(let a=0;a<axes;a++){
+      const angle=-Math.PI/2+a*(Math.PI*2/axes);
+      const r=scores[a]*maxR;
+      const px=cx+Math.cos(angle)*r;
+      const py=cy+Math.sin(angle)*r;
+      ctx.beginPath();ctx.arc(px,py,3,0,Math.PI*2);
+      ctx.fillStyle=pal(hue,0.9);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function drawClouds(){
+  const nModels=val('models');
+  const noiseAmt=val('noise')/100;
+  const noiseSpd=val('nSpeed')/1000;
+  const sz=val('size');
+  const pal=currentPalette();
+  const dt=val('spd')/30;
+
+  for(let i=0;i<cloudParticles.length;i++){
+    const p=cloudParticles[i];
+    if(p.model>=nModels) continue;
+
+    /* Noise-driven target position */
+    const tx=p.baseX+perlin.fbm(p.model*4.1+time*noiseSpd*0.3,i*0.01,2)*W*0.2*noiseAmt;
+    const ty=p.baseY+perlin.fbm(i*0.01,p.model*4.1+time*noiseSpd*0.3,2)*H*0.2*noiseAmt;
+
+    /* Attraction to base cluster */
+    p.vx+=(tx-p.x)*0.002*dt;
+    p.vy+=(ty-p.y)*0.002*dt;
+
+    /* Inter-particle forces (sample subset for perf) */
+    for(let j=i+1;j<cloudParticles.length;j+=3){
+      const q=cloudParticles[j];
+      if(q.model>=nModels) continue;
+      const dx=q.x-p.x,dy=q.y-p.y;
+      const dist=Math.sqrt(dx*dx+dy*dy)+1;
+      if(dist<120){
+        const f=p.model===q.model?0.0003:-0.0004;
+        const fx=dx/dist*f*dt;
+        const fy=dy/dist*f*dt;
+        p.vx+=fx;p.vy+=fy;
+        q.vx-=fx;q.vy-=fy;
+      }
+    }
+
+    /* Damping */
+    p.vx*=0.97;p.vy*=0.97;
+    p.x+=p.vx*dt;p.y+=p.vy*dt;
+
+    /* Bounce off edges */
+    const margin=20;
+    if(p.x<margin){p.x=margin;p.vx*=-0.5}
+    if(p.x>W-margin){p.x=W-margin;p.vx*=-0.5}
+    if(p.y<margin){p.y=margin;p.vy*=-0.5}
+    if(p.y>H-margin){p.y=H-margin;p.vy*=-0.5}
+
+    /* Draw */
+    const hue=modelHue(p.model,nModels);
+    const r=sz*0.3+1;
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+    ctx.fillStyle=pal(hue,0.6);
+    ctx.fill();
+  }
+}
+
+function drawDivergence(){
+  const nModels=val('models');
+  const noiseAmt=val('noise')/100;
+  const noiseSpd=val('nSpeed')/1000;
+  const sz=val('size');
+  const divergeAmt=val('diverge')/100;
+  const pal=currentPalette();
+  const dt=val('spd')/30;
+  const streamGap=H*0.08;
+  const centerY=H/2;
+  const maxDiv=H*0.3*divergeAmt;
+
+  for(let i=0;i<divParticles.length;i++){
+    const p=divParticles[i];
+    if(p.model>=nModels) continue;
+
+    /* Move right */
+    p.x+=p.vx*dt;
+
+    /* Calculate divergence at this x position */
+    const divNoise=perlin.fbm(p.x*0.003+time*noiseSpd*0.5,p.model*3.7+time*noiseSpd*0.2,3);
+    const localDiv=Math.abs(divNoise)*maxDiv*noiseAmt;
+
+    /* Stream y targets */
+    const streamOffset=(p.stream===0?-1:1)*(streamGap+localDiv);
+    const streamCenter=centerY+streamOffset;
+
+    /* Wobble within stream */
+    const wobble=perlin.n2(p.x*0.01+i*0.1,time*noiseSpd)*20*noiseAmt;
+    const targetY=streamCenter+wobble;
+
+    /* Ease toward target */
+    p.y+=(targetY-p.y)*0.08*dt;
+
+    /* Respawn on left */
+    if(p.x>W+10){
+      p.x=-10-Math.random()*50;
+      p.confidence=0.3+Math.random()*0.7;
+    }
+
+    /* Draw */
+    const hue=modelHue(p.model,nModels);
+    const distFromCenter=Math.abs(p.y-streamCenter);
+    const alphaConf=p.confidence*(1-Math.min(distFromCenter/60,0.6));
+    const r=sz*0.2+1;
+    ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);
+    ctx.fillStyle=pal(hue,Math.max(0.15,alphaConf*0.8));
+    ctx.fill();
+  }
+
+  /* Draw center line and divergence indicators */
+  ctx.save();
+  ctx.setLineDash([4,8]);
+  ctx.strokeStyle='rgba(255,255,255,0.06)';
+  ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(0,centerY);ctx.lineTo(W,centerY);ctx.stroke();
+  ctx.setLineDash([]);
+
+  /* Divergence label */
+  const sampleDiv=Math.abs(perlin.fbm(W*0.5*0.003+time*noiseSpd*0.5,time*noiseSpd*0.2,3))*maxDiv*noiseAmt;
+  ctx.fillStyle='rgba(255,255,255,0.15)';
+  ctx.font="9px 'Space Mono',monospace";
+  ctx.textAlign='center';
+  ctx.fillText('DIVERGENCE: '+(sampleDiv/(H*0.3)*100|0)+'%',W/2,centerY+4);
+  ctx.restore();
+}
+
+/* ── Pulses ── */
+function drawPulses(){
+  for(let i=pulses.length-1;i>=0;i--){
+    const p=pulses[i];
+    p.r+=4;
+    p.alpha=1-p.r/p.maxR;
+    if(p.alpha<=0){pulses.splice(i,1);continue}
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+    ctx.strokeStyle=`rgba(255,255,255,${p.alpha*0.3})`;
+    ctx.lineWidth=1.5;
+    ctx.stroke();
+  }
+}
+
+/* ── Main loop ── */
+function loop(){
+  if(!playing) return;
+  raf=requestAnimationFrame(loop);
+  updateFPS();
+
+  const mode=$('mode').value;
+  const trailAlpha=1-(val('trail')/100)*0.92;
+  const spd=val('spd')/100;
+
+  /* Trail/clear */
+  if(mode==='radar'){
+    ctx.fillStyle='#0a0a0c';
+    ctx.fillRect(0,0,W,H);
+  } else {
+    ctx.fillStyle=`rgba(10,10,12,${trailAlpha})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  time+=spd*0.016;
+
+  if(mode==='radar') drawRadar();
+  else if(mode==='clouds') drawClouds();
+  else if(mode==='diverge') drawDivergence();
+
+  drawPulses();
+}
+
+/* ── Init ── */
+perlin=new PerlinNoise(42);
+updateLabels();
+initMode();
+togglePlay();
+</script>
+</body>
+</html>

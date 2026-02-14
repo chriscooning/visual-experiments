@@ -86,6 +86,35 @@ Lloyd's algorithm iteratively relaxes random seed points toward even spacing. Pe
 - Click to add seed points, drag to push nearby seeds
 - Configurable relaxation speed and noise amount
 
+## Data & AI
+
+### [Data & Conversion](data-conversion.html)
+Particles flow, aggregate, and convert — visualizing throughput, churn, and split tests. Three modes:
+
+- **Streaming Rivers** — Dense particle streams flowing with curl noise displacement. Throughput = density; clusters = hotspots
+- **Funnel Flow** — Particles enter a wide funnel, some drop out along the way. Width = stage; dropouts = churn
+- **A/B Split** — Two parallel streams branching from one source. Flow rate and color = conversion
+
+Controls: particle count, speed, trail length, noise scale/speed, funnel width, dropout rate, split ratio. Click to attract/repel, scroll noise scale. 6 palettes.
+
+### [Model Evaluation](model-evaluation.html)
+Compare models by accuracy, latency, and hallucination with animated overlays. Three modes:
+
+- **Radar Charts** — Overlapping polygons for multiple models with 5 axes (accuracy, latency, cost, hallucination, throughput). Scores oscillate via Perlin noise
+- **Score Clouds** — Particles representing evaluation runs cluster by model via attraction/repulsion forces
+- **Divergence View** — Two parallel streams (ground truth vs model output) diverge on mismatch, converge on match
+
+Controls: model count, noise amount/speed, size, trail, divergence. Click for pulse effect, scroll noise. 6 palettes.
+
+### [Agent Observability](agent-observability.html)
+Trace trees, agent flow, and tool timelines showing tool calls, nesting, and parallel execution. Three modes:
+
+- **Trace Tree** — Recursive branching tree where each branch = tool call; color = status (green success, red error, amber timeout)
+- **Agent Flow** — Flow-field particles split at decision points, creating branching flow patterns
+- **Tool Timeline** — Horizontal scrolling timeline with bars for tool calls; height = duration; overlapping = parallel execution
+
+Controls: depth, branches, error rate, noise scale, amplitude, stroke. Click + drag to move origin, scroll depth. 6 palettes.
+
 ## Run
 
 Just open `index.html` in a browser. No build step, no dependencies. Or host on GitHub Pages.
