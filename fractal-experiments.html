@@ -46,6 +46,8 @@
   .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}
   .btn.playing:hover{background:#27ae60;border-color:#27ae60}
   .btn svg{width:14px;height:14px;fill:currentColor;flex-shrink:0}
+  .extras{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;padding-top:10px;border-top:1px solid #1a1a1f}
+  .extras:empty{display:none;border:none;padding:0}
   .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none}
   @media(max-width:600px){.controls{grid-template-columns:1fr 1fr;gap:10px;padding:10px 12px 20px}.header{padding:12px 12px 2px}.btn{padding:12px 14px;font-size:10px;letter-spacing:1px}}
   @media(max-width:380px){.controls{grid-template-columns:1fr}}
@@ -69,7 +71,7 @@
       <option value="twinTree">Twin Christmas Tree</option>
       <option value="sierpinskiCarpet">Sierpinski Carpet</option>
       <option value="cyberFern">Cyber Fern</option>
-      <option value="goldenDragon">Golden Dragon</option>
+
       <option value="vicsek">Vicsek Fractal</option>
     </select>
   </div>
@@ -119,6 +121,7 @@
     <label>Rotation <span class="val" id="rotationVal">0</span></label>
     <input type="range" id="rotation" min="0" max="360" value="0">
   </div>
+  <div id="extras" class="extras"></div>
   <div class="btn-row">
     <button class="btn" id="playPause">
       <svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
@@ -190,6 +193,44 @@ function cfg(){
     sc:+$('scale').value,spd:+$('speed').value,sw:+$('stroke').value,
     rot:+$('rotation').value
   };
+}
+
+// ═══════════════════════════════════════
+// FRACTAL-SPECIFIC EXTRAS (config-driven)
+// ═══════════════════════════════════════
+const fractalExtras={
+  // Add fractal-specific controls here: fractalId: [ {id, label, type, ...}, ... ]
+};
+
+function renderExtras(fracId){
+  const container=$('extras');
+  container.innerHTML='';
+  const defs=fractalExtras[fracId];
+  if(!defs||!defs.length)return;
+  defs.forEach(def=>{
+    const g=document.createElement('div');
+    g.className='control-group';
+    if(def.type==='range'){
+      g.innerHTML=`<label>${def.label} <span class="val" id="xVal_${def.id}">${def.default}</span></label>`+
+        `<input type="range" id="x_${def.id}" min="${def.min}" max="${def.max}" value="${def.default}"${def.step?' step="'+def.step+'"':''}>`;
+      container.appendChild(g);
+      const inp=g.querySelector('input'),vSpan=g.querySelector('.val');
+      inp.addEventListener('input',()=>{vSpan.textContent=inp.value;if(!playing)render(performance.now());});
+    }else if(def.type==='select'){
+      const opts=def.options.map(o=>`<option value="${o.value}"${o.value===def.default?' selected':''}>${o.label}</option>`).join('');
+      g.innerHTML=`<label>${def.label}</label><select id="x_${def.id}">${opts}</select>`;
+      container.appendChild(g);
+      g.querySelector('select').addEventListener('change',()=>{if(!playing)render(performance.now());});
+    }
+  });
+}
+
+function xCfg(){
+  const defs=fractalExtras[$('fractal').value];
+  const r={};
+  if(!defs)return r;
+  defs.forEach(d=>{const el=$('x_'+d.id);if(!el)return;r[d.id]=d.type==='range'?+el.value:el.value;});
+  return r;
 }
 
 // ═══════════════════════════════════════
@@ -466,52 +507,7 @@ function drawCyberFern(c,t){
   ctx.restore();
 }
 
-// ── 6. GOLDEN DRAGON ──
-function drawGoldenDragon(c,t){
-  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
-  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
-  const maxD=Math.min(depth,16);
-  const len=(sc/50)*W*.35;
-  const rotRad=rot*Math.PI/180;
-
-  // Build dragon curve points
-  let turns=[]; // true=right, false=left
-  for(let i=0;i<maxD;i++){
-    const newTurns=[...turns,true];
-    for(let j=turns.length-1;j>=0;j--) newTurns.push(!turns[j]);
-    turns=newTurns;
-    if(turns.length>80000)break;
-  }
-
-  const segLen=len/Math.sqrt(turns.length+1);
-  const golden=1.618033988;
-  let angle=rotRad;
-  let x=ox-len*.3*Math.cos(rotRad), y=oy-len*.3*Math.sin(rotRad);
-  const pts=[{x,y}];
-
-  for(let i=0;i<turns.length;i++){
-    const nmod=perlin.fbm(x/W*(ns/15)+t*.2,y/H*(ns/15)+t*.15,2);
-    const turnAngle=(Math.PI/2)/golden+nmod*(amp/300);
-    angle+=turns[i]?-turnAngle:turnAngle;
-    x+=Math.cos(angle)*segLen;
-    y+=Math.sin(angle)*segLen;
-    const nd=noiseDisplace(x,y,ns*.5,amp*.2,t);
-    pts.push({x:nd.x,y:nd.y});
-  }
-
-  // Draw
-  const total=pts.length-1;
-  ctx.lineWidth=.5*lw;
-  for(let i=0;i<total;i++){
-    ctx.beginPath();
-    ctx.moveTo(pts[i].x,pts[i].y);
-    ctx.lineTo(pts[i+1].x,pts[i+1].y);
-    ctx.strokeStyle=col(i/total,bg);
-    ctx.stroke();
-  }
-}
-
-// ── 7. VICSEK FRACTAL ──
+// ── 6. VICSEK FRACTAL ──
 function drawVicsek(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
@@ -558,14 +554,14 @@ const drawFns={
   twinTree:drawTwinTree,
   sierpinskiCarpet:drawSierpinskiCarpet,
   cyberFern:drawCyberFern,
-  goldenDragon:drawGoldenDragon,
+
   vicsek:drawVicsek
 };
 
 // Depth limits per fractal (for safety)
 const depthLimits={
   spiralSeptagon:7,levyC:14,twinTree:12,
-  sierpinskiCarpet:5,cyberFern:12,goldenDragon:16,vicsek:6
+  sierpinskiCarpet:5,cyberFern:12,vicsek:6
 };
 
 // ═══════════════════════════════════════
@@ -632,11 +628,12 @@ $('save').addEventListener('click',()=>{
   a.href=canvas.toDataURL('image/png');a.click();
 });
 
-// Warn on high depth for expensive fractals
+// Fractal change: clamp depth, render extras, auto-palette
 $('fractal').addEventListener('change',()=>{
   const f=$('fractal').value;
   const limit=depthLimits[f]||10;
   if(+$('depth').value>limit){$('depth').value=limit;$('depthVal').textContent=limit;}
+  renderExtras(f);
   if(!playing)render(performance.now());
 });
 
@@ -665,6 +662,7 @@ window.addEventListener('resize',()=>{
   },100);
 });
 
+renderExtras($('fractal').value);
 generate();
 </script>
 </body>
