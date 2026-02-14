@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Voronoi — Lloyd's Relaxation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="mono">Monochrome</option>
+      <option value="cool">Cool Blues</option>
+      <option value="warm">Warm Ember</option>
+      <option value="neon" selected>Neon</option>
+      <option value="cyber">Cyber</option>
+      <option value="gold">Gold</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Draw Mode</label>
+    <select id="drawMode">
+      <option value="cells">Cells</option>
+      <option value="edges" selected>Edges</option>
+      <option value="points">Points + Delaunay</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Points <span class="val" id="countVal">100</span></label><input type="range" id="count" min="10" max="500" value="100"></div>
+  <div class="control-group"><label>Relax Speed <span class="val" id="relaxVal">40</span></label><input type="range" id="relax" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Noise Amount <span class="val" id="noiseVal">10</span></label><input type="range" id="noise" min="0" max="100" value="10"></div>
+  <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">20</span></label><input type="range" id="nSpeed" min="0" max="100" value="20"></div>
+  <div class="control-group"><label>Edge Width <span class="val" id="edgeWVal">1.0</span></label><input type="range" id="edgeW" min="5" max="40" value="10"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Click to add point · Drag to push · Scroll relax speed · H controls</div>
+<div class="fps" id="fps"></div>
+
+<script>
+// ═══════════════════════════════════════
+// PERLIN NOISE
+// ═══════════════════════════════════════
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+// ═══════════════════════════════════════
+// PALETTES
+// ═══════════════════════════════════════
+const palettes={
+  mono:t=>{const v=40+t*180|0;return`rgb(${v},${v},${v})`;},
+  cool:t=>`rgb(${20+t*50|0},${60+t*120|0},${120+t*135|0})`,
+  warm:t=>`rgb(${120+t*135|0},${30+t*80|0},${10+t*30|0})`,
+  neon:t=>`hsl(${(t*280+180)%360},90%,50%)`,
+  cyber:t=>`rgb(${10+t*30|0},${120+t*135|0},${100+t*120|0})`,
+  gold:t=>`rgb(${120+t*135|0},${100+t*120|0},${10+t*40|0})`
+};
+
+// ═══════════════════════════════════════
+// CANVAS
+// ═══════════════════════════════════════
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let W,H;
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+resize();
+
+let perlin=new PerlinNoise((Math.random()*1e5)|0);
+let time=0,playing=false,animId=null,lastFrame=0;
+
+function $(id){return document.getElementById(id)}
+
+// ═══════════════════════════════════════
+// POINTS
+// ═══════════════════════════════════════
+let seeds=[];
+
+function initSeeds(n){
+  seeds=[];
+  for(let i=0;i<n;i++)seeds.push({x:Math.random()*W,y:Math.random()*H});
+}
+initSeeds(100);
+
+// ═══════════════════════════════════════
+// VORONOI via brute-force (low-res)
+// ═══════════════════════════════════════
+const SCALE=4; // 1/4 resolution
+let cellMap=null; // Uint16Array, each pixel -> nearest seed index
+let cellCentroids=null;
+
+function computeVoronoi(){
+  const sw=Math.ceil(W/SCALE),sh=Math.ceil(H/SCALE);
+  const n=seeds.length;
+  if(!cellMap||cellMap.length!==sw*sh)cellMap=new Uint16Array(sw*sh);
+
+  // Brute force: for each pixel, find nearest seed
+  for(let y=0;y<sh;y++){
+    const wy=y*SCALE+SCALE/2;
+    for(let x=0;x<sw;x++){
+      const wx=x*SCALE+SCALE/2;
+      let minD=Infinity,minI=0;
+      for(let i=0;i<n;i++){
+        const dx=seeds[i].x-wx,dy=seeds[i].y-wy;
+        const d=dx*dx+dy*dy;
+        if(d<minD){minD=d;minI=i;}
+      }
+      cellMap[y*sw+x]=minI;
+    }
+  }
+
+  // Compute centroids
+  cellCentroids=new Array(n);
+  const cx=new Float64Array(n),cy=new Float64Array(n),cc=new Float64Array(n);
+  for(let y=0;y<sh;y++){
+    const wy=y*SCALE+SCALE/2;
+    for(let x=0;x<sw;x++){
+      const wx=x*SCALE+SCALE/2;
+      const idx=cellMap[y*sw+x];
+      cx[idx]+=wx;cy[idx]+=wy;cc[idx]++;
+    }
+  }
+  for(let i=0;i<n;i++){
+    if(cc[i]>0)cellCentroids[i]={x:cx[i]/cc[i],y:cy[i]/cc[i]};
+    else cellCentroids[i]={x:seeds[i].x,y:seeds[i].y};
+  }
+}
+
+// ═══════════════════════════════════════
+// RELAXATION STEP
+// ═══════════════════════════════════════
+function relaxStep(){
+  const speed=+$('relax').value/100;
+  const noiseAmt=+$('noise').value;
+  const nSpd=+$('nSpeed').value/1000;
+
+  computeVoronoi();
+
+  const n=seeds.length;
+  for(let i=0;i<n;i++){
+    const c=cellCentroids[i];
+    // Lerp toward centroid
+    seeds[i].x+=(c.x-seeds[i].x)*speed*0.3;
+    seeds[i].y+=(c.y-seeds[i].y)*speed*0.3;
+
+    // Noise perturbation
+    if(noiseAmt>0){
+      const nx=perlin.fbm(seeds[i].x*0.003+time*nSpd,seeds[i].y*0.003+i*0.1,3);
+      const ny=perlin.fbm(seeds[i].x*0.003+100+time*nSpd,seeds[i].y*0.003+100+i*0.1,3);
+      seeds[i].x+=nx*noiseAmt*0.3;
+      seeds[i].y+=ny*noiseAmt*0.3;
+    }
+
+    // Keep in bounds
+    seeds[i].x=Math.max(0,Math.min(W,seeds[i].x));
+    seeds[i].y=Math.max(0,Math.min(H,seeds[i].y));
+  }
+
+  time+=1;
+}
+
+// ═══════════════════════════════════════
+// MOUSE
+// ═══════════════════════════════════════
+let dragging=false,dragX=0,dragY=0;
+
+// ═══════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════
+function render(){
+  const mode=$('drawMode').value;
+  const pal=$('palette').value;
+  const col=palettes[pal];
+  const edgeW=+$('edgeW').value/10;
+  const n=seeds.length;
+
+  ctx.fillStyle='#0a0a0c';ctx.fillRect(0,0,W,H);
+
+  computeVoronoi();
+
+  const sw=Math.ceil(W/SCALE),sh=Math.ceil(H/SCALE);
+
+  if(mode==='cells'){
+    // Draw filled cells
+    for(let y=0;y<sh;y++){
+      for(let x=0;x<sw;x++){
+        const idx=cellMap[y*sw+x];
+        ctx.fillStyle=col(idx/n);
+        ctx.fillRect(x*SCALE,y*SCALE,SCALE,SCALE);
+      }
+    }
+  }else if(mode==='edges'){
+    // Draw cell colors dimmed, then edges
+    for(let y=0;y<sh;y++){
+      for(let x=0;x<sw;x++){
+        const idx=cellMap[y*sw+x];
+        const t=idx/n;
+        ctx.fillStyle=col(t);
+        ctx.globalAlpha=0.15;
+        ctx.fillRect(x*SCALE,y*SCALE,SCALE,SCALE);
+      }
+    }
+    ctx.globalAlpha=1;
+
+    // Find edges: pixels where neighbor has different cell
+    ctx.strokeStyle='none';
+    for(let y=1;y<sh-1;y++){
+      for(let x=1;x<sw-1;x++){
+        const idx=cellMap[y*sw+x];
+        const r=cellMap[y*sw+x+1];
+        const d=cellMap[(y+1)*sw+x];
+        if(idx!==r||idx!==d){
+          ctx.fillStyle=col(idx/n);
+          ctx.fillRect(x*SCALE,y*SCALE,SCALE*edgeW,SCALE*edgeW);
+        }
+      }
+    }
+
+    // Draw seed points
+    for(let i=0;i<n;i++){
+      ctx.fillStyle='#fff';
+      ctx.beginPath();ctx.arc(seeds[i].x,seeds[i].y,2,0,Math.PI*2);ctx.fill();
+    }
+  }else{
+    // Points + Delaunay edges (approximate via nearest neighbors)
+    // Draw seed points large
+    for(let i=0;i<n;i++){
+      ctx.fillStyle=col(i/n);
+      ctx.beginPath();ctx.arc(seeds[i].x,seeds[i].y,4,0,Math.PI*2);ctx.fill();
+    }
+
+    // Approximate Delaunay by drawing edges between cells that share a boundary
+    const neighbors=new Set();
+    for(let y=0;y<sh-1;y++){
+      for(let x=0;x<sw-1;x++){
+        const a=cellMap[y*sw+x];
+        const b=cellMap[y*sw+x+1];
+        const c=cellMap[(y+1)*sw+x];
+        if(a!==b){const key=Math.min(a,b)*10000+Math.max(a,b);neighbors.add(key);}
+        if(a!==c){const key=Math.min(a,c)*10000+Math.max(a,c);neighbors.add(key);}
+      }
+    }
+
+    ctx.lineWidth=edgeW*0.5;
+    ctx.globalAlpha=0.3;
+    for(const key of neighbors){
+      const a=Math.floor(key/10000),b=key%10000;
+      const t=(a+b)/(2*n);
+      ctx.strokeStyle=col(t);
+      ctx.beginPath();
+      ctx.moveTo(seeds[a].x,seeds[a].y);
+      ctx.lineTo(seeds[b].x,seeds[b].y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+}
+
+// ═══════════════════════════════════════
+// ANIMATION
+// ═══════════════════════════════════════
+function animate(ts){
+  relaxStep();
+  render();
+  if(ts-lastFrame>0)$('fps').textContent=Math.round(1000/(ts-lastFrame))+' fps';
+  lastFrame=ts;
+  if(playing)animId=requestAnimationFrame(animate);
+}
+
+function togglePlay(){
+  playing=!playing;
+  if(playing){
+    $('playPause').classList.add('playing');$('playIcon').style.display='none';
+    $('pauseIcon').style.display='block';$('playLabel').textContent='Pause';
+    lastFrame=performance.now();animId=requestAnimationFrame(animate);
+  }else{
+    $('playPause').classList.remove('playing');$('playIcon').style.display='block';
+    $('pauseIcon').style.display='none';$('playLabel').textContent='Play';
+    if(animId)cancelAnimationFrame(animId);$('fps').textContent='';
+  }
+}
+
+// ═══════════════════════════════════════
+// CONTROLS
+// ═══════════════════════════════════════
+$('playPause').addEventListener('click',togglePlay);
+$('generate').addEventListener('click',()=>{
+  perlin=new PerlinNoise((Math.random()*1e5)|0);
+  time=0;
+  initSeeds(+$('count').value);
+  if(!playing)render();
+});
+$('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='voronoi-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
+
+['count','relax','noise','nSpeed'].forEach(id=>{
+  const el=$(id),vEl=$(id+'Val');
+  el.addEventListener('input',()=>{vEl.textContent=el.value;if(!playing)render();});
+});
+$('edgeW').addEventListener('input',()=>{$('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);if(!playing)render();});
+$('palette').addEventListener('change',()=>{if(!playing)render();});
+$('drawMode').addEventListener('change',()=>{if(!playing)render();});
+
+// Adjust seed count dynamically
+$('count').addEventListener('input',()=>{
+  const n=+$('count').value;
+  while(seeds.length<n)seeds.push({x:Math.random()*W,y:Math.random()*H});
+  if(seeds.length>n)seeds.length=n;
+});
+
+// Mouse: click to add point, drag to push
+canvas.addEventListener('mousedown',e=>{
+  e.preventDefault();
+  dragging=true;dragX=e.clientX;dragY=e.clientY;
+  // Add a new seed
+  seeds.push({x:e.clientX,y:e.clientY});
+  $('count').value=seeds.length;$('countVal').textContent=seeds.length;
+  if(!playing)render();
+});
+canvas.addEventListener('mousemove',e=>{
+  if(!dragging)return;
+  const mx=e.clientX,my=e.clientY;
+  // Push nearby seeds away
+  const pushR=100;
+  for(let i=0;i<seeds.length;i++){
+    const dx=seeds[i].x-mx,dy=seeds[i].y-my;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if(d<pushR&&d>1){
+      const f=(pushR-d)/pushR*3;
+      seeds[i].x+=dx/d*f;seeds[i].y+=dy/d*f;
+    }
+  }
+  if(!playing)render();
+});
+canvas.addEventListener('mouseup',()=>{dragging=false;});
+canvas.addEventListener('mouseleave',()=>{dragging=false;});
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const el=$('relax'),vEl=$('relaxVal');
+  let v=+el.value+(e.deltaY>0?-5:5);
+  v=Math.max(0,Math.min(100,v));el.value=v;vEl.textContent=v;
+},{passive:false});
+
+// Touch
+canvas.addEventListener('touchstart',e=>{
+  e.preventDefault();dragging=true;
+  const tx=e.touches[0].clientX,ty=e.touches[0].clientY;
+  seeds.push({x:tx,y:ty});
+  $('count').value=seeds.length;$('countVal').textContent=seeds.length;
+  if(!playing)render();
+},{passive:false});
+canvas.addEventListener('touchmove',e=>{
+  e.preventDefault();
+  if(!dragging)return;
+  const mx=e.touches[0].clientX,my=e.touches[0].clientY;
+  const pushR=100;
+  for(let i=0;i<seeds.length;i++){
+    const dx=seeds[i].x-mx,dy=seeds[i].y-my;
+    const d=Math.sqrt(dx*dx+dy*dy);
+    if(d<pushR&&d>1){const f=(pushR-d)/pushR*3;seeds[i].x+=dx/d*f;seeds[i].y+=dy/d*f;}
+  }
+  if(!playing)render();
+},{passive:false});
+canvas.addEventListener('touchend',e=>{e.preventDefault();dragging=false;},{passive:false});
+
+// Panel toggle
+const panel=$('panel'),hintPill=$('hintPill');
+document.addEventListener('keydown',e=>{if(e.key==='h'||e.key==='H'){panel.classList.toggle('hidden');hintPill.classList.remove('show');void hintPill.offsetWidth;hintPill.classList.add('show');}});
+
+// Resize
+let rTimer;
+window.addEventListener('resize',()=>{clearTimeout(rTimer);rTimer=setTimeout(()=>{resize();cellMap=null;if(!playing)render();},100);});
+
+// Init
+togglePlay();
+</script>
+</body>
+</html>

@@ -18,8 +18,16 @@
   }
   .grid{
     display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-    gap:24px;max-width:700px;width:100%;
+    gap:24px;max-width:960px;width:100%;
   }
+  .section-label{
+    grid-column:1/-1;
+    font-family:'Space Mono',monospace;font-size:9px;letter-spacing:3px;
+    text-transform:uppercase;color:#333;
+    padding:16px 0 0;margin-top:8px;
+    border-top:1px solid #151518;
+  }
+  .section-label:first-child{border-top:none;margin-top:0;padding-top:0}
   a.card{
     display:block;border:1px solid #1a1a1f;border-radius:10px;
     padding:32px 28px;text-decoration:none;color:#ccc;
@@ -47,6 +55,7 @@
 <body>
   <h1>Visual Experiments</h1>
   <div class="grid">
+    <div class="section-label">Noise &amp; Fractals</div>
     <a class="card" href="radial-noise.html">
       <h2>Radial Perlin Noise</h2>
       <p>Flow lines, petals, spirals, field lines & waves radiating from a moveable origin through shape-masked boundaries. Perlin noise animation with full parameter control.</p>
@@ -59,9 +68,42 @@
     </a>
     <a class="card" href="dot-terrain.html">
       <h2>Dot Terrain</h2>
-      <p>A 3D particle grid displaced by layered Perlin noise with surface-normal
-      lighting. Undulating hills and valleys animate across a fullscreen canvas.</p>
+      <p>A 3D particle grid displaced by layered Perlin noise with surface-normal lighting. Undulating hills and valleys animate across a fullscreen canvas.</p>
       <span class="tag">3D · Particles · Terrain</span>
+    </a>
+
+    <div class="section-label">Swarm &amp; Emergence</div>
+    <a class="card" href="boids.html">
+      <h2>Boids</h2>
+      <p>Flocking simulation with separation, alignment, and cohesion. Thousands of autonomous agents form murmurations and split/merge in real time.</p>
+      <span class="tag">Flocking · Agents · Swarm</span>
+    </a>
+    <a class="card" href="particle-life.html">
+      <h2>Particle Life</h2>
+      <p>Multiple species with randomized attraction/repulsion rules. Emergent ecosystems form — clusters chase, orbit, and merge in artificial chemistry.</p>
+      <span class="tag">Species · Emergence · Chemistry</span>
+    </a>
+    <a class="card" href="physarum.html">
+      <h2>Physarum</h2>
+      <p>Slime mold simulation where agents deposit and sense chemical trails. Self-organizing networks converge on optimal paths between clusters.</p>
+      <span class="tag">Slime Mold · Trails · Network</span>
+    </a>
+
+    <div class="section-label">Fields &amp; Patterns</div>
+    <a class="card" href="curl-noise.html">
+      <h2>Curl Noise</h2>
+      <p>Particles follow the curl of a Perlin noise field — divergence-free flow with smooth streams, spirals, and interactive attractors.</p>
+      <span class="tag">Flow Field · Curl · Particles</span>
+    </a>
+    <a class="card" href="reaction-diffusion.html">
+      <h2>Reaction-Diffusion</h2>
+      <p>Gray-Scott model producing spots, stripes, coral, mitosis, and worm patterns. Two chemicals react and diffuse across a pixel grid.</p>
+      <span class="tag">Turing · Gray-Scott · Diffusion</span>
+    </a>
+    <a class="card" href="voronoi.html">
+      <h2>Voronoi Relaxation</h2>
+      <p>Lloyd's algorithm iteratively relaxes random seed points toward even spacing. Noise perturbation keeps the diagram alive and breathing.</p>
+      <span class="tag">Voronoi · Lloyd · Relaxation</span>
     </a>
   </div>
   <footer>chriscooning</footer>

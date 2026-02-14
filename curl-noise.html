@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Curl Noise — Flow Fields</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="mono">Monochrome</option>
+      <option value="cool" selected>Cool Blues</option>
+      <option value="warm">Warm Ember</option>
+      <option value="neon">Neon</option>
+      <option value="cyber">Cyber</option>
+      <option value="gold">Gold</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Particles <span class="val" id="countVal">15000</span></label><input type="range" id="count" min="1000" max="50000" value="15000" step="500"></div>
+  <div class="control-group"><label>Noise Scale <span class="val" id="nScaleVal">30</span></label><input type="range" id="nScale" min="1" max="100" value="30"></div>
+  <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">20</span></label><input type="range" id="nSpeed" min="0" max="100" value="20"></div>
+  <div class="control-group"><label>Speed <span class="val" id="spdVal">2.0</span></label><input type="range" id="spd" min="5" max="100" value="20"></div>
+  <div class="control-group"><label>Trail Length <span class="val" id="trailVal">85</span></label><input type="range" id="trail" min="0" max="100" value="85"></div>
+  <div class="control-group"><label>Curl Strength <span class="val" id="curlVal">50</span></label><input type="range" id="curl" min="1" max="100" value="50"></div>
+  <div class="control-group"><label>Size <span class="val" id="sizeVal">1.0</span></label><input type="range" id="size" min="5" max="40" value="10"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Click attract · Right-click repel · Scroll noise scale · H controls</div>
+<div class="fps" id="fps"></div>
+
+<script>
+// ═══════════════════════════════════════
+// PERLIN NOISE
+// ═══════════════════════════════════════
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+// ═══════════════════════════════════════
+// PALETTES
+// ═══════════════════════════════════════
+const palettes={
+  mono:(t,a)=>{const v=180+t*75|0;return`rgba(${v},${v},${v},${a})`;},
+  cool:(t,a)=>`rgba(${30+t*50|0},${140+t*70|0},${200+t*55|0},${a})`,
+  warm:(t,a)=>`rgba(${200+t*55|0},${50+t*110|0},${15+t*40|0},${a})`,
+  neon:(t,a)=>`hsla(${(t*280+180)%360},100%,58%,${a})`,
+  cyber:(t,a)=>`rgba(${20+t*40|0},${220+t*35|0},${180+t*60|0},${a})`,
+  gold:(t,a)=>`rgba(${200+t*55|0},${160+t*60|0},${20+t*60|0},${a})`
+};
+
+// ═══════════════════════════════════════
+// CANVAS
+// ═══════════════════════════════════════
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let W,H;
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+resize();
+
+let perlin=new PerlinNoise((Math.random()*1e5)|0);
+let time=0,playing=false,animId=null,lastFrame=0;
+
+function $(id){return document.getElementById(id)}
+
+// ═══════════════════════════════════════
+// PARTICLES
+// ═══════════════════════════════════════
+let px,py;
+
+function initParticles(n){
+  px=new Float32Array(n);
+  py=new Float32Array(n);
+  for(let i=0;i<n;i++){px[i]=Math.random()*W;py[i]=Math.random()*H;}
+}
+initParticles(15000);
+
+// ═══════════════════════════════════════
+// MOUSE / ATTRACTORS
+// ═══════════════════════════════════════
+let mouseX=-1,mouseY=-1,mouseBtn=0; // 0=none,1=attract,2=repel
+
+// ═══════════════════════════════════════
+// CURL NOISE
+// ═══════════════════════════════════════
+const eps=0.5;
+
+function curlAt(x,y,scale,t){
+  const ns=scale*0.001;
+  // Compute partial derivatives via finite differences
+  const n0=perlin.fbm(x*ns,y*ns+eps+t,3);
+  const n1=perlin.fbm(x*ns,y*ns-eps+t,3);
+  const n2=perlin.fbm(x*ns+eps,y*ns+t,3);
+  const n3=perlin.fbm(x*ns-eps,y*ns+t,3);
+  // curl: vx = dF/dy, vy = -dF/dx
+  const vx=(n0-n1)/(2*eps);
+  const vy=-(n2-n3)/(2*eps);
+  return{vx,vy};
+}
+
+function render(){
+  const count=+$('count').value;
+  const nScale=+$('nScale').value;
+  const nSpeed=+$('nSpeed').value/1000;
+  const pSpeed=+$('spd').value/10;
+  const trailFade=+$('trail').value;
+  const curlStr=+$('curl').value;
+  const dotSize=+$('size').value/10;
+  const pal=$('palette').value;
+  const col=palettes[pal];
+
+  // Adjust particle count
+  if(px.length!==count)initParticles(count);
+
+  // Trail clear
+  if(trailFade<=0){
+    // No trail - show only current frame
+    ctx.fillStyle='#0a0a0c';ctx.fillRect(0,0,W,H);
+  }else{
+    ctx.fillStyle=`rgba(10,10,12,${(1-trailFade/100)*0.3+0.005})`;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  const t=time*nSpeed;
+  const n=px.length;
+
+  for(let i=0;i<n;i++){
+    const x=px[i],y=py[i];
+
+    // Curl velocity
+    const c=curlAt(x,y,nScale,t);
+    let vx=c.vx*curlStr*pSpeed;
+    let vy=c.vy*curlStr*pSpeed;
+
+    // Attractor / repulsor
+    if(mouseBtn>0&&mouseX>=0){
+      const dx=mouseX-x,dy=mouseY-y;
+      const d=Math.sqrt(dx*dx+dy*dy)+1;
+      if(d<300){
+        const f=(mouseBtn===1?1:-1)*200/(d*d+100);
+        // Rotational component for spiral
+        vx+=(-dy/d*f*0.5+dx/d*f*0.3);
+        vy+=(dx/d*f*0.5+dy/d*f*0.3);
+      }
+    }
+
+    let nx=x+vx;
+    let ny=y+vy;
+
+    // Respawn off-screen particles
+    if(nx<0||nx>W||ny<0||ny>H){
+      // Random edge respawn
+      const edge=Math.random()*4|0;
+      if(edge===0){nx=0;ny=Math.random()*H;}
+      else if(edge===1){nx=W;ny=Math.random()*H;}
+      else if(edge===2){nx=Math.random()*W;ny=0;}
+      else{nx=Math.random()*W;ny=H;}
+    }
+
+    px[i]=nx;py[i]=ny;
+
+    // Color based on speed
+    const spd=Math.sqrt(vx*vx+vy*vy);
+    const tt=Math.min(1,spd/(curlStr*pSpeed*0.5+0.1));
+    ctx.fillStyle=col(tt,0.4+tt*0.5);
+    ctx.fillRect(nx,ny,dotSize,dotSize);
+  }
+
+  time+=1;
+}
+
+// ═══════════════════════════════════════
+// ANIMATION
+// ═══════════════════════════════════════
+function animate(ts){
+  render();
+  if(ts-lastFrame>0)$('fps').textContent=Math.round(1000/(ts-lastFrame))+' fps';
+  lastFrame=ts;
+  if(playing)animId=requestAnimationFrame(animate);
+}
+
+function togglePlay(){
+  playing=!playing;
+  if(playing){
+    $('playPause').classList.add('playing');$('playIcon').style.display='none';
+    $('pauseIcon').style.display='block';$('playLabel').textContent='Pause';
+    lastFrame=performance.now();animId=requestAnimationFrame(animate);
+  }else{
+    $('playPause').classList.remove('playing');$('playIcon').style.display='block';
+    $('pauseIcon').style.display='none';$('playLabel').textContent='Play';
+    if(animId)cancelAnimationFrame(animId);$('fps').textContent='';
+  }
+}
+
+// ═══════════════════════════════════════
+// CONTROLS
+// ═══════════════════════════════════════
+$('playPause').addEventListener('click',togglePlay);
+$('generate').addEventListener('click',()=>{
+  perlin=new PerlinNoise((Math.random()*1e5)|0);
+  time=0;
+  ctx.fillStyle='#0a0a0c';ctx.fillRect(0,0,W,H);
+  initParticles(+$('count').value);
+  if(!playing)render();
+});
+$('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='curl-noise-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
+
+['count','nScale','nSpeed','curl'].forEach(id=>{
+  const el=$(id),vEl=$(id+'Val');
+  el.addEventListener('input',()=>{vEl.textContent=el.value;});
+});
+$('spd').addEventListener('input',()=>{$('spdVal').textContent=(+$('spd').value/10).toFixed(1);});
+$('trail').addEventListener('input',()=>{$('trailVal').textContent=$('trail').value;});
+$('size').addEventListener('input',()=>{$('sizeVal').textContent=(+$('size').value/10).toFixed(1);});
+$('palette').addEventListener('change',()=>{});
+
+// Mouse
+canvas.addEventListener('mousedown',e=>{e.preventDefault();mouseBtn=e.button===2?2:1;mouseX=e.clientX;mouseY=e.clientY;});
+canvas.addEventListener('mousemove',e=>{mouseX=e.clientX;mouseY=e.clientY;});
+canvas.addEventListener('mouseup',()=>{mouseBtn=0;});
+canvas.addEventListener('mouseleave',()=>{mouseBtn=0;});
+canvas.addEventListener('contextmenu',e=>e.preventDefault());
+
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const el=$('nScale'),vEl=$('nScaleVal');
+  let v=+el.value+(e.deltaY>0?-3:3);
+  v=Math.max(1,Math.min(100,v));el.value=v;vEl.textContent=v;
+},{passive:false});
+
+// Touch
+canvas.addEventListener('touchstart',e=>{e.preventDefault();mouseBtn=1;mouseX=e.touches[0].clientX;mouseY=e.touches[0].clientY;},{passive:false});
+canvas.addEventListener('touchmove',e=>{e.preventDefault();mouseX=e.touches[0].clientX;mouseY=e.touches[0].clientY;},{passive:false});
+canvas.addEventListener('touchend',e=>{e.preventDefault();mouseBtn=0;},{passive:false});
+
+// Panel toggle
+const panel=$('panel'),hintPill=$('hintPill');
+document.addEventListener('keydown',e=>{if(e.key==='h'||e.key==='H'){panel.classList.toggle('hidden');hintPill.classList.remove('show');void hintPill.offsetWidth;hintPill.classList.add('show');}});
+
+// Resize
+let rTimer;
+window.addEventListener('resize',()=>{clearTimeout(rTimer);rTimer=setTimeout(()=>{resize();ctx.fillStyle='#0a0a0c';ctx.fillRect(0,0,W,H);},100);});
+
+// Init
+togglePlay();
+</script>
+</body>
+</html>
