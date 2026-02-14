@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Dot Terrain</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    overflow:hidden;margin:0;background:#0a0a0c;
+    font-family:'Outfit',sans-serif;color:#e0e0e0;
+  }
+  canvas{
+    position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;
+  }
+
+  /* ── Floating Panel ── */
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);
+    border:1px solid rgba(255,255,255,0.06);
+    border-radius:12px;
+    padding:18px 16px;
+    width:220px;
+    max-height:calc(100vh - 40px);
+    overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;
+    transition:transform 0.3s ease;
+    z-index:10;
+  }
+  .panel.hidden{
+    transform:translateX(calc(100% + 40px));
+  }
+  .panel::-webkit-scrollbar{width:4px}
+  .panel::-webkit-scrollbar-track{background:transparent}
+  .panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{
+    font-family:'Space Mono',monospace;font-size:9px;
+    letter-spacing:2px;text-transform:uppercase;color:#555;
+  }
+  .control-group .val{
+    font-family:'Space Mono',monospace;font-size:9px;
+    color:#777;float:right;letter-spacing:0;
+  }
+  input[type="range"]{
+    -webkit-appearance:none;appearance:none;width:100%;height:3px;
+    background:#222;border-radius:2px;outline:none;touch-action:none;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none;appearance:none;width:22px;height:22px;
+    border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c;
+  }
+  input[type="range"]::-moz-range-thumb{
+    width:22px;height:22px;border-radius:50%;background:#fff;
+    cursor:pointer;border:3px solid #0a0a0c;
+  }
+  select{
+    background:#151518;color:#ccc;border:1px solid #2a2a2f;
+    padding:8px 10px;border-radius:6px;
+    font-family:'Outfit',sans-serif;font-size:13px;
+    cursor:pointer;outline:none;width:100%;
+  }
+  select:hover{border-color:#444}
+
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{
+    font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;
+    text-transform:uppercase;padding:8px 12px;
+    border:1px solid #333;background:transparent;color:#ccc;
+    border-radius:6px;cursor:pointer;transition:all .15s;
+    display:flex;align-items:center;justify-content:center;gap:4px;
+    min-height:36px;
+  }
+  .btn:hover{background:#fff;color:#000;border-color:#fff}
+  .btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}
+  .btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}
+  .btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+
+  /* ── Hint Pill ── */
+  .hint-pill{
+    position:fixed;bottom:20px;left:20px;
+    font-family:'Space Mono',monospace;font-size:9px;
+    letter-spacing:1px;text-transform:uppercase;color:#444;
+    border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;
+    background:rgba(10,10,12,0.6);
+    z-index:10;pointer-events:none;
+    animation:fadeHint 4s forwards;
+  }
+  @keyframes fadeHint{
+    0%,60%{opacity:1}
+    100%{opacity:0}
+  }
+  .hint-pill.show{animation:fadeHint 4s forwards}
+
+  .fps{
+    position:fixed;top:8px;right:8px;
+    font-family:'Space Mono',monospace;font-size:10px;
+    color:#333;pointer-events:none;z-index:10;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="mono">Monochrome</option>
+      <option value="cool">Cool Blues</option>
+      <option value="warm">Warm Ember</option>
+      <option value="neon">Neon</option>
+      <option value="cyber">Cyber</option>
+      <option value="gold">Gold</option>
+    </select>
+  </div>
+  <div class="control-group">
+    <label>Columns <span class="val" id="colsVal">200</span></label>
+    <input type="range" id="cols" min="50" max="300" value="200">
+  </div>
+  <div class="control-group">
+    <label>Rows <span class="val" id="rowsVal">100</span></label>
+    <input type="range" id="rows" min="30" max="200" value="100">
+  </div>
+  <div class="control-group">
+    <label>Noise Scale <span class="val" id="noiseScaleVal">25</span></label>
+    <input type="range" id="noiseScale" min="1" max="100" value="25">
+  </div>
+  <div class="control-group">
+    <label>Amplitude <span class="val" id="amplitudeVal">150</span></label>
+    <input type="range" id="amplitude" min="10" max="400" value="150">
+  </div>
+  <div class="control-group">
+    <label>Speed <span class="val" id="speedVal">30</span></label>
+    <input type="range" id="speed" min="0" max="100" value="30">
+  </div>
+  <div class="control-group">
+    <label>Camera Height <span class="val" id="camHeightVal">160</span></label>
+    <input type="range" id="camHeight" min="20" max="400" value="160">
+  </div>
+  <div class="control-group">
+    <label>Camera Tilt <span class="val" id="camTiltVal">18</span></label>
+    <input type="range" id="camTilt" min="-10" max="80" value="18">
+  </div>
+  <div class="control-group">
+    <label>Camera Distance <span class="val" id="camDistVal">-60</span></label>
+    <input type="range" id="camDist" min="-500" max="200" value="-60">
+  </div>
+  <div class="control-group">
+    <label>Dot Size <span class="val" id="dotSizeVal">2</span></label>
+    <input type="range" id="dotSize" min="1" max="10" value="2">
+  </div>
+  <div class="btn-row">
+    <button class="btn" id="playPause">
+      <svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
+      <svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
+      <span id="playLabel">Play</span>
+    </button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">Save PNG</button>
+  </div>
+</div>
+
+<div class="hint-pill" id="hintPill">Drag to orbit · Scroll to zoom · H toggle controls</div>
+<div class="fps" id="fps"></div>
+
+<script>
+// ═══════════════════════════════════════
+// PERLIN NOISE
+// ═══════════════════════════════════════
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+// ═══════════════════════════════════════
+// PALETTES
+// ═══════════════════════════════════════
+const palettes={
+  mono:(v,a)=>`rgba(${v},${v},${v},${a})`,
+  cool:(v,a)=>{const t=v/255;return`rgba(${30+t*50|0},${100+t*100|0},${180+t*75|0},${a})`;},
+  warm:(v,a)=>{const t=v/255;return`rgba(${180+t*75|0},${60+t*100|0},${10+t*40|0},${a})`;},
+  neon:(v,a)=>{const t=v/255;const h=(t*280+180)%360;return`hsla(${h},100%,${30+t*35}%,${a})`;},
+  cyber:(v,a)=>{const t=v/255;return`rgba(${10+t*40|0},${180+t*75|0},${150+t*80|0},${a})`;},
+  gold:(v,a)=>{const t=v/255;return`rgba(${180+t*75|0},${140+t*80|0},${10+t*60|0},${a})`;}
+};
+
+// ═══════════════════════════════════════
+// CANVAS & STATE
+// ═══════════════════════════════════════
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let W,H;
+function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+resize();
+
+let perlin=new PerlinNoise((Math.random()*1e5)|0);
+let time=0,playing=false,animId=null,lastFrame=0;
+
+function $(id){return document.getElementById(id)}
+function cfg(){
+  return{
+    cols:+$('cols').value,
+    rows:+$('rows').value,
+    noiseScale:+$('noiseScale').value,
+    amplitude:+$('amplitude').value,
+    speed:+$('speed').value,
+    camHeight:+$('camHeight').value,
+    camTilt:+$('camTilt').value,
+    camDist:+$('camDist').value,
+    dotSize:+$('dotSize').value,
+    palette:$('palette').value
+  };
+}
+
+// ═══════════════════════════════════════
+// TERRAIN CONSTANTS
+// ═══════════════════════════════════════
+const terrainWidth=1600;
+const terrainDepth=1000;
+
+// Normalized light direction (from above-left)
+const lx=-0.3,ly=-1.0,lz=-0.5;
+const lLen=Math.sqrt(lx*lx+ly*ly+lz*lz);
+const lightDir={x:lx/lLen,y:ly/lLen,z:lz/lLen};
+
+// Pre-allocated point buffer
+let pointBuf=[];
+
+// ═══════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════
+function render(){
+  const c=cfg();
+  ctx.fillStyle='#0a0a0c';
+  ctx.fillRect(0,0,W,H);
+
+  const{cols,rows,amplitude,camHeight,camTilt,camDist,dotSize:baseDotSize,palette}=c;
+  const noiseScale=c.noiseScale*0.001; // map slider (1-100) to world-space ~0.001-0.1
+  const col=palettes[palette];
+
+  const spacingX=terrainWidth/cols;
+  const spacingZ=terrainDepth/rows;
+
+  // ── Build height map ──
+  // Using a flat array for performance: heights[row * (cols+1) + col]
+  const totalCols=cols+1;
+  const totalRows=rows+1;
+  const heights=new Float32Array(totalRows*totalCols);
+
+  for(let r=0;r<totalRows;r++){
+    for(let cl=0;cl<totalCols;cl++){
+      const wx=-terrainWidth/2+cl*spacingX;
+      const wz=r*spacingZ;
+      heights[r*totalCols+cl]=perlin.fbm(
+        wx*noiseScale+time*0.3,
+        wz*noiseScale+time*0.15,
+        4
+      )*amplitude;
+    }
+  }
+
+  // ── Camera setup ──
+  const camX=0;
+  const camY=-camHeight; // negative = above
+  const camZ=camDist;    // negative = behind grid start
+  const pitch=camTilt*Math.PI/180;
+  const cosPitch=Math.cos(pitch);
+  const sinPitch=Math.sin(pitch);
+  const focalLength=Math.min(W,H)*0.8;
+  const maxZ=terrainDepth+Math.abs(camDist);
+
+  // ── Project all points ──
+  let ptCount=0;
+  // Ensure buffer is big enough
+  const needed=totalRows*totalCols;
+  if(pointBuf.length<needed){
+    pointBuf=new Array(needed);
+    for(let i=0;i<needed;i++)pointBuf[i]={sx:0,sy:0,rz:0,v:0,alpha:0,dotSize:0};
+  }
+
+  for(let r=0;r<totalRows;r++){
+    for(let cl=0;cl<totalCols;cl++){
+      const idx=r*totalCols+cl;
+      const h=heights[idx];
+      const wx=-terrainWidth/2+cl*spacingX;
+      const wy=-h; // height goes up (negative Y)
+      const wz=r*spacingZ;
+
+      // ── Surface normal via finite differences ──
+      const hL=cl>0?heights[idx-1]:h;
+      const hR=cl<cols?heights[idx+1]:h;
+      const hU=r>0?heights[idx-totalCols]:h;
+      const hD=r<rows?heights[idx+totalCols]:h;
+
+      // Cross product of tangent vectors
+      let nx=-(hR-hL)*2*spacingZ;
+      let ny=2*spacingX*2*spacingZ;
+      let nz=-(hD-hU)*2*spacingX;
+      const nLen=Math.sqrt(nx*nx+ny*ny+nz*nz)||1;
+      nx/=nLen;ny/=nLen;nz/=nLen;
+
+      const diffuse=Math.max(0,-(nx*lightDir.x+ny*lightDir.y+nz*lightDir.z));
+
+      // ── Perspective projection ──
+      const rx=wx-camX;
+      const ryRaw=wy-camY;
+      const rzRaw=wz-camZ;
+
+      // Pitch rotation around X axis
+      const ry=ryRaw*cosPitch-rzRaw*sinPitch;
+      const rz=ryRaw*sinPitch+rzRaw*cosPitch;
+
+      if(rz<=1)continue; // behind camera
+
+      const sx=W/2+rx*focalLength/rz;
+      const sy=H/2+ry*focalLength/rz;
+
+      // Skip off-screen
+      if(sx<-10||sx>W+10||sy<-10||sy>H+10)continue;
+
+      // ── Depth fog ──
+      const fogFactor=Math.exp(-2.5*rz/maxZ);
+
+      // ── Final brightness + size ──
+      const baseBrightness=0.08+diffuse*0.92;
+      const brightness=baseBrightness*fogFactor;
+      const v=Math.round(brightness*255);
+      const alpha=fogFactor*0.9;
+      const ds=Math.max(0.5,baseDotSize*focalLength/rz);
+
+      const pt=pointBuf[ptCount++];
+      pt.sx=sx;pt.sy=sy;pt.rz=rz;pt.v=v;pt.alpha=alpha;pt.dotSize=ds;
+    }
+  }
+
+  // ── Sort back-to-front (descending rz) ──
+  const slice=pointBuf.slice(0,ptCount);
+  slice.sort((a,b)=>b.rz-a.rz);
+
+  // ── Draw dots ──
+  for(let i=0;i<slice.length;i++){
+    const p=slice[i];
+    ctx.fillStyle=col(p.v,p.alpha);
+    ctx.fillRect(p.sx,p.sy,p.dotSize,p.dotSize);
+  }
+}
+
+// ═══════════════════════════════════════
+// ANIMATION
+// ═══════════════════════════════════════
+function animate(ts){
+  time+=cfg().speed/1000;
+  render();
+  if(ts-lastFrame>0)$('fps').textContent=Math.round(1000/(ts-lastFrame))+' fps';
+  lastFrame=ts;
+  if(playing)animId=requestAnimationFrame(animate);
+}
+
+function togglePlay(){
+  playing=!playing;
+  if(playing){
+    $('playPause').classList.add('playing');
+    $('playIcon').style.display='none';
+    $('pauseIcon').style.display='block';
+    $('playLabel').textContent='Pause';
+    lastFrame=performance.now();
+    animId=requestAnimationFrame(animate);
+  }else{
+    $('playPause').classList.remove('playing');
+    $('playIcon').style.display='block';
+    $('pauseIcon').style.display='none';
+    $('playLabel').textContent='Play';
+    if(animId)cancelAnimationFrame(animId);
+    $('fps').textContent='';
+  }
+}
+
+// ═══════════════════════════════════════
+// CONTROLS WIRING
+// ═══════════════════════════════════════
+$('playPause').addEventListener('click',togglePlay);
+
+$('generate').addEventListener('click',()=>{
+  perlin=new PerlinNoise((Math.random()*1e5)|0);
+  time=0;
+  render();
+});
+
+$('save').addEventListener('click',()=>{
+  render();
+  const a=document.createElement('a');
+  a.download='dot-terrain-'+Date.now()+'.png';
+  a.href=canvas.toDataURL('image/png');
+  a.click();
+});
+
+['cols','rows','noiseScale','amplitude','speed','camHeight','camTilt','camDist','dotSize'].forEach(id=>{
+  const el=$(id),vEl=$(id+'Val');
+  el.addEventListener('input',()=>{
+    vEl.textContent=el.value;
+    if(!playing)render();
+  });
+});
+
+$('palette').addEventListener('change',()=>{if(!playing)render();});
+
+// ═══════════════════════════════════════
+// MOUSE: SCROLL = DISTANCE, DRAG = TILT
+// ═══════════════════════════════════════
+let dragging=false,dragStartX=0,dragStartY=0,dragStartTilt=0,dragStartHeight=0;
+
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const distEl=$('camDist'),vEl=$('camDistVal');
+  let d=+distEl.value+(e.deltaY>0?15:-15);
+  d=Math.max(-500,Math.min(200,d));
+  distEl.value=d;vEl.textContent=d;
+  if(!playing)render();
+},{passive:false});
+
+canvas.addEventListener('mousedown',e=>{
+  if(e.target!==canvas)return;
+  dragging=true;
+  dragStartX=e.clientX;dragStartY=e.clientY;
+  dragStartTilt=+$('camTilt').value;
+  dragStartHeight=+$('camHeight').value;
+  canvas.style.cursor='grabbing';
+});
+window.addEventListener('mousemove',e=>{
+  if(!dragging)return;
+  const dx=e.clientX-dragStartX;
+  const dy=e.clientY-dragStartY;
+
+  // Vertical drag = tilt (drag up => higher tilt angle)
+  let newTilt=dragStartTilt-(dy*0.3);
+  newTilt=Math.max(-10,Math.min(80,Math.round(newTilt)));
+  $('camTilt').value=newTilt;$('camTiltVal').textContent=newTilt;
+
+  // Horizontal drag = camera height (drag right => higher)
+  let newHeight=dragStartHeight+(dx*0.5);
+  newHeight=Math.max(20,Math.min(400,Math.round(newHeight)));
+  $('camHeight').value=newHeight;$('camHeightVal').textContent=newHeight;
+
+  if(!playing)render();
+});
+window.addEventListener('mouseup',()=>{
+  if(dragging){dragging=false;canvas.style.cursor='grab';}
+});
+
+// Touch equivalents
+canvas.addEventListener('touchstart',e=>{
+  if(e.touches.length===1){
+    e.preventDefault();
+    dragging=true;
+    dragStartX=e.touches[0].clientX;dragStartY=e.touches[0].clientY;
+    dragStartTilt=+$('camTilt').value;
+    dragStartHeight=+$('camHeight').value;
+  }
+},{passive:false});
+canvas.addEventListener('touchmove',e=>{
+  if(!dragging||!e.touches.length)return;
+  e.preventDefault();
+  const dx=e.touches[0].clientX-dragStartX;
+  const dy=e.touches[0].clientY-dragStartY;
+
+  let newTilt=dragStartTilt-(dy*0.3);
+  newTilt=Math.max(-10,Math.min(80,Math.round(newTilt)));
+  $('camTilt').value=newTilt;$('camTiltVal').textContent=newTilt;
+
+  let newHeight=dragStartHeight+(dx*0.5);
+  newHeight=Math.max(20,Math.min(400,Math.round(newHeight)));
+  $('camHeight').value=newHeight;$('camHeightVal').textContent=newHeight;
+
+  if(!playing)render();
+},{passive:false});
+canvas.addEventListener('touchend',e=>{
+  e.preventDefault();dragging=false;
+},{passive:false});
+
+canvas.style.cursor='grab';
+
+// ═══════════════════════════════════════
+// PANEL TOGGLE (H KEY)
+// ═══════════════════════════════════════
+const panel=$('panel'),hintPill=$('hintPill');
+document.addEventListener('keydown',e=>{
+  if(e.key==='h'||e.key==='H'){
+    panel.classList.toggle('hidden');
+    // Re-trigger hint animation
+    hintPill.classList.remove('show');
+    void hintPill.offsetWidth; // reflow
+    hintPill.classList.add('show');
+  }
+});
+
+// ═══════════════════════════════════════
+// RESIZE
+// ═══════════════════════════════════════
+let rTimer;
+window.addEventListener('resize',()=>{
+  clearTimeout(rTimer);
+  rTimer=setTimeout(()=>{
+    resize();
+    if(!playing)render();
+  },100);
+});
+
+// ═══════════════════════════════════════
+// INIT: auto-play on load
+// ═══════════════════════════════════════
+togglePlay();
+</script>
+</body>
+</html>

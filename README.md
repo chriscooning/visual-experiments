@@ -25,6 +25,15 @@ Seven classic fractals with Perlin noise displacement and animation:
 
 All fractals share: click + drag to reposition, scroll to change recursion depth, rotation control, scale, speed, stroke weight, and 8 color palettes.
 
+### [Dot Terrain](dot-terrain.html)
+A 3D particle grid displaced by layered Perlin noise with surface-normal lighting. Undulating hills and valleys animate across a fullscreen canvas.
+
+- Perspective camera with adjustable height, tilt, and distance
+- Surface-normal diffuse lighting with exponential depth fog
+- Configurable grid resolution (columns/rows), noise scale, amplitude
+- 6 color palettes, dot size control, save as PNG
+- Press **H** to toggle control panel
+
 ## Run
 
 Just open `index.html` in a browser. No build step, no dependencies. Or host on GitHub Pages.
