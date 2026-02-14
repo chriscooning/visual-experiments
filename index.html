@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Visual Experiments</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{
+    background:#0a0a0c;color:#e0e0e0;font-family:'Outfit',sans-serif;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    padding:40px 20px;
+  }
+  h1{
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:5px;
+    text-transform:uppercase;color:#444;margin-bottom:48px;font-weight:400;
+  }
+  .grid{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+    gap:24px;max-width:700px;width:100%;
+  }
+  a.card{
+    display:block;border:1px solid #1a1a1f;border-radius:10px;
+    padding:32px 28px;text-decoration:none;color:#ccc;
+    transition:all .2s;background:#0e0e12;
+  }
+  a.card:hover{border-color:#333;background:#131318;transform:translateY(-2px)}
+  a.card:active{transform:translateY(0)}
+  .card h2{
+    font-family:'Outfit',sans-serif;font-size:18px;font-weight:500;
+    margin-bottom:8px;color:#fff;
+  }
+  .card p{font-size:14px;color:#666;line-height:1.5}
+  .card .tag{
+    display:inline-block;margin-top:14px;
+    font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;
+    text-transform:uppercase;color:#444;
+    border:1px solid #222;padding:4px 10px;border-radius:20px;
+  }
+  footer{
+    margin-top:48px;font-family:'Space Mono',monospace;
+    font-size:9px;color:#2a2a2a;letter-spacing:2px;text-transform:uppercase;
+  }
+</style>
+</head>
+<body>
+  <h1>Visual Experiments</h1>
+  <div class="grid">
+    <a class="card" href="radial-noise.html">
+      <h2>Radial Perlin Noise</h2>
+      <p>Flow lines, petals, spirals, field lines & waves radiating from a moveable origin through shape-masked boundaries. Perlin noise animation with full parameter control.</p>
+      <span class="tag">Canvas · Perlin · Interactive</span>
+    </a>
+    <a class="card" href="fractal-experiments.html">
+      <h2>Fractal Experiments</h2>
+      <p>Spiral septagon, Lévy C curve, twin christmas tree, Sierpinski carpet, cyber fern, golden dragon & Vicsek fractal. All noise-displaced and animated.</p>
+      <span class="tag">Fractals · IFS · Recursive</span>
+    </a>
+  </div>
+  <footer>chriscooning</footer>
+</body>
+</html>

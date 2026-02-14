@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fractal Experiments</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{
+    background:#0a0a0c;color:#e0e0e0;font-family:'Outfit',sans-serif;
+    min-height:100vh;min-height:100dvh;
+    display:flex;flex-direction:column;align-items:center;
+    overflow-x:hidden;overscroll-behavior:none;
+  }
+  .header{padding:16px 20px 4px;text-align:center;width:100%}
+  .header h1{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:4px;text-transform:uppercase;color:#555;font-weight:400}
+  .hint{font-family:'Space Mono',monospace;font-size:9px;color:#333;letter-spacing:1px;margin-top:4px}
+  .canvas-wrap{position:relative;margin:8px auto;cursor:crosshair}
+  canvas{display:block;border-radius:4px}
+  .depth-hud{
+    position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
+    font-family:'Space Mono',monospace;font-size:10px;color:rgba(255,255,255,.5);
+    background:rgba(0,0,0,.6);padding:4px 10px;border-radius:10px;
+    pointer-events:none;opacity:0;transition:opacity .25s;white-space:nowrap;
+  }
+  .depth-hud.visible{opacity:1}
+  .controls{
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));
+    gap:12px;padding:12px 16px 24px;max-width:900px;width:100%;
+  }
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{grid-column:1/-1;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding-top:4px}
+  .btn{font-family:'Space Mono',monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase;padding:12px 20px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;gap:6px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}
+  .btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}
+  .btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}
+  .btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:14px;height:14px;fill:currentColor;flex-shrink:0}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none}
+  @media(max-width:600px){.controls{grid-template-columns:1fr 1fr;gap:10px;padding:10px 12px 20px}.header{padding:12px 12px 2px}.btn{padding:12px 14px;font-size:10px;letter-spacing:1px}}
+  @media(max-width:380px){.controls{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Fractal Experiments</h1>
+  <div class="hint">Click + drag to move origin · Scroll to change depth</div>
+</div>
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+  <div class="depth-hud" id="depthHud">depth: 6</div>
+</div>
+<div class="fps" id="fps"></div>
+<div class="controls">
+  <div class="control-group"><label>Fractal</label>
+    <select id="fractal">
+      <option value="spiralSeptagon">Spiral Septagon</option>
+      <option value="levyC">Lévy C Curve</option>
+      <option value="twinTree">Twin Christmas Tree</option>
+      <option value="sierpinskiCarpet">Sierpinski Carpet</option>
+      <option value="cyberFern">Cyber Fern</option>
+      <option value="goldenDragon">Golden Dragon</option>
+      <option value="vicsek">Vicsek Fractal</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="mono">Monochrome</option>
+      <option value="cool">Cool Blues</option>
+      <option value="warm">Warm Ember</option>
+      <option value="neon">Neon</option>
+      <option value="pastel">Pastel Bloom</option>
+      <option value="electric">Electric</option>
+      <option value="cyber">Cyber</option>
+      <option value="gold">Gold</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Background</label>
+    <select id="bg">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+    </select>
+  </div>
+  <div class="control-group">
+    <label>Depth <span class="val" id="depthVal">6</span></label>
+    <input type="range" id="depth" min="1" max="12" value="6">
+  </div>
+  <div class="control-group">
+    <label>Noise Scale <span class="val" id="noiseScaleVal">20</span></label>
+    <input type="range" id="noiseScale" min="0" max="80" value="20">
+  </div>
+  <div class="control-group">
+    <label>Amplitude <span class="val" id="amplitudeVal">30</span></label>
+    <input type="range" id="amplitude" min="0" max="200" value="30">
+  </div>
+  <div class="control-group">
+    <label>Scale <span class="val" id="scaleVal">50</span></label>
+    <input type="range" id="scale" min="10" max="100" value="50">
+  </div>
+  <div class="control-group">
+    <label>Speed <span class="val" id="speedVal">40</span></label>
+    <input type="range" id="speed" min="1" max="100" value="40">
+  </div>
+  <div class="control-group">
+    <label>Stroke <span class="val" id="strokeVal">5</span></label>
+    <input type="range" id="stroke" min="1" max="20" value="5">
+  </div>
+  <div class="control-group">
+    <label>Rotation <span class="val" id="rotationVal">0</span></label>
+    <input type="range" id="rotation" min="0" max="360" value="0">
+  </div>
+  <div class="btn-row">
+    <button class="btn" id="playPause">
+      <svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
+      <svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
+      <span id="playLabel">Play</span>
+    </button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="resetBtn">Reset</button>
+    <button class="btn" id="save">Save PNG</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// PERLIN NOISE
+// ═══════════════════════════════════════
+class PerlinNoise{
+  constructor(seed){
+    this.perm=new Uint8Array(512);
+    this.G=[[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p=new Uint8Array(256);for(let i=0;i<256;i++)p[i]=i;
+    let s=seed;for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++)this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10)}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=3){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2}return v/m}
+}
+
+// ═══════════════════════════════════════
+// PALETTES
+// ═══════════════════════════════════════
+const palettes={
+  mono:(t,bg)=>{const v=bg==='dark'?180+t*75:20+t*40;return bg==='dark'?`rgba(${v},${v},${v},${.15+t*.6})`:`rgba(${30-t*20},${30-t*20},${30-t*20},${.15+t*.6})`;},
+  cool:(t)=>`rgba(${30+t*50|0},${140+t*70|0},${200+t*55|0},${.15+t*.55})`,
+  warm:(t)=>`rgba(${200+t*55|0},${50+t*110|0},${15+t*40|0},${.15+t*.55})`,
+  neon:(t)=>`hsla(${(t*280+180)%360},100%,58%,${.15+t*.55})`,
+  pastel:(t)=>`hsla(${(t*300+240)%360},70%,72%,${.2+t*.5})`,
+  electric:(t)=>{const m=Math.sin(t*Math.PI);return`rgba(${30+m*210|0},${100+(1-m)*80|0},${230-m*190|0},${.15+t*.55})`;},
+  cyber:(t)=>`rgba(${20+t*40|0},${220+t*35|0},${180+t*60|0},${.15+t*.55})`,
+  gold:(t)=>`rgba(${200+t*55|0},${160+t*60|0},${20+t*60|0},${.15+t*.55})`
+};
+
+// ═══════════════════════════════════════
+// CANVAS & STATE
+// ═══════════════════════════════════════
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let W,H;
+function resize(){const m=Math.min(window.innerWidth-16,window.innerHeight*.52,720);W=canvas.width=Math.round(m);H=canvas.height=Math.round(m)}
+resize();
+
+let perlin=new PerlinNoise((Math.random()*1e5)|0);
+let time=0,playing=false,animId=null,lastFrame=0;
+let smoothX=W/2,smoothY=H/2,targetX=W/2,targetY=H/2;
+let dragging=false,showCross=false;
+const LERP=.15;
+
+function $(id){return document.getElementById(id)}
+function cfg(){
+  return{
+    frac:$('fractal').value,pal:$('palette').value,bg:$('bg').value,
+    depth:+$('depth').value,ns:+$('noiseScale').value,amp:+$('amplitude').value,
+    sc:+$('scale').value,spd:+$('speed').value,sw:+$('stroke').value,
+    rot:+$('rotation').value
+  };
+}
+
+// ═══════════════════════════════════════
+// INTERACTION
+// ═══════════════════════════════════════
+function cpos(e){
+  const r=canvas.getBoundingClientRect(),sx=W/r.width,sy=H/r.height;
+  let cx,cy;if(e.touches&&e.touches.length){cx=e.touches[0].clientX;cy=e.touches[0].clientY}else{cx=e.clientX;cy=e.clientY}
+  return{x:(cx-r.left)*sx,y:(cy-r.top)*sy};
+}
+canvas.addEventListener('mousedown',e=>{dragging=true;showCross=true;const p=cpos(e);targetX=p.x;targetY=p.y;if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now())}});
+canvas.addEventListener('mousemove',e=>{if(!dragging)return;const p=cpos(e);targetX=p.x;targetY=p.y;if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now())}});
+canvas.addEventListener('mouseup',()=>{dragging=false;showCross=false;if(!playing)render(performance.now())});
+canvas.addEventListener('mouseleave',()=>{dragging=false;showCross=false;if(!playing)render(performance.now())});
+canvas.addEventListener('touchstart',e=>{e.preventDefault();dragging=true;showCross=true;const p=cpos(e);targetX=p.x;targetY=p.y;if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now())}},{passive:false});
+canvas.addEventListener('touchmove',e=>{e.preventDefault();if(!dragging)return;const p=cpos(e);targetX=p.x;targetY=p.y;if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now())}},{passive:false});
+canvas.addEventListener('touchend',e=>{e.preventDefault();dragging=false;showCross=false;if(!playing)render(performance.now())},{passive:false});
+
+// Scroll = depth
+let hudTimer;
+const depthHud=$('depthHud'),depthSlider=$('depth'),depthValEl=$('depthVal');
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  let d=+depthSlider.value+(e.deltaY>0?-1:1);
+  d=Math.max(1,Math.min(12,d));
+  depthSlider.value=d;depthValEl.textContent=d;
+  depthHud.textContent='depth: '+d;
+  depthHud.classList.add('visible');
+  clearTimeout(hudTimer);hudTimer=setTimeout(()=>depthHud.classList.remove('visible'),800);
+  if(!playing)render(performance.now());
+},{passive:false});
+
+// Crosshair
+function drawCross(x,y,bg){
+  const c=bg==='dark'?'rgba(255,255,255,.25)':'rgba(0,0,0,.2)';
+  ctx.save();ctx.strokeStyle=c;ctx.lineWidth=1;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(x-20,y);ctx.lineTo(x-6,y);ctx.moveTo(x+6,y);ctx.lineTo(x+20,y);
+  ctx.moveTo(x,y-20);ctx.lineTo(x,y-6);ctx.moveTo(x,y+6);ctx.lineTo(x,y+20);ctx.stroke();
+  ctx.setLineDash([]);ctx.fillStyle=bg==='dark'?'rgba(255,255,255,.5)':'rgba(0,0,0,.4)';
+  ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill();ctx.restore();
+}
+
+// ═══════════════════════════════════════
+// NOISE DISPLACEMENT HELPER
+// ═══════════════════════════════════════
+function noiseDisplace(x,y,ns,amp,t){
+  if(amp===0||ns===0)return{x,y};
+  const nx=perlin.fbm(x/W*(ns/10)+t*.3,y/H*(ns/10)+t*.15,3);
+  const ny=perlin.fbm(x/W*(ns/10)+100+t*.2,y/H*(ns/10)+100+t*.25,3);
+  return{x:x+nx*amp,y:y+ny*amp};
+}
+
+// ═══════════════════════════════════════
+// FRACTAL DRAWING FUNCTIONS
+// ═══════════════════════════════════════
+
+// ── 1. SPIRAL SEPTAGON ──
+function drawSpiralSeptagon(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const maxDepth=Math.min(depth,8);
+  const baseR=(sc/50)*W*.28;
+  const rotRad=(rot+t*30)*Math.PI/180;
+  let totalSegs=0;
+  const maxSegs=15000;
+
+  function septagon(cx,cy,r,d,angle){
+    if(d>maxDepth||r<1.5||totalSegs>maxSegs)return;
+    const n=7;
+    const pts=[];
+    for(let i=0;i<n;i++){
+      const a=angle+(i/n)*Math.PI*2;
+      let px=cx+Math.cos(a)*r,py=cy+Math.sin(a)*r;
+      const nd=noiseDisplace(px,py,ns,amp*(d/maxDepth),t);
+      px=nd.x;py=nd.y;
+      pts.push({x:px,y:py,a});
+    }
+    // Draw polygon
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x,pts[0].y);
+    for(let i=1;i<n;i++)ctx.lineTo(pts[i].x,pts[i].y);
+    ctx.closePath();
+    ctx.strokeStyle=col(d/maxDepth,bg);
+    ctx.lineWidth=Math.max(.3,(1-d/maxDepth)*1.5)*lw;
+    ctx.stroke();
+    totalSegs+=n;
+
+    // Recurse at each vertex
+    const shrink=.42;
+    const twist=Math.PI/7+perlin.fbm(d+t*.5,cx/W*2,2)*.3;
+    for(let i=0;i<n;i++){
+      septagon(pts[i].x,pts[i].y,r*shrink,d+1,pts[i].a+twist);
+    }
+  }
+  septagon(ox,oy,baseR,0,rotRad);
+}
+
+// ── 2. LÉVY C CURVE ──
+function drawLevyC(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const maxD=Math.min(depth,16);
+  const len=(sc/50)*W*.35;
+  const rotRad=rot*Math.PI/180;
+
+  // Build points iteratively
+  let pts=[
+    {x:ox-Math.cos(rotRad)*len/2,y:oy-Math.sin(rotRad)*len/2},
+    {x:ox+Math.cos(rotRad)*len/2,y:oy+Math.sin(rotRad)*len/2}
+  ];
+
+  for(let i=0;i<maxD&&pts.length<60000;i++){
+    const next=[];
+    for(let j=0;j<pts.length-1;j++){
+      const p1=pts[j],p2=pts[j+1];
+      const mx=(p1.x+p2.x)/2,my=(p1.y+p2.y)/2;
+      const dx=p2.x-p1.x,dy=p2.y-p1.y;
+      // Perpendicular midpoint offset (45° each iteration)
+      const nv=noiseDisplace(mx,my,ns,amp*(i/maxD)*.5,t);
+      const mid={x:nv.x+(dy)/2,y:nv.y-(dx)/2};
+      next.push(p1,mid);
+    }
+    next.push(pts[pts.length-1]);
+    pts=next;
+  }
+
+  // Apply final noise displacement
+  for(let i=0;i<pts.length;i++){
+    const nd=noiseDisplace(pts[i].x,pts[i].y,ns,amp*.3,t);
+    pts[i].x=nd.x;pts[i].y=nd.y;
+  }
+
+  // Draw
+  const segCount=pts.length-1;
+  ctx.lineWidth=.6*lw;
+  for(let i=0;i<segCount;i++){
+    ctx.beginPath();
+    ctx.moveTo(pts[i].x,pts[i].y);
+    ctx.lineTo(pts[i+1].x,pts[i+1].y);
+    ctx.strokeStyle=col(i/segCount,bg);
+    ctx.stroke();
+  }
+}
+
+// ── 3. TWIN CHRISTMAS TREE ──
+function drawTwinTree(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const maxD=Math.min(depth,12);
+  const baseLen=(sc/50)*W*.18;
+  const rotRad=rot*Math.PI/180;
+  let segs=0;
+  const maxSegs=20000;
+
+  function branch(x1,y1,len,angle,d,mirror){
+    if(d>maxD||len<1.5||segs>maxSegs)return;
+    const nd=noiseDisplace(x1,y1,ns,amp*(d/maxD)*.6,t);
+    const na=angle+perlin.fbm(x1/W*3+t*.2,y1/H*3+d,2)*(.15+amp/500);
+    const x2=nd.x+Math.cos(na)*len;
+    const y2=nd.y+Math.sin(na)*len;
+
+    ctx.beginPath();ctx.moveTo(nd.x,nd.y);ctx.lineTo(x2,y2);
+    ctx.strokeStyle=col(d/maxD,bg);
+    ctx.lineWidth=Math.max(.3,(1-d/maxD)*2)*lw;
+    ctx.stroke();
+    segs++;
+
+    const shrink=.68+perlin.fbm(d+t*.3,mirror?50:0,2)*.08;
+    const spread=.45+perlin.fbm(d*2+t*.2,0,2)*.15;
+    branch(x2,y2,len*shrink,na-spread,d+1,mirror);
+    branch(x2,y2,len*shrink,na+spread,d+1,mirror);
+  }
+
+  // Two trees mirrored
+  branch(ox,oy,baseLen,-Math.PI/2+rotRad,0,false);
+  branch(ox,oy,baseLen,-Math.PI/2+rotRad+Math.PI,0,true);
+}
+
+// ── 4. SIERPINSKI CARPET ──
+function drawSierpinskiCarpet(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const maxD=Math.min(depth,6);
+  const size=(sc/50)*W*.55;
+  const rotRad=rot*Math.PI/180;
+  let segs=0;
+  const maxSegs=25000;
+
+  function carpet(cx,cy,s,d){
+    if(d>maxD||s<2||segs>maxSegs)return;
+    const third=s/3;
+    for(let row=0;row<3;row++){
+      for(let col2=0;col2<3;col2++){
+        if(row===1&&col2===1){
+          // Draw the hole
+          const hx=cx-s/2+col2*third;
+          const hy=cy-s/2+row*third;
+          const nd=noiseDisplace(hx+third/2,hy+third/2,ns,amp*(d/maxD)*.4,t);
+          const dx=nd.x-hx-third/2,dy=nd.y-hy-third/2;
+
+          ctx.save();
+          ctx.translate(nd.x,nd.y);
+          ctx.rotate(rotRad+perlin.fbm(d+t*.2,hx/W,2)*.2);
+          ctx.fillStyle=col(d/maxD,bg);
+          ctx.fillRect(-third/2+dx*.3,-third/2+dy*.3,third,third);
+          ctx.restore();
+          segs++;
+          continue;
+        }
+        const ncx=cx-s/2+col2*third+third/2;
+        const ncy=cy-s/2+row*third+third/2;
+        carpet(ncx,ncy,third,d+1);
+      }
+    }
+  }
+
+  // Draw outer border
+  ctx.save();ctx.translate(ox,oy);ctx.rotate(rotRad);
+  ctx.strokeStyle=col(0,bg);ctx.lineWidth=.8*lw;
+  ctx.strokeRect(-size/2,-size/2,size,size);
+  ctx.restore();
+
+  carpet(ox,oy,size,0);
+}
+
+// ── 5. CYBER FERN ──
+function drawCyberFern(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const scale=(sc/50)*W*.035;
+  const rotRad=rot*Math.PI/180;
+  const iters=Math.min(depth*8000,60000);
+
+  // Barnsley fern IFS with noise-modulated coefficients
+  let x=0,y=0;
+  const pts=[];
+
+  for(let i=0;i<iters;i++){
+    const r=Math.random();
+    let nx,ny;
+    const nmod=perlin.fbm(x*.1+t*.3,y*.1+t*.2,2)*(amp/200);
+
+    if(r<.01){
+      nx=0; ny=.16*y;
+    }else if(r<.86){
+      nx=(.85+nmod*.05)*x+(.04+nmod*.02)*y;
+      ny=(-.04+nmod*.02)*x+(.85+nmod*.05)*y+1.6;
+    }else if(r<.93){
+      nx=(.2-.02*nmod)*x+(-.26+.02*nmod)*y;
+      ny=(.23+.02*nmod)*x+(.22-.02*nmod)*y+1.6;
+    }else{
+      nx=(-.15+.02*nmod)*x+(.28-.02*nmod)*y;
+      ny=(.26+.02*nmod)*x+(.24-.02*nmod)*y+.44;
+    }
+    x=nx;y=ny;
+    if(i>20)pts.push({x,y});
+  }
+
+  // Transform and draw
+  ctx.save();
+  ctx.translate(ox,oy);
+  ctx.rotate(rotRad);
+
+  for(let i=0;i<pts.length;i++){
+    const p=pts[i];
+    let px=p.x*scale, py=-p.y*scale+scale*5;
+    const nd=noiseDisplace(px+ox,py+oy,ns*.3,amp*.15,t);
+    px+=nd.x-px-ox; py+=nd.y-py-oy;
+
+    const it=i/pts.length;
+    ctx.fillStyle=col(it,bg);
+    ctx.fillRect(px,py,.8*lw,.8*lw);
+  }
+  ctx.restore();
+}
+
+// ── 6. GOLDEN DRAGON ──
+function drawGoldenDragon(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const maxD=Math.min(depth,16);
+  const len=(sc/50)*W*.35;
+  const rotRad=rot*Math.PI/180;
+
+  // Build dragon curve points
+  let turns=[]; // true=right, false=left
+  for(let i=0;i<maxD;i++){
+    const newTurns=[...turns,true];
+    for(let j=turns.length-1;j>=0;j--) newTurns.push(!turns[j]);
+    turns=newTurns;
+    if(turns.length>80000)break;
+  }
+
+  const segLen=len/Math.sqrt(turns.length+1);
+  const golden=1.618033988;
+  let angle=rotRad;
+  let x=ox-len*.3*Math.cos(rotRad), y=oy-len*.3*Math.sin(rotRad);
+  const pts=[{x,y}];
+
+  for(let i=0;i<turns.length;i++){
+    const nmod=perlin.fbm(x/W*(ns/15)+t*.2,y/H*(ns/15)+t*.15,2);
+    const turnAngle=(Math.PI/2)/golden+nmod*(amp/300);
+    angle+=turns[i]?-turnAngle:turnAngle;
+    x+=Math.cos(angle)*segLen;
+    y+=Math.sin(angle)*segLen;
+    const nd=noiseDisplace(x,y,ns*.5,amp*.2,t);
+    pts.push({x:nd.x,y:nd.y});
+  }
+
+  // Draw
+  const total=pts.length-1;
+  ctx.lineWidth=.5*lw;
+  for(let i=0;i<total;i++){
+    ctx.beginPath();
+    ctx.moveTo(pts[i].x,pts[i].y);
+    ctx.lineTo(pts[i+1].x,pts[i+1].y);
+    ctx.strokeStyle=col(i/total,bg);
+    ctx.stroke();
+  }
+}
+
+// ── 7. VICSEK FRACTAL ──
+function drawVicsek(c,t){
+  const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
+  const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
+  const maxD=Math.min(depth,6);
+  const size=(sc/50)*W*.5;
+  const rotRad=rot*Math.PI/180;
+  let segs=0;
+  const maxSegs=20000;
+
+  function vicsek(cx,cy,s,d){
+    if(d>=maxD||s<1.5||segs>maxSegs){
+      // Draw filled square
+      const nd=noiseDisplace(cx,cy,ns,amp*(d/maxD)*.4,t);
+      ctx.save();
+      ctx.translate(nd.x,nd.y);
+      ctx.rotate(rotRad+perlin.fbm(cx/W+t*.15,cy/H+t*.1,2)*.15);
+      ctx.fillStyle=col(d/maxD,bg);
+      ctx.fillRect(-s/2,-s/2,s,s);
+      ctx.restore();
+      segs++;
+      return;
+    }
+    const third=s/3;
+    // Center
+    vicsek(cx,cy,third,d+1);
+    // 4 cardinal directions
+    const offsets=[[-1,0],[1,0],[0,-1],[0,1]];
+    for(const[dx,dy]of offsets){
+      const nx=cx+dx*third, ny=cy+dy*third;
+      const nd=noiseDisplace(nx,ny,ns*.2,amp*(d/maxD)*.2,t);
+      vicsek(nd.x,nd.y,third,d+1);
+    }
+  }
+
+  vicsek(ox,oy,size,0);
+}
+
+// ═══════════════════════════════════════
+// DISPATCH
+// ═══════════════════════════════════════
+const drawFns={
+  spiralSeptagon:drawSpiralSeptagon,
+  levyC:drawLevyC,
+  twinTree:drawTwinTree,
+  sierpinskiCarpet:drawSierpinskiCarpet,
+  cyberFern:drawCyberFern,
+  goldenDragon:drawGoldenDragon,
+  vicsek:drawVicsek
+};
+
+// Depth limits per fractal (for safety)
+const depthLimits={
+  spiralSeptagon:7,levyC:14,twinTree:12,
+  sierpinskiCarpet:5,cyberFern:12,goldenDragon:16,vicsek:6
+};
+
+// ═══════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════
+function render(ts){
+  const c=cfg();
+  if(playing){smoothX+=(targetX-smoothX)*LERP;smoothY+=(targetY-smoothY)*LERP;}
+  ctx.fillStyle=c.bg==='dark'?'#0a0a0c':'#fafaf8';
+  ctx.fillRect(0,0,W,H);
+
+  // Clamp depth to fractal limit
+  const limit=depthLimits[c.frac]||10;
+  c.depth=Math.min(c.depth,limit);
+
+  (drawFns[c.frac]||drawSpiralSeptagon)(c,time);
+
+  if(showCross)drawCross(smoothX,smoothY,c.bg);
+
+  if(playing){
+    time+=c.spd/1000;
+    if(ts-lastFrame>0)$('fps').textContent=Math.round(1000/(ts-lastFrame))+' fps';
+    lastFrame=ts;
+    animId=requestAnimationFrame(render);
+  }
+}
+
+function generate(){
+  perlin=new PerlinNoise((Math.random()*1e5)|0);
+  time=0;render(performance.now());
+}
+
+// ═══════════════════════════════════════
+// PLAY / PAUSE
+// ═══════════════════════════════════════
+function togglePlay(){
+  playing=!playing;
+  if(playing){
+    $('playPause').classList.add('playing');$('playIcon').style.display='none';
+    $('pauseIcon').style.display='block';$('playLabel').textContent='Pause';
+    lastFrame=performance.now();animId=requestAnimationFrame(render);
+  }else{
+    $('playPause').classList.remove('playing');$('playIcon').style.display='block';
+    $('pauseIcon').style.display='none';$('playLabel').textContent='Play';
+    if(animId)cancelAnimationFrame(animId);$('fps').textContent='';
+  }
+}
+$('playPause').addEventListener('click',togglePlay);
+
+// ═══════════════════════════════════════
+// EVENTS
+// ═══════════════════════════════════════
+$('generate').addEventListener('click',()=>{if(playing)togglePlay();generate()});
+$('resetBtn').addEventListener('click',()=>{
+  targetX=W/2;targetY=H/2;smoothX=W/2;smoothY=H/2;
+  $('rotation').value=0;$('rotationVal').textContent='0';
+  if(!playing)render(performance.now());
+});
+$('save').addEventListener('click',()=>{
+  const c=cfg();const limit=depthLimits[c.frac]||10;c.depth=Math.min(c.depth,limit);
+  ctx.fillStyle=c.bg==='dark'?'#0a0a0c':'#fafaf8';ctx.fillRect(0,0,W,H);
+  (drawFns[c.frac]||drawSpiralSeptagon)(c,time);
+  const a=document.createElement('a');a.download=`fractal-${c.frac}-${Date.now()}.png`;
+  a.href=canvas.toDataURL('image/png');a.click();
+});
+
+// Warn on high depth for expensive fractals
+$('fractal').addEventListener('change',()=>{
+  const f=$('fractal').value;
+  const limit=depthLimits[f]||10;
+  if(+$('depth').value>limit){$('depth').value=limit;$('depthVal').textContent=limit;}
+  if(!playing)render(performance.now());
+});
+
+['depth','noiseScale','amplitude','scale','speed','stroke','rotation'].forEach(id=>{
+  const el=$(id),vEl=$(id+'Val');
+  el.addEventListener('input',()=>{
+    vEl.textContent=el.value;
+    // Clamp depth
+    if(id==='depth'){
+      const limit=depthLimits[$('fractal').value]||10;
+      if(+el.value>limit){el.value=limit;vEl.textContent=limit;}
+    }
+    if(!playing)render(performance.now());
+  });
+});
+document.querySelectorAll('select').forEach(el=>{
+  el.addEventListener('change',()=>{if(!playing)render(performance.now())});
+});
+
+let rTimer;
+window.addEventListener('resize',()=>{
+  clearTimeout(rTimer);rTimer=setTimeout(()=>{
+    const oW=W,oH=H;resize();
+    targetX=targetX/oW*W;targetY=targetY/oH*H;smoothX=targetX;smoothY=targetY;
+    if(!playing)render(performance.now());
+  },100);
+});
+
+generate();
+</script>
+</body>
+</html>

@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Radial Perlin Noise Art</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: #0a0a0c;
+    color: #e0e0e0;
+    font-family: 'Outfit', sans-serif;
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden;
+    overscroll-behavior: none;
+  }
+  .header { padding: 16px 20px 4px; text-align: center; width: 100%; }
+  .header h1 {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px; letter-spacing: 4px;
+    text-transform: uppercase; color: #555; font-weight: 400;
+  }
+  .hint {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; color: #333; letter-spacing: 1px;
+    margin-top: 4px;
+  }
+  .canvas-wrap {
+    position: relative; margin: 8px auto;
+    cursor: crosshair;
+  }
+  canvas { display: block; border-radius: 4px; }
+
+  /* Radius HUD */
+  .radius-hud {
+    position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; color: rgba(255,255,255,0.5);
+    background: rgba(0,0,0,0.6);
+    padding: 4px 10px; border-radius: 10px;
+    pointer-events: none;
+    opacity: 0; transition: opacity 0.25s;
+    white-space: nowrap;
+  }
+  .radius-hud.visible { opacity: 1; }
+
+  .controls {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+    padding: 12px 16px 24px;
+    max-width: 900px;
+    width: 100%;
+  }
+  .control-group { display: flex; flex-direction: column; gap: 3px; }
+  .control-group label {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; letter-spacing: 2px;
+    text-transform: uppercase; color: #555;
+  }
+  .control-group .val {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px; color: #777;
+    float: right; letter-spacing: 0;
+  }
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 3px;
+    background: #222; border-radius: 2px; outline: none;
+    touch-action: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #fff; cursor: pointer; border: 3px solid #0a0a0c;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #fff; cursor: pointer; border: 3px solid #0a0a0c;
+  }
+  select {
+    background: #151518; color: #ccc;
+    border: 1px solid #2a2a2f;
+    padding: 8px 10px; border-radius: 6px;
+    font-family: 'Outfit', sans-serif;
+    font-size: 13px; cursor: pointer; outline: none; width: 100%;
+  }
+  select:hover { border-color: #444; }
+  .btn-row {
+    grid-column: 1 / -1;
+    display: flex; gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding-top: 4px;
+  }
+  .btn {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px; letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 12px 20px;
+    border: 1px solid #333;
+    background: transparent; color: #ccc;
+    border-radius: 6px; cursor: pointer;
+    transition: all 0.15s;
+    min-width: 44px; min-height: 44px;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn:hover { background: #fff; color: #000; border-color: #fff; }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: #fff; color: #000; border-color: #fff; }
+  .btn.primary:hover { background: transparent; color: #fff; }
+  .btn.playing { background: #2ecc40; color: #000; border-color: #2ecc40; }
+  .btn.playing:hover { background: #27ae60; border-color: #27ae60; }
+  .btn svg { width: 14px; height: 14px; fill: currentColor; flex-shrink: 0; }
+  .fps {
+    position: fixed; top: 8px; right: 8px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px; color: #333; pointer-events: none;
+  }
+  @media (max-width: 600px) {
+    .controls { grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 12px 20px; }
+    .header { padding: 12px 12px 2px; }
+    .btn { padding: 12px 14px; font-size: 10px; letter-spacing: 1px; }
+  }
+  @media (max-width: 380px) { .controls { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Radial Perlin Noise</h1>
+  <div class="hint">Click + drag to move origin · Scroll to resize center</div>
+</div>
+<div class="canvas-wrap">
+  <canvas id="canvas"></canvas>
+  <div class="radius-hud" id="radiusHud">r: 14</div>
+</div>
+<div class="fps" id="fps"></div>
+<div class="controls">
+  <div class="control-group"><label>Style</label>
+    <select id="style">
+      <option value="flowLines">Flow Lines</option>
+      <option value="petals">Petals</option>
+      <option value="spiral">Spiral</option>
+      <option value="fieldLines">Field Lines</option>
+      <option value="waves">Waves</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Outer Shape</label>
+    <select id="shape">
+      <option value="circle">Circle</option>
+      <option value="triangle">Triangle</option>
+      <option value="square">Square</option>
+      <option value="hexagon">Hexagon</option>
+      <option value="star">Star</option>
+      <option value="heart">Heart</option>
+      <option value="infinity">Infinity</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Center Shape</label>
+    <select id="centerShape">
+      <option value="circle">Circle</option>
+      <option value="triangle">Triangle</option>
+      <option value="square">Square</option>
+      <option value="hexagon">Hexagon</option>
+      <option value="star">Star</option>
+      <option value="heart">Heart</option>
+      <option value="infinity">Infinity</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="mono">Monochrome</option>
+      <option value="cool">Cool Blues</option>
+      <option value="warm">Warm Ember</option>
+      <option value="neon">Neon</option>
+      <option value="pastel">Pastel Bloom</option>
+      <option value="electric">Electric Field</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Background</label>
+    <select id="bg">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+    </select>
+  </div>
+  <div class="control-group">
+    <label>Lines <span class="val" id="numLinesVal">120</span></label>
+    <input type="range" id="numLines" min="20" max="300" value="120">
+  </div>
+  <div class="control-group">
+    <label>Noise Scale <span class="val" id="noiseScaleVal">25</span></label>
+    <input type="range" id="noiseScale" min="1" max="80" value="25">
+  </div>
+  <div class="control-group">
+    <label>Amplitude <span class="val" id="amplitudeVal">120</span></label>
+    <input type="range" id="amplitude" min="10" max="300" value="120">
+  </div>
+  <div class="control-group">
+    <label>Steps <span class="val" id="lineLengthVal">220</span></label>
+    <input type="range" id="lineLength" min="30" max="500" value="220">
+  </div>
+  <div class="control-group">
+    <label>Speed <span class="val" id="speedVal">50</span></label>
+    <input type="range" id="speed" min="1" max="100" value="50">
+  </div>
+  <div class="control-group">
+    <label>Stroke <span class="val" id="strokeVal">5</span></label>
+    <input type="range" id="stroke" min="1" max="20" value="5">
+  </div>
+  <div class="control-group">
+    <label>Center Radius <span class="val" id="centerRadiusVal">14</span></label>
+    <input type="range" id="centerRadius" min="2" max="200" value="14">
+  </div>
+  <div class="btn-row">
+    <button class="btn" id="playPause">
+      <svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
+      <svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg>
+      <span id="playLabel">Play</span>
+    </button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="resetCenter">Reset</button>
+    <button class="btn" id="save">Save PNG</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+// PERLIN NOISE
+// ═══════════════════════════════════════
+class PerlinNoise {
+  constructor(seed) {
+    this.perm = new Uint8Array(512);
+    this.G = [[1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],[1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],[0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]];
+    const p = new Uint8Array(256);
+    for(let i=0;i<256;i++) p[i]=i;
+    let s=seed;
+    for(let i=255;i>0;i--){s=(s*16807)%2147483647;const j=s%(i+1);[p[i],p[j]]=[p[j],p[i]];}
+    for(let i=0;i<512;i++) this.perm[i]=p[i&255];
+  }
+  f(t){return t*t*t*(t*(t*6-15)+10);}
+  n2(x,y){
+    const X=Math.floor(x)&255,Y=Math.floor(y)&255,xf=x-Math.floor(x),yf=y-Math.floor(y),u=this.f(xf),v=this.f(yf),p=this.perm,G=this.G;
+    const aa=p[p[X]+Y],ab=p[p[X]+Y+1],ba=p[p[X+1]+Y],bb=p[p[X+1]+Y+1];
+    const d=(g,a,b)=>g[0]*a+g[1]*b;
+    const n00=d(G[aa%12],xf,yf),n10=d(G[ba%12],xf-1,yf),n01=d(G[ab%12],xf,yf-1),n11=d(G[bb%12],xf-1,yf-1);
+    return(n00+u*(n10-n00))+v*((n01+u*(n11-n01))-(n00+u*(n10-n00)));
+  }
+  fbm(x,y,o=4){let v=0,a=1,f=1,m=0;for(let i=0;i<o;i++){v+=this.n2(x*f,y*f)*a;m+=a;a*=.5;f*=2;}return v/m;}
+}
+
+// ═══════════════════════════════════════
+// SHAPES — returns radius multiplier for angle
+// ═══════════════════════════════════════
+const shapeFns = {
+  circle:()=>1,
+  triangle:(a)=>{const n=3,ang=((a%(Math.PI*2/n))-Math.PI/n);return Math.min(.75/Math.cos(ang),1.6);},
+  square:(a)=>Math.min(.88/Math.max(Math.abs(Math.cos(a)),Math.abs(Math.sin(a))),1.4),
+  hexagon:(a)=>{const n=6,ang=((a%(Math.PI*2/n))-Math.PI/n);return Math.min(.85/Math.cos(ang),1.3);},
+  star:(a)=>{const t=((a/(Math.PI*2))*5)%1;return(t<.5?.5+t:1.5-t)*.85;},
+  heart:(a)=>{const s=Math.sin(a-Math.PI/2),c=Math.cos(a-Math.PI/2);return Math.max(.2,(1+.8*s)*Math.sqrt(Math.abs(c))*.55+.25);},
+  infinity:(a)=>{const c2=Math.cos(2*a);return c2<=0?.3:Math.sqrt(Math.abs(c2))*.9+.1;}
+};
+
+function shapeR(a,baseR,name){return baseR*Math.min((shapeFns[name]||shapeFns.circle)(a),1.6);}
+// Center shape: returns the starting radius at a given angle
+function centerR(a,baseR,name){return baseR*Math.min((shapeFns[name]||shapeFns.circle)(a),1.6);}
+
+// ═══════════════════════════════════════
+// PALETTES
+// ═══════════════════════════════════════
+const palettes = {
+  mono:(t,bg)=>{const v=bg==='dark'?180+t*75:20+t*40;const a=.12+t*.55;return bg==='dark'?`rgba(${v},${v},${v},${a})`:`rgba(${30-t*20},${30-t*20},${30-t*20},${a})`;},
+  cool:(t)=>`rgba(${30+t*50|0},${140+t*70|0},${200+t*55|0},${.12+t*.5})`,
+  warm:(t)=>`rgba(${200+t*55|0},${50+t*110|0},${15+t*40|0},${.12+t*.5})`,
+  neon:(t)=>`hsla(${(t*280+180)%360},100%,58%,${.13+t*.55})`,
+  pastel:(t)=>`hsla(${(t*300+240)%360},70%,72%,${.18+t*.45})`,
+  electric:(t)=>{const m=Math.sin(t*Math.PI);return`rgba(${30+m*210|0},${100+(1-m)*80|0},${230-m*190|0},${.13+t*.5})`;}
+};
+
+// ═══════════════════════════════════════
+// CANVAS
+// ═══════════════════════════════════════
+const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let W,H;
+function resize(){
+  const maxW=window.innerWidth-16,maxH=window.innerHeight*.52;
+  const s=Math.min(maxW,maxH,720);
+  W=canvas.width=Math.round(s);H=canvas.height=Math.round(s);
+}
+resize();
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let perlin=new PerlinNoise((Math.random()*1e5)|0);
+let time=0, playing=false, animId=null, lastFrame=0;
+let smoothX=W/2, smoothY=H/2, targetX=W/2, targetY=H/2;
+let cRadius=14; // center radius
+let dragging=false, showCrosshair=false;
+const LERP=0.15;
+
+function $(id){return document.getElementById(id);}
+function cfg(){
+  return{
+    nl:+$('numLines').value,ns:+$('noiseScale').value,amp:+$('amplitude').value,
+    ll:+$('lineLength').value,pal:$('palette').value,bg:$('bg').value,
+    sty:$('style').value,shp:$('shape').value,cshp:$('centerShape').value,
+    spd:+$('speed').value,sw:+$('stroke').value,cr:cRadius
+  };
+}
+
+// ═══════════════════════════════════════
+// CANVAS INTERACTION
+// ═══════════════════════════════════════
+function canvasPos(e){
+  const r=canvas.getBoundingClientRect(),sx=W/r.width,sy=H/r.height;
+  let cx,cy;
+  if(e.touches&&e.touches.length){cx=e.touches[0].clientX;cy=e.touches[0].clientY;}
+  else{cx=e.clientX;cy=e.clientY;}
+  return{x:(cx-r.left)*sx,y:(cy-r.top)*sy};
+}
+
+canvas.addEventListener('mousedown',(e)=>{
+  dragging=true; showCrosshair=true;
+  const p=canvasPos(e); targetX=p.x; targetY=p.y;
+  if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now());}
+});
+canvas.addEventListener('mousemove',(e)=>{
+  if(!dragging)return;
+  const p=canvasPos(e); targetX=p.x; targetY=p.y;
+  if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now());}
+});
+canvas.addEventListener('mouseup',()=>{dragging=false;showCrosshair=false;if(!playing)render(performance.now());});
+canvas.addEventListener('mouseleave',()=>{dragging=false;showCrosshair=false;if(!playing)render(performance.now());});
+
+// Touch
+canvas.addEventListener('touchstart',(e)=>{
+  e.preventDefault();dragging=true;showCrosshair=true;
+  const p=canvasPos(e);targetX=p.x;targetY=p.y;
+  if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now());}
+},{passive:false});
+canvas.addEventListener('touchmove',(e)=>{
+  e.preventDefault();if(!dragging)return;
+  const p=canvasPos(e);targetX=p.x;targetY=p.y;
+  if(!playing){smoothX=targetX;smoothY=targetY;render(performance.now());}
+},{passive:false});
+canvas.addEventListener('touchend',(e)=>{
+  e.preventDefault();dragging=false;showCrosshair=false;
+  if(!playing)render(performance.now());
+},{passive:false});
+
+// ── Mousewheel → center radius ──
+let hudTimer;
+const radiusHud=$('radiusHud');
+const crSlider=$('centerRadius');
+const crVal=$('centerRadiusVal');
+
+function setCRadius(v){
+  cRadius=Math.max(2,Math.min(200,Math.round(v)));
+  crSlider.value=cRadius;
+  crVal.textContent=cRadius;
+  radiusHud.textContent='r: '+cRadius;
+  radiusHud.classList.add('visible');
+  clearTimeout(hudTimer);
+  hudTimer=setTimeout(()=>radiusHud.classList.remove('visible'),800);
+  if(!playing)render(performance.now());
+}
+
+canvas.addEventListener('wheel',(e)=>{
+  e.preventDefault();
+  const delta=e.deltaY>0?-3:3;
+  setCRadius(cRadius+delta);
+},{passive:false});
+
+// Pinch zoom for mobile center radius
+let lastPinchDist=0;
+canvas.addEventListener('touchstart',(e)=>{
+  if(e.touches.length===2){
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    lastPinchDist=Math.sqrt(dx*dx+dy*dy);
+  }
+},{passive:false});
+canvas.addEventListener('touchmove',(e)=>{
+  if(e.touches.length===2){
+    e.preventDefault();
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    const dist=Math.sqrt(dx*dx+dy*dy);
+    const diff=dist-lastPinchDist;
+    if(Math.abs(diff)>2){
+      setCRadius(cRadius+(diff>0?2:-2));
+      lastPinchDist=dist;
+    }
+  }
+},{passive:false});
+
+crSlider.addEventListener('input',()=>{
+  cRadius=+crSlider.value; crVal.textContent=cRadius;
+  if(!playing)render(performance.now());
+});
+
+// ═══════════════════════════════════════
+// CROSSHAIR (only during hold)
+// ═══════════════════════════════════════
+function drawCrosshair(x,y,bg,cr,cshp){
+  const isDark=bg==='dark';
+  const col=isDark?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.25)';
+  const dotCol=isDark?'rgba(255,255,255,0.6)':'rgba(0,0,0,0.5)';
+
+  ctx.save();
+  ctx.strokeStyle=col;
+  ctx.lineWidth=1;
+  ctx.setLineDash([4,4]);
+
+  // Cross lines beyond radius
+  const arm=Math.max(cr+20,30);
+  const gap=Math.max(cr+4,8);
+  ctx.beginPath();
+  ctx.moveTo(x-arm,y);ctx.lineTo(x-gap,y);
+  ctx.moveTo(x+gap,y);ctx.lineTo(x+arm,y);
+  ctx.moveTo(x,y-arm);ctx.lineTo(x,y-gap);
+  ctx.moveTo(x,y+gap);ctx.lineTo(x,y+arm);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Center shape outline
+  ctx.strokeStyle=isDark?'rgba(255,255,255,0.2)':'rgba(0,0,0,0.15)';
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  const segs=64;
+  for(let i=0;i<=segs;i++){
+    const a=(i/segs)*Math.PI*2;
+    const r=centerR(a,cr,cshp);
+    const px=x+Math.cos(a)*r, py=y+Math.sin(a)*r;
+    i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+  }
+  ctx.closePath();
+  ctx.stroke();
+
+  // Dot
+  ctx.fillStyle=dotCol;
+  ctx.beginPath();
+  ctx.arc(x,y,2,0,Math.PI*2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ═══════════════════════════════════════
+// DRAW FUNCTIONS
+// ═══════════════════════════════════════
+
+function drawFlowLines(c,t){
+  const{nl,ns,amp,ll,pal,bg,shp,cshp,sw,cr}=c;
+  const maxR=Math.min(W,H)*.42,col=palettes[pal],lw=sw/10;
+  const ox=smoothX,oy=smoothY;
+  for(let i=0;i<nl;i++){
+    const it=i/nl,ang=it*Math.PI*2;
+    const startR=centerR(ang,cr,cshp);
+    ctx.beginPath();
+    let x=ox+Math.cos(ang)*startR,y=oy+Math.sin(ang)*startR;
+    ctx.moveTo(x,y);
+    for(let s=0;s<ll;s++){
+      const st=s/ll;
+      const n=perlin.fbm(x/W*(ns/10)+t*.3,y/H*(ns/10)+t*.2,3);
+      const a=n*Math.PI*2+ang;
+      x+=Math.cos(a)*(1.5+st*2);y+=Math.sin(a)*(1.5+st*2);
+      const dx=x-ox,dy=y-oy,d=Math.sqrt(dx*dx+dy*dy)||1;
+      x+=(dx/d)*(.3+st*.5);y+=(dy/d)*(.3+st*.5);
+      if(d>shapeR(Math.atan2(dy,dx),maxR,shp))break;
+      if(x<-10||x>W+10||y<-10||y>H+10)break;
+      ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=col(it,bg);ctx.lineWidth=(.3+Math.random()*.6)*lw;ctx.stroke();
+  }
+}
+
+function drawPetals(c,t){
+  const{nl,ns,amp,ll,pal,bg,shp,cshp,sw,cr}=c;
+  const col=palettes[pal],maxR=Math.min(W,H)*.44,lw=sw/10;
+  const ox=smoothX,oy=smoothY;
+  const pc=Math.max(8,Math.floor(nl/6));
+  for(let p=0;p<pc;p++){
+    const ba=(p/pc)*Math.PI*2,lpp=Math.floor(nl/pc);
+    for(let i=0;i<lpp;i++){
+      const lt=i/lpp,ang=ba+(lt-.5)*.6;
+      const startR=centerR(ang,cr,cshp);
+      ctx.beginPath();
+      for(let s=0;s<=ll;s++){
+        const st=s/ll;
+        const outerR=shapeR(ang,maxR,shp);
+        const r=startR+st*(outerR-startR);
+        const nv=perlin.fbm(Math.cos(ang)*st*(ns/15)+p+t*.4,Math.sin(ang)*st*(ns/15)+p+t*.3,3);
+        const w=Math.sin(st*Math.PI)*nv*(amp*.8);
+        const pp=ang+Math.PI/2;
+        const px=ox+Math.cos(ang)*r+Math.cos(pp)*w,py=oy+Math.sin(ang)*r+Math.sin(pp)*w;
+        s===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+      }
+      ctx.strokeStyle=col((p*lpp+i)/(pc*lpp),bg);ctx.lineWidth=(.3+lt*.5)*lw;ctx.stroke();
+    }
+  }
+}
+
+function drawSpiral(c,t){
+  const{nl,ns,amp,ll,pal,bg,shp,cshp,sw,cr}=c;
+  const col=palettes[pal],maxR=Math.min(W,H)*.44,lw=sw/10;
+  const ox=smoothX,oy=smoothY;
+  for(let i=0;i<nl;i++){
+    const it=i/nl,sa=it*Math.PI*2;
+    ctx.beginPath();
+    for(let s=0;s<=ll;s++){
+      const st=s/ll,twist=st*Math.PI*3+t*1.5,ang=sa+twist;
+      const cR=centerR(ang,cr,cshp);
+      const oR=shapeR(ang,maxR,shp);
+      const r=cR+st*(oR-cR);
+      const nv=perlin.fbm(Math.cos(ang+it)*(ns/20)+t*.2,st*(ns/10)+it*5+t*.15,3);
+      const w=nv*amp*.4*Math.sin(st*Math.PI);
+      const pp=ang+Math.PI/2;
+      const px=ox+Math.cos(ang)*r+Math.cos(pp)*w,py=oy+Math.sin(ang)*r+Math.sin(pp)*w;
+      s===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.strokeStyle=col(it,bg);ctx.lineWidth=(.4+Math.random()*.5)*lw;ctx.stroke();
+  }
+}
+
+function drawFieldLines(c,t){
+  const{nl,ns,amp,ll,pal,bg,shp,cshp,sw,cr}=c;
+  const col=palettes[pal],maxR=Math.min(W,H)*.46,lw=sw/10;
+  const ox=smoothX,oy=smoothY;
+  const orb=t*.8;
+  const sep=Math.max(cr*1.5,30);
+  const ch=[
+    {x:ox+Math.cos(orb)*sep,y:oy+Math.sin(orb)*sep*.7,s:1},
+    {x:ox-Math.cos(orb)*sep*.85,y:oy-Math.sin(orb)*sep*.85,s:-1}
+  ];
+  for(let i=0;i<nl;i++){
+    const it=i/nl,ang=it*Math.PI*2,src=ch[i%2];
+    const sR=centerR(ang,cr*.5,cshp);
+    ctx.beginPath();
+    let x=src.x+Math.cos(ang)*sR,y=src.y+Math.sin(ang)*sR;
+    ctx.moveTo(x,y);
+    for(let s=0;s<ll;s++){
+      let fx=0,fy=0;
+      for(const q of ch){const dx=x-q.x,dy=y-q.y,d=Math.max(Math.sqrt(dx*dx+dy*dy),8),f=q.s*800/(d*d);fx+=(dx/d)*f;fy+=(dy/d)*f;}
+      const n=perlin.fbm(x/W*(ns/8)+t*.1,y/H*(ns/8)+t*.1,2);
+      fx+=Math.cos(n*Math.PI*4)*(amp/300);fy+=Math.sin(n*Math.PI*4)*(amp/300);
+      const mg=Math.sqrt(fx*fx+fy*fy)||1;
+      x+=(fx/mg)*3;y+=(fy/mg)*3;
+      const dx2=x-ox,dy2=y-oy;
+      if(Math.sqrt(dx2*dx2+dy2*dy2)>shapeR(Math.atan2(dy2,dx2),maxR,shp))break;
+      if(x<-10||x>W+10||y<-10||y>H+10)break;
+      ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=col(it,bg);ctx.lineWidth=(.4+Math.random()*.6)*lw;ctx.stroke();
+  }
+}
+
+function drawWaves(c,t){
+  const{nl,ns,amp,ll,pal,bg,shp,cshp,sw,cr}=c;
+  const col=palettes[pal],maxR=Math.min(W,H)*.44,lw=sw/10;
+  const ox=smoothX,oy=smoothY;
+  const rings=Math.max(10,Math.floor(nl/3));
+  for(let ring=0;ring<rings;ring++){
+    const rt=ring/rings,pts=Math.max(80,ll);
+    ctx.beginPath();
+    for(let i=0;i<=pts;i++){
+      const it=i/pts,ang=it*Math.PI*2;
+      const cR=centerR(ang,cr,cshp);
+      const oR=shapeR(ang,maxR,shp);
+      const baseR=cR+rt*(oR-cR);
+      const nv=perlin.fbm(Math.cos(ang)*(ns/15)+rt*3+t*.3,Math.sin(ang)*(ns/15)+rt*3+t*.25,4);
+      const w=nv*amp*.5*(.3+rt*.7),r=baseR+w;
+      const px=ox+Math.cos(ang)*r,py=oy+Math.sin(ang)*r;
+      i===0?ctx.moveTo(px,py):ctx.lineTo(px,py);
+    }
+    ctx.closePath();ctx.strokeStyle=col(rt,bg);ctx.lineWidth=(.4+rt)*lw;ctx.stroke();
+  }
+}
+
+const drawFns={flowLines:drawFlowLines,petals:drawPetals,spiral:drawSpiral,fieldLines:drawFieldLines,waves:drawWaves};
+
+// ═══════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════
+function render(ts){
+  const c=cfg();
+  if(playing){
+    smoothX+=(targetX-smoothX)*LERP;
+    smoothY+=(targetY-smoothY)*LERP;
+  }
+  ctx.fillStyle=c.bg==='dark'?'#0a0a0c':'#fafaf8';
+  ctx.fillRect(0,0,W,H);
+  (drawFns[c.sty]||drawFlowLines)(c,time);
+
+  if(showCrosshair) drawCrosshair(smoothX,smoothY,c.bg,cRadius,c.cshp);
+
+  if(playing){
+    time+=c.spd/1000;
+    if(ts-lastFrame>0)$('fps').textContent=Math.round(1000/(ts-lastFrame))+' fps';
+    lastFrame=ts;
+    animId=requestAnimationFrame(render);
+  }
+}
+
+function generate(){
+  perlin=new PerlinNoise((Math.random()*1e5)|0);
+  time=0;
+  render(performance.now());
+}
+
+// ═══════════════════════════════════════
+// PLAY / PAUSE
+// ═══════════════════════════════════════
+function togglePlay(){
+  playing=!playing;
+  if(playing){
+    $('playPause').classList.add('playing');
+    $('playIcon').style.display='none';
+    $('pauseIcon').style.display='block';
+    $('playLabel').textContent='Pause';
+    lastFrame=performance.now();
+    animId=requestAnimationFrame(render);
+  }else{
+    $('playPause').classList.remove('playing');
+    $('playIcon').style.display='block';
+    $('pauseIcon').style.display='none';
+    $('playLabel').textContent='Play';
+    if(animId)cancelAnimationFrame(animId);
+    $('fps').textContent='';
+  }
+}
+$('playPause').addEventListener('click',togglePlay);
+
+// ═══════════════════════════════════════
+// BUTTONS & CONTROLS
+// ═══════════════════════════════════════
+$('generate').addEventListener('click',()=>{if(playing)togglePlay();generate();});
+
+$('resetCenter').addEventListener('click',()=>{
+  targetX=W/2;targetY=H/2;smoothX=W/2;smoothY=H/2;
+  cRadius=14;crSlider.value=14;crVal.textContent='14';
+  if(!playing)render(performance.now());
+});
+
+$('save').addEventListener('click',()=>{
+  const c=cfg();
+  ctx.fillStyle=c.bg==='dark'?'#0a0a0c':'#fafaf8';
+  ctx.fillRect(0,0,W,H);
+  (drawFns[c.sty]||drawFlowLines)(c,time);
+  const a=document.createElement('a');
+  a.download=`radial-noise-${Date.now()}.png`;
+  a.href=canvas.toDataURL('image/png');
+  a.click();
+});
+
+['numLines','noiseScale','amplitude','lineLength','speed','stroke'].forEach(id=>{
+  const el=$(id),vEl=$(id+'Val');
+  el.addEventListener('input',()=>{vEl.textContent=el.value;if(!playing)render(performance.now());});
+});
+document.querySelectorAll('select').forEach(el=>{
+  el.addEventListener('change',()=>{if(!playing)render(performance.now());});
+});
+
+let rTimer;
+window.addEventListener('resize',()=>{
+  clearTimeout(rTimer);
+  rTimer=setTimeout(()=>{
+    const oW=W,oH=H;resize();
+    targetX=targetX/oW*W;targetY=targetY/oH*H;
+    smoothX=targetX;smoothY=targetY;
+    if(!playing)render(performance.now());
+  },100);
+});
+
+generate();
+</script>
+</body>
+</html>
