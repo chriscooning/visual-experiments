@@ -6,13 +6,73 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
-**Noise & Fractals** — Radial Perlin Noise, Fractal Experiments (7 types), Dot Terrain
+**Noise & Fractals**
 
-**Swarm & Emergence** — Boids, Particle Life, Physarum
+- **Radial Perlin Noise**
+  - Flow lines, petals, spirals, field lines, waves
+  - 7 boundary shapes, 6 palettes
+  - Click/drag origin, scroll resize, save PNG
 
-**Fields & Patterns** — Curl Noise, Reaction-Diffusion, Voronoi Relaxation
+- **Fractal Experiments**
+  - Septagon, Lévy C, christmas tree, Sierpinski carpet, fern, dragon, Vicsek
+  - Noise displacement, animation
+  - Scroll depth, rotation, scale
 
-**Data & AI** — Data & Conversion, Model Evaluation, Agent Observability
+- **Dot Terrain**
+  - 3D particle grid, Perlin noise, surface lighting
+  - Camera height, tilt, grid resolution
+  - H toggles controls
+
+**Swarm & Emergence**
+
+- **Boids**
+  - Flocking: separation, alignment, cohesion
+  - Click attract, right-click repel
+  - Motion trails, 6 palettes
+
+- **Particle Life**
+  - Species attraction/repulsion matrix
+  - Clusters chase, orbit, merge
+  - Click spawn, scroll radius
+
+- **Physarum**
+  - Slime mold, chemical trails
+  - 200k agents, sense-rotate-deposit
+  - Click spawn clusters
+
+**Fields & Patterns**
+
+- **Curl Noise**
+  - Divergence-free flow
+  - Click attractors, right-click repulsors
+  - Trail length, speed
+
+- **Reaction-Diffusion**
+  - Gray-Scott: spots, stripes, coral, mitosis, worms
+  - Click/drag paint, scroll brush
+  - Presets
+
+- **Voronoi Relaxation**
+  - Lloyd's algorithm
+  - Cells, edges, points modes
+  - Click add seeds, drag push
+
+**Data & AI**
+
+- **Data & Conversion**
+  - Rivers, funnel, A/B split
+  - Throughput, churn, conversion
+  - Funnel width, dropout, split ratio
+
+- **Model Evaluation**
+  - Radar charts, score clouds, divergence
+  - Accuracy, latency, hallucination
+  - Configurable noise
+
+- **Agent Observability**
+  - Trace tree, agent flow, tool timeline
+  - Tool calls, nesting, parallel
+  - Depth, branches, error rate
 
 ## Run locally
 
