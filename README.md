@@ -40,6 +40,11 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
   - 200k agents, sense-rotate-deposit
   - Click spawn clusters
 
+- **Attractor Swarms**
+  - Lorenz, Rössler attractors, murmuration boids
+  - Add multiple attractors, orbit and zoom
+  - 3D WEBGL, density-curve gravity
+
 **Fields & Patterns**
 
 - **Curl Noise**
