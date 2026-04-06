@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arize - Horizontal Scroll (v4 tween)</title>
+  <!--
+    v4: crossfade + scale + stroke draw-in (dashoffset). True morph needs matched paths or tools like
+    GSAP MorphSVG, KUTE.js + compatible `d`, flubber (closed regions), anime.js morph, or Lottie/Rive.
+    Stroke-only tricks: CSS stroke-dashoffset, Vivus.js.
+  -->
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500&family=Lora:ital,wght@0,400;0,500;1,400&family=Rubik:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --dark-navy: #1a1a1a;
+      --off-white: #F8F8F6;
+      --arize-pink: #EB2089;
+      --muted-pink: #802C4C;
+      --teal: #246068;
+      --purple: #5C2C74
+      ;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html, body {
+      overflow: hidden;
+      background: var(--dark-navy);
+      color: var(--off-white);
+      height: 100%;
+    }
+
+    body {
+      font-family: 'Rubik', sans-serif;
+      font-weight: 300;
+    }
+
+    /* ========== LAYOUT STRUCTURE ========== */
+    .layout {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      padding: 4rem 2rem;
+    }
+
+    /* ========== FIXED HEADER ========== */
+    .fixed-header {
+      text-align: center;
+      flex-shrink: 0;
+      padding-bottom: 3rem;
+    }
+
+    .header-label {
+      font-family: 'Rubik', sans-serif;
+      font-size: 0.875rem;
+      letter-spacing: 0.05em;
+      color: rgba(248, 248, 246, 0.6);
+      margin-bottom: 1rem;
+    }
+
+    .header-headline {
+      font-family: 'Lora', serif;
+      font-size: clamp(2rem, 4.5vw, 3rem);
+      font-weight: 400;
+      line-height: 1.2;
+    }
+
+    /* ========== SCROLLING MIDDLE ========== */
+    .scroll-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Color bars area */
+    .color-area {
+      height: 2.5rem;
+      margin-bottom: 1.5rem;
+      position: relative;
+      width: 280px;
+    }
+
+    .color-bars {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 0.5rem;
+      opacity: 0;
+      transition: opacity 0.4s ease-out;
+    }
+
+    .color-bars.active {
+      opacity: 1;
+    }
+
+    .color-bars-stacked {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.375rem;
+      opacity: 0;
+      transition: opacity 0.4s ease-out;
+    }
+
+    .color-bars-stacked.active {
+      opacity: 1;
+    }
+
+    .color-bar {
+      width: 2.5rem;
+      height: 0.625rem;
+    }
+
+    .color-bar.teal { background: var(--teal); }
+    .color-bar.pink { background: var(--arize-pink); }
+    .color-bar.muted-pink { background: var(--muted-pink); }
+    .color-bar.purple { background: var(--purple); }
+
+    /* Icons track — v4: stack + crossfade + scale (geometric morph not in scope) */
+    .icons-track {
+      position: relative;
+      width: 100%;
+      max-width: 700px;
+      height: 200px;
+      margin-bottom: 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: visible;
+    }
+
+    .icon-layer {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: visible;
+      inset: 0;
+      opacity: 0;
+      transform: scale(0.94);
+      transition:
+        opacity 0.55s cubic-bezier(0.45, 0, 0.2, 1),
+        transform 0.65s cubic-bezier(0.34, 1.2, 0.64, 1);
+      pointer-events: none;
+    }
+
+    .icon-layer svg {
+      max-width: 100%;
+      height: auto;
+      max-height: 200px;
+      overflow: visible;
+    }
+
+    .icon-layer.active {
+      opacity: 1;
+      transform: scale(1);
+      pointer-events: auto;
+    }
+
+    /* Text area - vertical rise */
+    .text-area {
+      position: relative;
+      width: 100%;
+      min-height: 90px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .panel-text {
+      --text-y-idle: 40px;
+      position: absolute;
+      font-family: 'Barlow', sans-serif;
+      font-size: 1.375rem;
+      font-weight: 400;
+      line-height: 1.5;
+      text-align: center;
+      letter-spacing: 0.01em;
+      white-space: pre-line;
+      opacity: 0;
+      transform: translateY(var(--text-y-idle));
+      /* Fade eases out quickly; motion stays a touch longer */
+      transition:
+        opacity 0.22s ease-out,
+        transform 0.48s cubic-bezier(0.32, 0.72, 0, 1);
+      pointer-events: none;
+    }
+
+    .panel-text.active {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    /* Outgoing: opacity fades out fast (ease-out); dip motion finishes after */
+    .panel-text.exiting {
+      animation: panelTextExit 0.48s cubic-bezier(0.33, 1, 0.68, 1) forwards;
+      transition: none;
+      pointer-events: none;
+    }
+
+    @keyframes panelTextExit {
+      0% {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      18% {
+        opacity: 0.45;
+        transform: translateY(-10px);
+      }
+      34% {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+      100% {
+        opacity: 0;
+        transform: translateY(var(--text-y-idle));
+      }
+    }
+
+    /* ========== FIXED FOOTER ========== */
+    .fixed-footer {
+      text-align: center;
+      flex-shrink: 0;
+      padding-top: 3rem;
+    }
+
+    .footer-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 1rem 2rem;
+      border: 1px solid rgba(248, 248, 246, 0.4);
+      border-radius: 4px;
+      font-family: 'Rubik', sans-serif;
+      font-size: 0.9rem;
+      color: var(--off-white);
+      text-decoration: none;
+      transition: all 0.3s ease;
+      margin-bottom: 1.25rem;
+    }
+
+    .footer-cta:hover {
+      background: rgba(248, 248, 246, 0.05);
+      border-color: var(--off-white);
+    }
+
+    .footer-description {
+      font-family: 'Rubik', sans-serif;
+      font-size: 0.9rem;
+      color: rgba(248, 248, 246, 0.5);
+      max-width: 400px;
+      margin: 0 auto;
+    }
+
+    /* ========== SVG STYLES ========== */
+    .line-art {
+      stroke: var(--off-white);
+      stroke-width: 1.5;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .line-art-thin {
+      stroke: var(--off-white);
+      stroke-width: 1;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .line-art-dashed {
+      stroke: var(--off-white);
+      stroke-width: 1;
+      fill: none;
+      stroke-dasharray: 4 4;
+    }
+
+    .line-art-dotted {
+      stroke: var(--off-white);
+      stroke-width: 1;
+      fill: none;
+      stroke-dasharray: 2 4;
+    }
+
+    .node {
+      fill: none;
+      stroke: var(--off-white);
+      stroke-width: 1.5;
+    }
+
+    .node-small {
+      fill: none;
+      stroke: var(--off-white);
+      stroke-width: 1;
+    }
+
+    /* ========== PROGRESS & NAV ========== */
+    .progress-container {
+      position: fixed;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 0.75rem;
+      z-index: 100;
+    }
+
+    .progress-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(248, 248, 246, 0.08);
+      transition: all 0.3s ease;
+      cursor: pointer;
+    }
+
+    .progress-dot.active {
+      background: rgba(248, 248, 246, 0.4);
+      transform: scale(1.3);
+    }
+
+    .nav-arrows {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      display: flex;
+      gap: 0.5rem;
+      z-index: 100;
+    }
+
+    .nav-arrow {
+      width: 40px;
+      height: 40px;
+      border: 1px solid rgba(248, 248, 246, 0.3);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--off-white);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.3s ease;
+    }
+
+    .nav-arrow:hover {
+      background: rgba(248, 248, 246, 0.1);
+      border-color: var(--off-white);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="layout">
+    
+    <!-- ========== FIXED HEADER ========== -->
+    <header class="fixed-header">
+      <span class="header-label">The layer agents need</span>
+      <h1 class="header-headline">Once your agent is live,<br>it won't fix itself</h1>
+    </header>
+
+    <!-- ========== SCROLLING MIDDLE ========== -->
+    <div class="scroll-area">
+      
+      <!-- Color bars -->
+      <div class="color-area">
+        <div class="color-bars" data-panel="1">
+          <div class="color-bar teal"></div>
+          <div class="color-bar muted-pink"></div>
+          <div class="color-bar purple"></div>
+        </div>
+        <div class="color-bars-stacked" data-panel="3">
+          <div class="color-bar teal"></div>
+          <div class="color-bar muted-pink"></div>
+        </div>
+      </div>
+
+      <!-- Icons track - slides horizontally -->
+      <div class="icons-track">
+        
+        <!-- Icon 0: Intro -->
+        <div class="icon-layer active" data-index="0">
+          <svg width="156" height="62" viewBox="0 0 156 62" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M154.618 60.6788C131.036 60.6788 111.919 41.5615 111.919 17.9795C111.919 8.5463 119.566 0.89978 128.998 0.89978C138.431 0.89978 146.078 8.54689 146.078 17.9795C146.078 41.5615 126.961 60.6788 103.379 60.6788C79.7967 60.6788 60.6794 41.5615 60.6794 17.9795C60.6794 8.5463 68.3265 0.89978 77.7591 0.89978C87.1917 0.89978 94.8389 8.54689 94.8389 17.9795C94.8389 41.5615 75.7216 60.6788 52.1396 60.6788C28.5575 60.6788 9.44027 41.5615 9.44027 17.9795C9.44027 8.5463 17.0874 0.89978 26.52 0.89978C35.9532 0.89978 43.5997 8.54689 43.5997 17.9795C43.5997 41.5615 24.4824 60.6788 0.900391 60.6788" stroke="#838383" stroke-width="1.7996" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M152.482 15.8443L154.617 17.9796L152.482 20.1145" stroke="#838383" stroke-width="1.7996" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M3.03423 20.1145L0.899414 17.9796L3.03423 15.8442" stroke="#838383" stroke-width="1.7996" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M154.618 17.9796H0.899414" stroke="#838383" stroke-width="1.7996" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="19.2 19.2"/>
+          </svg>
+        </div>
+
+        <!-- Icon 1: Flow -->
+        <div class="icon-layer" data-index="1">
+          <svg width="151" height="109" viewBox="0 0 151 109" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M130.703 71.8546C140.53 71.8546 148.497 63.8884 148.497 54.0615C148.497 44.2346 140.53 36.2681 130.703 36.2681C120.876 36.2681 112.91 44.2346 112.91 54.0615C112.91 63.8884 120.876 71.8546 130.703 71.8546Z" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M130.703 18.476V36.2681" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M130.703 71.8536V89.647" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M77.3264 71.8546C87.1534 71.8546 95.1197 63.8884 95.1197 54.0615C95.1197 44.2346 87.1534 36.2681 77.3264 36.2681C67.4995 36.2681 59.5332 44.2346 59.5332 54.0615C59.5332 63.8884 67.4995 71.8546 77.3264 71.8546Z" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M77.3252 18.476V36.2681" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M77.3252 71.8536V89.647" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M23.9475 71.8546C33.7745 71.8546 41.7408 63.8884 41.7408 54.0615C41.7408 44.2346 33.7745 36.2681 23.9475 36.2681C14.1206 36.2681 6.1543 44.2346 6.1543 54.0615C6.1543 63.8884 14.1206 71.8546 23.9475 71.8546Z" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M23.9463 18.476V36.2681" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M23.9463 71.8536V89.647" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M112.911 0.682892C122.738 0.682892 130.704 8.64903 130.704 18.476" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M77.3252 18.476C77.3252 8.64903 85.2915 0.682892 95.1185 0.682892" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M41.7396 107.44C31.9126 107.44 23.9463 99.474 23.9463 89.648" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M77.3263 89.647C77.3263 99.474 69.3601 107.439 59.5342 107.439" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M59.5334 107.44H41.7412" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M112.911 0.682892H95.1182" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M19.6611 59.1204L22.4371 49.0013H25.4584L28.2342 59.1204H26.4419L25.835 56.8071H22.0614L21.4535 59.1204H19.6611ZM22.4653 55.2166H25.429L24.0698 50.0837H23.8245L22.4653 55.2166Z" fill="#838383"/>
+            <path d="M73.1982 59.1204V57.5887H74.5564V50.5333H73.1982V49.0013H78.3734C78.9802 49.0013 79.5133 49.1057 79.9714 49.3119C80.4285 49.5193 80.7856 49.8135 81.0407 50.1935C81.2959 50.5745 81.424 51.0295 81.424 51.5592V51.6894C81.424 52.1519 81.3371 52.5329 81.1634 52.8314C80.9897 53.13 80.7824 53.3611 80.5425 53.5261C80.3014 53.6901 80.0702 53.8063 79.8487 53.8725V54.119C80.0702 54.1766 80.309 54.2852 80.5642 54.4448C80.8193 54.6033 81.0364 54.8344 81.2144 55.1384C81.3925 55.4424 81.4815 55.8353 81.4815 56.3173V56.4617C81.4815 57.0111 81.3491 57.4855 81.0842 57.8861C80.8193 58.2867 80.4578 58.5917 79.9996 58.8045C79.5415 59.0162 79.0139 59.1225 78.4168 59.1225H73.1982V59.1204ZM76.2923 53.2364H78.2008C78.6437 53.2364 79.003 53.1256 79.2777 52.903C79.5524 52.6815 79.6902 52.3745 79.6902 51.9783V51.8328C79.6902 51.4387 79.5534 51.1303 79.2777 50.9078C79.003 50.6863 78.6448 50.5743 78.2008 50.5743H76.2923V53.2364ZM76.2923 57.5452H78.2149C78.6774 57.5452 79.0465 57.4323 79.3211 57.2055C79.5958 56.9796 79.7337 56.6583 79.7337 56.2436V56.1143C79.7337 55.6996 79.598 55.3793 79.3287 55.1524C79.0595 54.9255 78.6882 54.8126 78.216 54.8126H76.2933V57.5452H76.2923Z" fill="#838383"/>
+            <path d="M130.942 59.3234C129.708 59.3234 128.725 58.9749 127.993 58.2747C127.26 57.5755 126.895 56.5726 126.895 55.2611V52.862C126.895 51.5505 127.26 50.5462 127.993 49.8471C128.725 49.148 129.708 48.7994 130.942 48.7994C132.175 48.7994 133.127 49.1371 133.797 49.8113C134.467 50.4866 134.801 51.4114 134.801 52.5871V52.674H133.096V52.545C133.096 51.9088 132.92 51.3865 132.568 50.9762C132.216 50.5669 131.674 50.3629 130.942 50.3629C130.228 50.3629 129.667 50.5811 129.258 51.0196C128.849 51.4582 128.643 52.0628 128.643 52.8336V55.2916C128.643 56.0537 128.848 56.656 129.258 57.0989C129.668 57.5419 130.23 57.7634 130.942 57.7634C131.674 57.7634 132.216 57.5594 132.568 57.1501C132.92 56.7397 133.096 56.2175 133.096 55.5813V55.3348H134.801V55.5378C134.801 56.7136 134.466 57.6397 133.797 58.3139C133.127 58.9859 132.175 59.3234 130.942 59.3234Z" fill="#838383"/>
+            <path d="M6.99601 16.0148C6.22523 16.0148 5.54346 15.8771 4.95071 15.6024C4.35796 15.3278 3.89332 14.9303 3.55569 14.4092C3.21806 13.8892 3.0498 13.2532 3.0498 12.5009V12.125H4.76942V12.5009C4.76942 13.1664 4.97243 13.6623 5.37736 13.9902C5.7823 14.318 6.32185 14.481 6.99601 14.481C7.67995 14.481 8.19562 14.3421 8.54302 14.062C8.89042 13.7819 9.06302 13.4214 9.06302 12.9774C9.06302 12.68 8.9816 12.4356 8.81767 12.2478C8.65374 12.0589 8.41491 11.9081 8.10225 11.7919C7.78851 11.6768 7.41072 11.5662 6.96779 11.4598L6.53462 11.3729C5.86914 11.2176 5.29376 11.0232 4.8074 10.7866C4.31996 10.551 3.9476 10.2449 3.68705 9.86927C3.4265 9.49256 3.29732 9.00087 3.29732 8.3951C3.29732 7.78715 3.44171 7.26715 3.73049 6.83399C4.01926 6.40083 4.42961 6.06734 4.95939 5.83611C5.48917 5.60487 6.11123 5.48996 6.82448 5.48996C7.53773 5.48996 8.1739 5.61047 8.73299 5.85148C9.29208 6.09249 9.73285 6.45378 10.0553 6.93471C10.3777 7.41672 10.5395 8.01928 10.5395 8.7423V9.21885H8.81984V8.7423C8.81984 8.3276 8.73735 7.99546 8.57342 7.74468C8.40949 7.49499 8.17825 7.31141 7.8797 7.19525C7.58116 7.08017 7.22942 7.02164 6.82448 7.02164C6.22739 7.02164 5.77361 7.13679 5.46638 7.36912C5.15698 7.60035 5.0039 7.92824 5.0039 8.35163C5.0039 8.62086 5.07339 8.84975 5.21343 9.03756C5.35348 9.22646 5.56083 9.37953 5.83549 9.50112C6.11015 9.62271 6.45429 9.7249 6.86899 9.81175L7.30216 9.91273C7.99586 10.068 8.6038 10.2623 9.12381 10.499C9.64382 10.7357 10.0509 11.0461 10.3451 11.4304C10.6393 11.8158 10.7859 12.3173 10.7859 12.934C10.7859 13.5419 10.6285 14.0771 10.3158 14.5396C10.0032 15.0021 9.56458 15.3636 9.00115 15.6241C8.43446 15.8847 7.7668 16.0148 6.99601 16.0148Z" fill="#838383"/>
+            <path d="M14.3406 15.8131V7.26918H11.3193V5.69403H19.0967V7.26918H16.0754V15.8131H14.3406Z" fill="#838383"/>
+            <path d="M18.7783 15.8131L21.5542 5.69403H24.5755L27.3514 15.8131H25.558L24.9511 13.4996H21.1775L20.5696 15.8131H18.7783ZM21.5825 11.909H24.5462L23.187 6.7762H22.9417L21.5825 11.909Z" fill="#838383"/>
+            <path d="M28.6377 15.8131V5.69403H32.9595C33.5957 5.69403 34.1494 5.80466 34.6216 6.02613C35.0938 6.24868 35.4619 6.55931 35.7279 6.95882C35.9928 7.35832 36.1252 7.8392 36.1252 8.39721V8.5557C36.1252 9.1821 35.9754 9.68258 35.6768 10.0593C35.3783 10.4349 35.0168 10.7096 34.5923 10.8833V11.1144C34.9679 11.1351 35.2643 11.2644 35.4814 11.5043C35.6985 11.7464 35.8071 12.0686 35.8071 12.4736V15.8131H34.0723V12.719C34.0723 12.478 34.0071 12.2836 33.8769 12.1338C33.7466 11.984 33.5371 11.909 33.2483 11.909H30.3855V15.8131H28.6377ZM30.3866 10.3339H32.7859C33.2863 10.3339 33.6793 10.2015 33.9637 9.93658C34.2482 9.67169 34.3904 9.31777 34.3904 8.87375V8.74335C34.3904 8.29065 34.2503 7.93137 33.9713 7.66648C33.6923 7.40159 33.2961 7.26918 32.7859 7.26918H30.3866V10.3339Z" fill="#838383"/>
+            <path d="M39.9851 15.8131V7.26918H36.9639V5.69403H44.7412V7.26918H41.7199V15.8131H39.9851Z" fill="#838383"/>
+            <path d="M6.61335 18.476C3.33805 18.476 0.682617 15.8207 0.682617 12.5454V8.96178C0.682617 5.68648 3.33805 3.03091 6.61335 3.03091H41.2814C44.5567 3.03091 47.2122 5.68648 47.2122 8.96178V12.5454C47.2122 15.8207 44.5567 18.476 41.2814 18.476H6.61335Z" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M116.271 105.092C112.995 105.092 110.34 102.437 110.34 99.1612V95.5776C110.34 92.3023 112.995 89.647 116.271 89.647H143.65C146.925 89.647 149.581 92.3023 149.581 95.5776V99.1612C149.581 102.437 146.925 105.092 143.65 105.092H116.271Z" stroke="#838383" stroke-width="1.3658" stroke-miterlimit="10"/>
+            <path d="M116.761 102.631C115.99 102.631 115.308 102.493 114.715 102.218C114.123 101.944 113.658 101.546 113.32 101.025C112.983 100.505 112.814 99.8691 112.814 99.1167V98.7412H114.534V99.1167C114.534 99.7822 114.737 100.278 115.142 100.606C115.547 100.934 116.087 101.097 116.761 101.097C117.445 101.097 117.96 100.958 118.308 100.678C118.655 100.398 118.828 100.037 118.828 99.5933C118.828 99.2958 118.746 99.0517 118.582 98.8639C118.418 98.675 118.18 98.5239 117.867 98.4077C117.553 98.2927 117.175 98.182 116.732 98.0756L116.299 97.9887C115.634 97.8335 115.058 97.6391 114.572 97.4024C114.085 97.1668 113.712 96.8607 113.452 96.4851C113.191 96.1084 113.062 95.6167 113.062 95.0109C113.062 94.403 113.206 93.883 113.495 93.4498C113.784 93.0167 114.194 92.6835 114.724 92.4522C115.254 92.221 115.876 92.1058 116.589 92.1058C117.302 92.1058 117.939 92.2263 118.498 92.4673C119.057 92.7083 119.498 93.0699 119.82 93.5508C120.142 94.0328 120.304 94.6354 120.304 95.3584V95.835H118.585V95.3584C118.585 94.9437 118.502 94.6113 118.338 94.3605C118.174 94.1108 117.943 93.9275 117.644 93.8114C117.346 93.6963 116.994 93.6375 116.589 93.6375C115.992 93.6375 115.538 93.7526 115.231 93.985C114.922 94.2162 114.769 94.5441 114.769 94.9675C114.769 95.2367 114.838 95.4659 114.978 95.6537C115.118 95.8426 115.325 95.9956 115.6 96.1172C115.875 96.2388 116.219 96.3407 116.634 96.4276L117.067 96.5286C117.761 96.6838 118.368 96.8782 118.888 97.1149C119.408 97.3515 119.816 97.6619 120.11 98.0462C120.404 98.4316 120.551 98.9332 120.551 99.5498C120.551 100.158 120.393 100.693 120.08 101.155C119.768 101.618 119.329 101.979 118.766 102.24C118.199 102.501 117.531 102.631 116.761 102.631Z" fill="#838383"/>
+            <path d="M124.105 102.429V93.8851H121.084V92.3099H128.861V93.8851H125.84V102.429H124.105Z" fill="#838383"/>
+            <path d="M133.675 102.631C132.422 102.631 131.422 102.282 130.675 101.582C129.928 100.883 129.555 99.88 129.555 98.5686V96.1692C129.555 94.8577 129.928 93.8537 130.675 93.1546C131.422 92.4554 132.422 92.1068 133.675 92.1068C134.937 92.1068 135.939 92.4554 136.682 93.1546C137.424 93.8548 137.795 94.8577 137.795 96.1692V98.5686C137.795 99.88 137.423 100.884 136.682 101.582C135.939 102.282 134.937 102.631 133.675 102.631ZM133.675 101.07C134.426 101.07 135.011 100.852 135.431 100.413C135.851 99.9744 136.061 99.3795 136.061 98.6272V96.1116C136.061 95.3604 135.851 94.7655 135.431 94.3258C135.011 93.8861 134.427 93.669 133.675 93.669C132.932 93.669 132.351 93.8872 131.932 94.3258C131.513 94.7644 131.304 95.3593 131.304 96.1116V98.6272C131.304 99.3784 131.513 99.9734 131.932 100.413C132.351 100.852 132.932 101.07 133.675 101.07Z" fill="#838383"/>
+            <path d="M139.544 102.429V92.3099H143.636C144.272 92.3099 144.831 92.4347 145.312 92.6855C145.794 92.9362 146.174 93.2913 146.454 93.7483C146.733 94.2053 146.873 94.7482 146.873 95.3746V95.5776C146.873 96.1932 146.731 96.7327 146.446 97.1962C146.162 97.6587 145.776 98.016 145.29 98.2657C144.804 98.5154 144.251 98.6413 143.636 98.6413H141.294V102.429H139.544ZM141.294 97.065H143.463C143.964 97.065 144.366 96.9304 144.67 96.6601C144.973 96.3908 145.125 96.0194 145.125 95.5471V95.403C145.125 94.9307 144.975 94.5604 144.677 94.29C144.378 94.0197 143.973 93.8851 143.463 93.8851H141.294V97.065Z" fill="#838383"/>
+          </svg>
+        </div>
+
+        <!-- Icon 2: Behavior -->
+        <div class="icon-layer" data-index="2">
+          <svg width="652" height="100" viewBox="0 0 652 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M538.911 71.1006C538.911 78.8734 545.212 85.1747 552.985 85.1747C560.757 85.1747 567.059 78.8734 567.059 71.1006C567.059 63.3277 560.757 57.0266 552.985 57.0266C545.212 57.0266 538.911 63.3277 538.911 71.1006Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M566.881 39.9536C566.881 47.7264 573.182 54.0277 580.955 54.0277C588.728 54.0277 595.029 47.7264 595.029 39.9536C595.029 32.1807 588.728 25.8796 580.955 25.8796C573.182 25.8796 566.881 32.1807 566.881 39.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M510.763 42.9536C510.763 50.7264 517.064 57.0276 524.837 57.0276C532.61 57.0276 538.911 50.7264 538.911 42.9536C538.911 35.1807 532.61 28.8796 524.837 28.8796C517.064 28.8796 510.763 35.1807 510.763 42.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M454.469 42.9536C454.469 50.7264 460.77 57.0276 468.543 57.0276C476.316 57.0276 482.617 50.7264 482.617 42.9536C482.617 35.1807 476.316 28.8796 468.543 28.8796C460.77 28.8796 454.469 35.1807 454.469 42.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M482.617 71.1006C482.617 78.8734 488.918 85.1747 496.691 85.1747C504.464 85.1747 510.765 78.8734 510.765 71.1006C510.765 63.3277 504.464 57.0266 496.691 57.0266C488.918 57.0266 482.617 63.3277 482.617 71.1006Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M426.323 71.1006C426.323 78.8734 432.624 85.1747 440.397 85.1747C448.17 85.1747 454.471 78.8734 454.471 71.1006C454.471 63.3277 448.17 57.0266 440.397 57.0266C432.624 57.0266 426.323 63.3277 426.323 71.1006Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M387.881 14.9536C387.881 22.7264 394.182 29.0276 401.955 29.0276C409.728 29.0276 416.029 22.7264 416.029 14.9536C416.029 7.18073 409.728 0.879608 401.955 0.879608C394.182 0.879607 387.881 7.18073 387.881 14.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M289.88 25.9536C289.88 33.7264 296.181 40.0276 303.954 40.0276C311.727 40.0276 318.028 33.7264 318.028 25.9536C318.028 18.1807 311.727 11.8796 303.954 11.8796C296.181 11.8796 289.88 18.1807 289.88 25.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M346.88 84.9536C346.88 92.7264 353.181 99.0277 360.954 99.0277C368.727 99.0277 375.028 92.7264 375.028 84.9536C375.028 77.1807 368.727 70.8796 360.954 70.8796C353.181 70.8796 346.88 77.1807 346.88 84.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M552.984 71.1004C538.911 71.1004 538.911 42.9535 524.837 42.9535C510.763 42.9535 510.763 71.1004 496.69 71.1004C482.617 71.1004 482.617 42.9535 468.543 42.9535C454.469 42.9535 454.47 71.1004 440.396 71.1004C426.322 71.1004 415.954 18.3796 401.881 18.3796C387.808 18.3796 374.955 83.3796 360.881 83.3796C329.881 83.3796 327.381 29.8796 303.307 29.8796" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M7.87988 46.3796C27.6336 46.3796 50.3165 72.3796 70.0702 72.3796C89.8239 72.3796 125.835 29.8796 145.587 29.8796C165.339 29.8796 191.972 79.8796 211.725 79.8796C255.236 79.8796 269.591 29.8796 303.38 29.8796" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M637.321 42.8796C623.247 42.8796 623.247 71.0265 609.174 71.0265C595.101 71.0265 595.101 42.8796 581.027 42.8796C566.953 42.8796 566.954 71.0265 552.88 71.0265" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M0.879883 44.8796C0.879883 48.7456 4.01386 51.8796 7.87982 51.8796C11.7458 51.8796 14.8799 48.7456 14.8799 44.8796C14.8799 41.0136 11.7458 37.8796 7.87982 37.8796C4.01386 37.8796 0.879884 41.0136 0.879883 44.8796Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M134.88 28.8796C134.88 35.507 140.252 40.8796 146.88 40.8796C153.507 40.8796 158.88 35.507 158.88 28.8796C158.88 22.2522 153.507 16.8796 146.88 16.8796C140.252 16.8796 134.88 22.2522 134.88 28.8796Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M198.88 78.9536C198.88 86.7264 205.181 93.0276 212.954 93.0276C220.727 93.0276 227.028 86.7264 227.028 78.9536C227.028 71.1807 220.727 64.8796 212.954 64.8796C205.181 64.8796 198.88 71.1807 198.88 78.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M60.8799 71.8796C60.8799 77.4025 65.357 81.8796 70.8798 81.8796C76.4026 81.8796 80.8799 77.4025 80.8799 71.8796C80.8799 66.3568 76.4026 61.8796 70.8798 61.8796C65.357 61.8796 60.8799 66.3567 60.8799 71.8796Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M594.88 70.9536C594.88 78.7264 601.181 85.0277 608.954 85.0277C616.727 85.0277 623.028 78.7264 623.028 70.9536C623.028 63.1807 616.727 56.8796 608.954 56.8796C601.181 56.8796 594.88 63.1807 594.88 70.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M622.88 39.9536C622.88 47.7264 629.181 54.0277 636.954 54.0277C644.727 54.0277 651.028 47.7264 651.028 39.9536C651.028 32.1807 644.727 25.8796 636.954 25.8796C629.181 25.8796 622.88 32.1807 622.88 39.9536Z" stroke="#838383" stroke-width="1.7592" stroke-miterlimit="10" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+
+        <!-- Icon 3: Evaluate -->
+        <div class="icon-layer" data-index="3">
+          <svg width="362" height="182" viewBox="0 0 362 182" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M194.196 65.3674C206.13 65.3674 215.805 75.0421 215.805 86.9765C215.805 98.9108 206.13 108.586 194.196 108.586C182.262 108.586 172.587 98.9108 172.587 86.9765C172.587 75.0421 182.262 65.3674 194.196 65.3674Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M86.1504 86.9763H172.587" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M215.806 86.9763H237.415" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M194.196 0.541862C206.13 0.541862 215.805 10.2166 215.805 22.1509C215.805 34.0853 206.13 43.7599 194.196 43.7599C182.262 43.7599 172.587 34.0853 172.587 22.1509C172.587 10.2166 182.262 0.541862 194.196 0.541862Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M86.1504 22.1511H129.369" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M129.368 22.1511H172.586" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M215.806 22.1511H237.415" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M183.393 22.1509H205.002" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M194.197 32.9553V11.3462" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M183.393 86.9763H205.002" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M259.023 43.7599C259.023 31.8256 249.348 22.1509 237.414 22.1509" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M237.414 86.9763C249.348 86.9763 259.023 77.3016 259.023 65.3672" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M259.023 65.3676V43.7602" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M64.543 65.3672C64.543 77.3016 74.2178 86.9763 86.1521 86.9763" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M86.151 22.1509C74.2167 22.1509 64.542 31.8256 64.542 43.7599" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M64.543 43.7602V65.3676" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M315.875 145.208C324.098 145.208 330.764 151.874 330.764 160.097C330.764 168.319 324.098 174.985 315.875 174.985C307.652 174.985 300.986 168.319 300.986 160.097C300.986 151.874 307.652 145.208 315.875 145.208Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M241.431 160.096H300.986" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M330.765 160.096H345.654" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M315.875 100.542C324.098 100.542 330.764 107.208 330.764 115.431C330.764 123.654 324.098 130.32 315.875 130.32C307.652 130.32 300.986 123.654 300.986 115.431C300.986 107.208 307.652 100.542 315.875 100.542Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M241.431 115.431H271.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M271.208 115.431H300.986" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M330.765 115.431H345.654" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M308.432 115.431H323.321" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M315.876 122.875V107.986" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M308.432 160.096H323.321" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M360.541 130.32C360.541 122.097 353.875 115.431 345.652 115.431" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M345.652 160.096C353.875 160.096 360.541 153.43 360.541 145.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M360.542 145.208V130.32" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M226.543 145.208C226.543 153.43 233.209 160.096 241.432 160.096" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M241.431 115.431C233.208 115.431 226.542 122.097 226.542 130.32" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M226.543 130.32V145.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M41.4755 91.0081C45.2433 91.0081 48.2976 94.0625 48.2976 97.8303C48.2976 101.598 45.2433 104.652 41.4755 104.652C37.7077 104.652 34.6533 101.598 34.6533 97.8303C34.6533 94.0625 37.7077 91.0081 41.4755 91.0081Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M7.36426 97.8302H34.653" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M48.2969 97.8302H55.119" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M41.4755 70.5421C45.2433 70.5421 48.2976 73.5965 48.2976 77.3643C48.2976 81.1321 45.2433 84.1865 41.4755 84.1865C37.7077 84.1865 34.6533 81.1321 34.6533 77.3643C34.6533 73.5965 37.7077 70.5421 41.4755 70.5421Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M7.36426 77.3643H21.0086" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M21.0078 77.3643H34.6522" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M48.2969 77.3643H55.119" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M38.0645 77.3643H44.8866" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M41.4756 80.7753V73.9532" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M38.0645 97.8302H44.8866" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M61.9413 84.1865C61.9413 80.4187 58.8869 77.3643 55.1191 77.3643" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M55.1191 97.8302C58.8869 97.8302 61.9413 94.7758 61.9413 91.0081" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M61.9414 91.0082V84.1865" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M0.542969 91.0081C0.542969 94.7758 3.59739 97.8302 7.36516 97.8302" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M7.36415 77.3643C3.59638 77.3643 0.541992 80.4187 0.541992 84.1865" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M0.542969 84.1865V91.0082" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M132.542 158.541C138.802 158.541 143.876 163.616 143.876 169.875C143.876 176.134 138.802 181.208 132.542 181.208C126.283 181.208 121.209 176.134 121.209 169.875C121.209 163.616 126.283 158.541 132.542 158.541Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M75.875 169.875H121.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M143.875 169.875H155.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M132.542 124.542C138.802 124.542 143.876 129.616 143.876 135.876C143.876 142.135 138.802 147.209 132.542 147.209C126.283 147.209 121.209 142.135 121.209 135.876C121.209 129.616 126.283 124.542 132.542 124.542Z" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M75.875 135.876H98.5417" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M98.541 135.876H121.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10" stroke-dasharray="3.25 3.25"/>
+            <path d="M143.875 135.876H155.208" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M126.876 135.876H138.209" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M132.543 141.542V130.209" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M126.876 169.875H138.209" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M166.541 147.209C166.541 140.95 161.467 135.876 155.208 135.876" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M155.208 169.875C161.467 169.875 166.541 164.801 166.541 158.541" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M166.542 158.542V147.209" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M64.543 158.541C64.543 164.801 69.6171 169.875 75.8763 169.875" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M75.8753 135.876C69.6161 135.876 64.542 140.95 64.542 147.209" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+            <path d="M64.543 147.209V158.542" stroke="#838383" stroke-width="1.0838" stroke-miterlimit="10"/>
+          </svg>
+        </div>
+
+        <!-- Icon 4: Loop — hub at screen (54.411,49.506); center dashed ring spins CW; side rings grouped, pivot (0,0), orbit CW around hub. -->
+        <div class="icon-layer" data-index="4">
+          <svg width="220" height="220" viewBox="-60 -60 220 220" fill="none" xmlns="http://www.w3.org/2000/svg" style="overflow: visible;">
+            <g transform="translate(54.411, 49.506)">
+              <!-- Side rings: single container, fixed pivot 0,0 (hub); pair orbits in a circle (same CW as center; slower for readability). -->
+              <g>
+                <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="24s" repeatCount="indefinite"/>
+                <g transform="translate(-49.05, 0)">
+                  <circle cx="0" cy="0" r="49.05" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-dasharray="9.69 9.69" fill="none"/>
+                  <path d="M -51.8 1.6 L -49.05 -5.5 L -46.3 1.6" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                  <path d="M 46.3 -1.6 L 49.05 5.5 L 51.8 -1.6" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                </g>
+                <g transform="translate(49.05, 0)">
+                  <circle cx="0" cy="0" r="49.05" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-dasharray="9.69 9.69" fill="none"/>
+                  <path d="M -51.8 1.6 L -49.05 -5.5 L -46.3 1.6" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                  <path d="M 46.3 -1.6 L 49.05 5.5 L 51.8 -1.6" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                </g>
+              </g>
+
+              <!-- Center ring: full dashed circle, rotates CW around hub (0,0) -->
+              <g>
+                <animateTransform attributeName="transform" type="rotate" from="0 0 0" to="360 0 0" dur="12s" repeatCount="indefinite"/>
+                <circle cx="0" cy="0" r="49.05" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-dasharray="9.69 9.69" fill="none"/>
+                <g transform="rotate(90, 0, -49.05)"><path d="M -4.5 -49.05 L 0 -44 L 4.5 -49.05" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+                <g transform="rotate(270, 0, 49.05)"><path d="M -4.5 49.05 L 0 54 L 4.5 49.05" stroke="#838383" stroke-width="0.908" stroke-linecap="round" stroke-linejoin="round" fill="none"/></g>
+              </g>
+
+              <!-- Pivot on top so it stays visible -->
+              <path d="M -3.5 0 H 3.5 M 0 -3.5 V 3.5" stroke="#838383" stroke-width="0.75" stroke-linecap="round" opacity="0.9"/>
+            </g>
+          </svg>
+        </div>
+
+      </div>
+
+      <!-- Text area - rises up -->
+      <div class="text-area">
+        <p class="panel-text active" data-index="0">agents need a continuous feedback loop</p>
+        <p class="panel-text" data-index="1">To capture every turn and decision</p>
+        <p class="panel-text" data-index="2">so you can improve its behavior</p>
+        <p class="panel-text" data-index="3">and have a way to evaluate the outputs</p>
+        <p class="panel-text" data-index="4">to continuously improve quality</p>
+      </div>
+
+    </div>
+
+    <!-- ========== FIXED FOOTER ========== -->
+    <footer class="fixed-footer">
+      <a href="#" class="footer-cta">
+        Explore Arize AX
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </a>
+      <p class="footer-description">The evaluation harness to observe, evaluate, and improve your agents.</p>
+    </footer>
+
+  </div>
+
+  <!-- Progress Indicator -->
+  <div class="progress-container">
+    <div class="progress-dot active" data-index="0"></div>
+    <div class="progress-dot" data-index="1"></div>
+    <div class="progress-dot" data-index="2"></div>
+    <div class="progress-dot" data-index="3"></div>
+    <div class="progress-dot" data-index="4"></div>
+  </div>
+
+  <!-- Navigation Arrows -->
+  <div class="nav-arrows">
+    <button class="nav-arrow" id="prevBtn">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M10 4l-4 4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <button class="nav-arrow" id="nextBtn">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+    </button>
+  </div>
+
+  <script>
+    const icons = document.querySelectorAll('.icon-layer');
+    const DRAW_MS = 680;
+    const ICON_TWEEN_MS = 720;
+
+    function clearStrokeDrawStyles(layer) {
+      layer.querySelectorAll('[data-v4-draw]').forEach((el) => {
+        el.removeAttribute('data-v4-draw');
+        el.style.strokeDasharray = '';
+        el.style.strokeDashoffset = '';
+        el.style.transition = '';
+      });
+    }
+
+    function runStrokeDrawIn(layer) {
+      clearStrokeDrawStyles(layer);
+      const candidates = layer.querySelectorAll('path, line, polyline, polygon, circle, ellipse');
+      const toAnim = [];
+      candidates.forEach((el) => {
+        const stroke = el.getAttribute('stroke');
+        if (!stroke || stroke === 'none') return;
+        if (el.getAttribute('stroke-dasharray')) return;
+        let len;
+        try {
+          len = el.getTotalLength();
+        } catch {
+          return;
+        }
+        if (!Number.isFinite(len) || len <= 0) return;
+        el.setAttribute('data-v4-draw', '1');
+        el.style.strokeDasharray = String(len);
+        el.style.strokeDashoffset = String(len);
+        el.style.transition = `stroke-dashoffset ${DRAW_MS}ms cubic-bezier(0.45, 0, 0.2, 1)`;
+        toAnim.push(el);
+      });
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          toAnim.forEach((el) => {
+            el.style.strokeDashoffset = '0';
+          });
+        });
+      });
+    }
+    const texts = document.querySelectorAll('.panel-text');
+    const colorBars = document.querySelectorAll('.color-bars, .color-bars-stacked');
+    const dots = document.querySelectorAll('.progress-dot');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    
+    let currentIndex = 0;
+    let previousIndex = 0;
+    const totalPanels = icons.length;
+    let isAnimating = false;
+    let scrollAccumulator = 0;
+    const scrollThreshold = 80;
+    const AUTO_ADVANCE_MS = 2300;
+    let autoAdvanceTimer = null;
+
+    function armAutoAdvance() {
+      clearTimeout(autoAdvanceTimer);
+      autoAdvanceTimer = setTimeout(() => {
+        goToPanel(currentIndex + 1);
+      }, AUTO_ADVANCE_MS);
+    }
+
+    function goToPanel(index) {
+      if (isAnimating) return;
+      
+      previousIndex = currentIndex;
+      
+      if (index >= totalPanels) index = 0;
+      if (index < 0) index = totalPanels - 1;
+      
+      if (index === currentIndex) return;
+      
+      clearTimeout(autoAdvanceTimer);
+      isAnimating = true;
+      currentIndex = index;
+      
+      // Icons: crossfade + scale (CSS); solid strokes also "draw" via dashoffset
+      icons.forEach((icon, i) => {
+        if (i !== currentIndex) {
+          clearStrokeDrawStyles(icon);
+        }
+        icon.classList.toggle('active', i === currentIndex);
+      });
+      const incoming = icons[currentIndex];
+      setTimeout(() => runStrokeDrawIn(incoming), 40);
+      
+      const textExitMs = 480;
+      texts.forEach((text, i) => {
+        if (i === previousIndex) {
+          text.classList.remove('active');
+          text.classList.add('exiting');
+          window.clearTimeout(text._exitTimer);
+          text._exitTimer = window.setTimeout(() => {
+            text.classList.remove('exiting');
+          }, textExitMs);
+        } else if (i === currentIndex) {
+          text.classList.remove('exiting');
+          text.classList.add('active');
+        } else {
+          text.classList.remove('active', 'exiting');
+        }
+      });
+      
+      // Update color bars
+      colorBars.forEach(bar => {
+        const panelNum = parseInt(bar.dataset.panel);
+        bar.classList.toggle('active', panelNum === currentIndex);
+      });
+      
+      // Update dots
+      dots.forEach((dot, i) => {
+        dot.classList.toggle('active', i === currentIndex);
+      });
+      
+      setTimeout(() => {
+        isAnimating = false;
+        scrollAccumulator = 0;
+        armAutoAdvance();
+      }, ICON_TWEEN_MS);
+    }
+
+    armAutoAdvance();
+    requestAnimationFrame(() => runStrokeDrawIn(icons[0]));
+
+    document.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      if (isAnimating) return;
+      
+      scrollAccumulator += e.deltaY;
+      
+      if (Math.abs(scrollAccumulator) >= scrollThreshold) {
+        if (scrollAccumulator > 0) goToPanel(currentIndex + 1);
+        else goToPanel(currentIndex - 1);
+        scrollAccumulator = 0;
+      }
+    }, { passive: false });
+
+    let touchStartY = 0;
+    document.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    });
+
+    document.addEventListener('touchend', (e) => {
+      if (isAnimating) return;
+      const diffY = touchStartY - e.changedTouches[0].clientY;
+      if (Math.abs(diffY) > 50) {
+        if (diffY > 0) goToPanel(currentIndex + 1);
+        else goToPanel(currentIndex - 1);
+      }
+    });
+
+    prevBtn.addEventListener('click', () => goToPanel(currentIndex - 1));
+    nextBtn.addEventListener('click', () => goToPanel(currentIndex + 1));
+
+    dots.forEach(dot => {
+      dot.addEventListener('click', () => {
+        goToPanel(parseInt(dot.dataset.index));
+      });
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') goToPanel(currentIndex + 1);
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') goToPanel(currentIndex - 1);
+    });
+  </script>
+
+</body>
+</html>

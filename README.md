@@ -79,6 +79,11 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
   - Tool calls, nesting, parallel
   - Depth, branches, error rate
 
+- **Arize — Horizontal Scroll**
+  - Scroll-driven sections, crossfade and scale
+  - SVG stroke draw-in, horizontal track
+  - Self-contained HTML/CSS/JS
+
 ## Run locally
 
 Open `index.html` in a browser.
