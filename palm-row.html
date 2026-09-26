@@ -49,6 +49,7 @@
   <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Wind <span class="val" id="windVal">40</span></label><input type="range" id="wind" min="0" max="100" value="40"></div>
   <div class="control-group"><label>Palms <span class="val" id="palmsVal">70</span></label><input type="range" id="palms" min="0" max="100" value="70"></div>
+  <div class="control-group"><label>Mist <span class="val" id="fogVal">70</span></label><input type="range" id="fog" min="0" max="100" value="70"></div>
   <div class="control-group"><label>Grain <span class="val" id="grainVal">30</span></label><input type="range" id="grain" min="0" max="100" value="30"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -135,6 +136,36 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Bushes after Chris's canvases: a near-black core with stippled highlights
+// that thicken toward the lit edge. lit runs 0 (deep shadow) to 1 (sunlit
+// rim); cell sets the stipple size. Two offset layers of jittered dots.
+fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, hiA: vec3f, hiB: vec3f, warm: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mix(dark, mid, 0.55), smoothstep(0.35, 0.9, l));
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / cell + vec2f(fl * 0.5, fl * 0.37);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 7.1);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3 + fl), hash21(id + 2.7 + fl)) - 0.5) * 0.55;
+    let dens = smoothstep(0.05, 0.85, l + (hash21(id + 5.9) - 0.5) * 0.45);
+    if (h < 0.4 + 0.6 * dens) {
+      let k = hash21(id + 9.1 + fl);
+      var dc = select(select(hiA, hiB, k > 0.55), warm, k > 0.95);
+      dc = mix(mix(dark, mid, 0.8), dc, smoothstep(0.15, 0.75, l + (h - 0.5) * 0.3));
+      let r = (0.24 + 0.2 * hash21(id + 3.3)) * mix(0.8, 1.0, l);
+      c = mix(c, dc, fillA((length(f) - r) * cell, px));
+    }
+  }
+  return c;
+}
+// Shadow pooled on the ground under a clump: a flat ellipse pushed away
+// from the sun, longer when the sun is low. Returns coverage.
+fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
+  let len = r * (1.1 + 2.2 * low);
+  let c = foot + vec2f(-side * len * 0.55, r * 0.12);
+  return fillA((length((p - c) / vec2f(len, r * 0.32)) - 1.0) * r * 0.32, px);
+}
 // Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
 fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
   let f = fract(rot2(p, 0.785) / cell) - 0.5;
@@ -172,7 +203,7 @@ struct U {
   b: vec4f,   // wind, gust, grain, zoom
   c: vec4f,   // sun x, sun y, sun height, dark
   d: vec4f,   // moon x, moon y, moon height, tilt x
-  e: vec4f,   // palm count, _, _, _
+  e: vec4f,   // palm count, fog, _, _
   cols: array<vec4f, 30>,
 }
 @group(0) @binding(0) var<uniform> u: U;
@@ -369,13 +400,14 @@ const HZ = 0.02;
     col = mix(col, mix(C(7), C(2), 0.5), strokeA(pFar.y - mt, px * 0.5, px) * 0.6 * lt);
   }
   // ---- Mist in the valley: flat banks with scalloped tops, drifting.
-  for (var m = 0; m < 3; m++) {
+  let fog = u.e.y;
+  for (var m = 0; m < 4; m++) {
     let fm = f32(m);
-    let my = -0.03 + fm * 0.025;
+    let my = -0.03 + fm * 0.022 + (1.0 - fog) * 0.03;
     let sx = pFar.x + t * 0.004 * (1.0 + fm * 0.5) + fm * 3.0;
-    let top = my - 0.012 * abs(sin(sx * 9.0 + fm)) - 0.008 * sin(sx * 3.0);
+    let top = my - (0.008 + 0.012 * fog) * abs(sin(sx * 9.0 + fm)) - 0.008 * sin(sx * 3.0) - fog * 0.02;
     let md = top - pFar.y;
-    col = mix(col, mix(C(8), C(9), select(0.0, 0.6, m == 0)), fillA(md, px) * (0.75 + 0.08 * fm));
+    col = mix(col, mix(C(8), C(9), select(0.0, 0.6, m == 0)), fillA(md, px) * (0.55 + 0.35 * fog) * (0.8 + 0.06 * fm));
     col = mix(col, C(9), strokeA(md, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
   }
 
@@ -418,8 +450,12 @@ const HZ = 0.02;
           let cy = midTop(cx) + 0.01 + f32(r) * 0.026;
           let rr = 0.006 + 0.004 * th + f32(r) * 0.002;
           let v = pMid - vec2f(cx, cy - rr);
-          let td = length(v) - rr;
-          hc = mix(hc, mix(C(14), C(21), post(smoothstep(0.0, -rr, v.y + v.x * 0.5 * sign(sun.x - pMid.x)) * lt * 0.5, 2.0)), fillA(td, px));
+          let td = length(v) - rr * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + th * 9.0));
+          let side = sign(sun.x - cx + 1e-4);
+          hc = mix(hc, mix(C(11), C(27), 0.5), groundShadow(pMid, vec2f(cx, cy), rr, side, lowSun(), px) * lt * 0.6);
+          let tlit = lt * clamp(0.5 - v.y / rr * 0.6 + v.x / rr * 0.35 * side, 0.0, 1.0);
+          let tc = stippleBush(pMid, tlit, 0.0022, px, mix(C(14), C(27), 0.45), C(14), C(21), mix(C(21), C(16), 0.5), C(18), th * 11.0);
+          hc = mix(hc, mix(tc, C(8), 0.15), fillA(td, px));
         }
       }
       col = mix(col, hc, fillA(mt - pMid.y, px));
@@ -482,22 +518,46 @@ const HZ = 0.02;
       let bb = band - f32(o);
       let id = vec2f(bxi, bb);
       let h = hash21(id + u.a.w + 30.0);
-      if (h > 0.74) {
+      if (h > 0.66) {
         let cx = (bxi + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * bw;
-        let r = 0.01 + dy * 0.035 + 0.005 * h;
+        let r = 0.011 + dy * 0.04 + 0.006 * h;
         let cy = nt + (bb + 1.0 - 0.3 * sin(cx * 7.0 + u.a.w)) * 0.032;
         let v = p - vec2f(cx, cy);
-        let sd = max(length(v / vec2f(1.1, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.6);
-        var bc = C(14);
-        bc = mix(bc, mix(C(14), C(21), 0.55), post(smoothstep(0.0, -r, v.y + v.x * 0.6 * sign(sun.x - p.x + 1e-4)) * lt, 2.0) * step(v.y, -r * 0.2));
-        let dots = step(0.7, hash21(floor(v / 0.0045) + id));
-        bc = mix(bc, C(26), dots * step(0.8, h) * fillA(length(fract(v / 0.0045) - 0.5) * 0.0045 - 0.0012, px));
+        let sd = max(length(v / vec2f(1.25, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.55);
+        let side = sign(sun.x - cx + 1e-4);
+        hc = mix(hc, mix(C(15), C(27), 0.6), groundShadow(p, vec2f(cx, cy + r * 0.4), r * 1.2, side, lowSun(), px) * (0.3 + 0.4 * lt));
+        let blit = (0.15 + 0.85 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
+        var bc = stippleBush(p, blit, 0.0028 + r * 0.1, px, mix(C(14), C(27), 0.45), C(14), C(21), C(16), C(18), h * 17.0);
+        // Now and then a bougainvillea, magenta over the dark.
+        if (h > 0.9) { bc = stippleBush(p, blit, 0.0028 + r * 0.1, px, mix(C(14), C(27), 0.45), C(14), C(26), mix(C(26), C(16), 0.3), C(21), h * 5.0); }
         hc = mix(hc, bc, fillA(sd, px));
-        hc = mix(hc, C(27), strokeA(sd, px * 0.45, px) * 0.7);
+        hc = mix(hc, C(27), strokeA(sd, px * 0.45, px) * 0.5);
       }
     }
+    // Palms' shadows raking across the hill, longer as the sun drops.
+    {
+      let side = sign(sun.x - p.x + 1e-4);
+      let L = 0.05 + 0.3 * lowSun();
+      var sh = 0.0;
+      for (var i = 0; i < 9; i++) {
+        if (i >= i32(u.e.x)) { break; }
+        let b = palmBase(i);
+        let e2 = b + vec2f(-sign(sun.x - b.x + 1e-4) * L, 0.012 + L * 0.05);
+        sh = max(sh, fillA(sdSeg(p, b, e2) - 0.0035, px));
+        sh = max(sh, groundShadow(p, e2, 0.035, sign(sun.x - b.x + 1e-4), 0.0, px));
+      }
+      hc = mix(hc, mix(C(15), C(27), 0.6), sh * (0.15 + 0.4 * lt));
+    }
     col = mix(col, hc, fillA(nt - p.y, px));
-    col = mix(col, C(27), strokeA(p.y - nt, px * 0.6, px) * 0.8);
+    // A hedgerow along the crest: stippled, dark underneath.
+    let hgTop = nt - 0.012 - 0.008 * abs(sin(p.x * 55.0 + u.a.w)) - 0.004 * sin(p.x * 13.0);
+    let hgBot = nt + 0.008;
+    if (p.y > hgTop - px * 2.0 && p.y < hgBot + px * 2.0) {
+      let hl = (0.15 + 0.85 * lt) * clamp((hgBot - p.y) / (hgBot - hgTop) * 1.1 - 0.1, 0.0, 1.0);
+      let hgc = stippleBush(p, hl, 0.0034, px, mix(C(14), C(27), 0.5), C(14), C(21), C(16), C(18), 41.0);
+      col = mix(col, hgc, fillA(hgTop - p.y, px) * fillA(p.y - hgBot, px));
+      col = mix(col, C(27), strokeA(p.y - hgTop, px * 0.45, px) * 0.5);
+    }
   }
 
   // ---- The palms: trunks, then skirts and crowns, back to front.
@@ -633,11 +693,17 @@ function readControls() {
   p.speed = +$('speed').value / 100;
   p.palms = 5 + Math.round(+$('palms').value / 100 * 4);
   p.grain = +$('grain').value / 100 * 0.1;
-  for (const id of ['wind', 'speed', 'palms', 'grain']) $(id + 'Val').textContent = $(id).value;
+  p.fog = +$('fog').value / 100 * 1.4;
+  for (const id of ['wind', 'speed', 'palms', 'fog', 'grain']) $(id + 'Val').textContent = $(id).value;
   if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
 }
 let gust = 0, gustGoal = 0, shown = -1;
 function generate() {}
+// Valley mist: thick at dawn and after dusk, thin through the afternoon.
+function fogAt(tau) {
+  const bump = (x, a, b, c, d) => x < a || x > d ? 0 : x < b ? (x - a) / (b - a) : x < c ? 1 : 1 - (x - c) / (d - c);
+  return 0.35 + 0.65 * bump(tau, 0.3, 0.4, 0.82, 0.97);
+}
 function uniforms() {
   const zoom = Math.max(1, 1.3 / aspect);
   const s = celestial(tau, 0.02);
@@ -647,7 +713,7 @@ function uniforms() {
     b: [p.wind, gust, p.grain, zoom],
     c: [s.sx, s.sy, s.elev, dark],
     d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
-    e: [p.palms, 0, 0, 0],
+    e: [p.palms, fogAt(tau) * p.fog, 0, 0],
     cols: dayCols(tau, SKIES, LAND, KEEP),
   };
 }

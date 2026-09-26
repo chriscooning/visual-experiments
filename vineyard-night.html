@@ -141,6 +141,36 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Bushes after Chris's canvases: a near-black core with stippled highlights
+// that thicken toward the lit edge. lit runs 0 (deep shadow) to 1 (sunlit
+// rim); cell sets the stipple size. Two offset layers of jittered dots.
+fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, hiA: vec3f, hiB: vec3f, warm: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mix(dark, mid, 0.55), smoothstep(0.35, 0.9, l));
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / cell + vec2f(fl * 0.5, fl * 0.37);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 7.1);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3 + fl), hash21(id + 2.7 + fl)) - 0.5) * 0.55;
+    let dens = smoothstep(0.05, 0.85, l + (hash21(id + 5.9) - 0.5) * 0.45);
+    if (h < 0.4 + 0.6 * dens) {
+      let k = hash21(id + 9.1 + fl);
+      var dc = select(select(hiA, hiB, k > 0.55), warm, k > 0.95);
+      dc = mix(mix(dark, mid, 0.8), dc, smoothstep(0.15, 0.75, l + (h - 0.5) * 0.3));
+      let r = (0.24 + 0.2 * hash21(id + 3.3)) * mix(0.8, 1.0, l);
+      c = mix(c, dc, fillA((length(f) - r) * cell, px));
+    }
+  }
+  return c;
+}
+// Shadow pooled on the ground under a clump: a flat ellipse pushed away
+// from the sun, longer when the sun is low. Returns coverage.
+fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
+  let len = r * (1.1 + 2.2 * low);
+  let c = foot + vec2f(-side * len * 0.55, r * 0.12);
+  return fillA((length((p - c) / vec2f(len, r * 0.32)) - 1.0) * r * 0.32, px);
+}
 // Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
 fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
   let f = fract(rot2(p, 0.785) / cell) - 0.5;
@@ -365,9 +395,12 @@ const MOON = vec2f(0.3, -0.36);
       let v = s - cc;
       let cd = length(v / vec2f(1.25, 1.0)) - rad * (1.0 + 0.18 * (vnoise(v / rad * 2.5 + id) - 0.5));
       let trunk = sdSeg(s, vec2f(cx, gy + 0.004), cc) - 0.0012;
-      col = mix(col, C(10), fillA(min(cd, trunk), pxs));
-      col = mix(col, C(9), fillA(length(v + vec2f(rad * 0.3, rad * 0.35)) - rad * 0.45, pxs) * fillA(cd, pxs) * 0.6);
-      col = mix(col, INK, strokeA(min(cd, trunk), pxs * 0.5, pxs) * 0.7);
+      col = mix(col, mix(C(10), INK, 0.5), groundShadow(s, vec2f(cx, gy + 0.002), rad * 1.1, 1.0, 0.35, pxs) * 0.6);
+      col = mix(col, mix(C(10), INK, 0.3), fillA(trunk, pxs));
+      let olit = clamp(0.5 - v.y / rad * 0.6 + v.x / rad * 0.3, 0.0, 1.0) * 0.9;
+      let oc = stippleBush(s, olit, 0.0024 + rad * 0.08, pxs, mix(C(10), INK, 0.45), C(10), C(9), mix(C(8), C(9), 0.4), C(17), id * 3.7 + f32(h));
+      col = mix(col, oc, fillA(cd, pxs));
+      col = mix(col, INK, strokeA(min(cd, trunk), pxs * 0.5, pxs) * 0.6);
     }
   }
   // Vine posts along each row, closer together toward the vanishing point.
@@ -392,7 +425,7 @@ const MOON = vec2f(0.3, -0.36);
     let gy = (flowField(s + vec2f(0.0, e), t) - f0) / e;
     let gl = max(length(vec2f(gx, gy)), 1e-3);
     let speed = clamp(gl / 6.0, 0.0, 1.0);
-    let N = 30.0;
+    let N = 17.0;
     let lines = f0 * N;
     let lid = floor(lines + 0.5);
     let dist = abs(lines - lid) / (N * gl);
@@ -405,11 +438,11 @@ const MOON = vec2f(0.3, -0.36);
     let on = step(0.12 + 0.3 * (1.0 - speed), hash1(lid * 3.7 + seg * 1.31));
     // A bright head trailing off into a faint tail.
     let head = smoothstep(0.1, 0.85, fr) * smoothstep(1.0, 0.9, fr);
-    let w = 0.0009 + 0.0016 * head * (0.6 + speed);
-    let lum = on * head * (0.55 + 0.45 * max(speed, eddyAmt(s, t))) * smoothstep(2.5, 5.0, 1.0 / (N * gl * pxs));
+    let w = 0.0011 + 0.002 * head * (0.6 + speed);
+    let lum = on * head * (0.55 + 0.45 * max(speed, eddyAmt(s, t))) * smoothstep(4.0, 8.0, 1.0 / (N * gl * pxs));
     let a = fillA(dist - w, pxs) * lum;
     // Soft halo round each streak.
-    col = mix(col, C(17), exp(-pow(dist / (w * 4.0), 2.0)) * lum * 0.22);
+    col = mix(col, C(17), exp(-pow(dist / (w * 2.5), 2.0)) * lum * smoothstep(0.6, 0.9, fr) * 0.18);
     var sc = mix(C(17), C(18), smoothstep(0.55, 1.0, fr) * (0.4 + 0.6 * speed));
     sc = mix(mix(C(9), C(17), 0.4), sc, smoothstep(0.05, 0.4, speed + 0.2 * eddyAmt(s, t)));
     col = mix(col, sc, clamp(a, 0.0, 1.0));

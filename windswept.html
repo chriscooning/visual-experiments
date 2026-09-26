@@ -48,6 +48,7 @@
   <div class="control-group"><label>Time <span class="val" id="timeVal">15</span></label><input type="range" id="time" min="0" max="100" value="15"></div>
   <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Wind <span class="val" id="windVal">45</span></label><input type="range" id="wind" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Fog <span class="val" id="fogVal">70</span></label><input type="range" id="fog" min="0" max="100" value="70"></div>
   <div class="control-group"><label>Grain <span class="val" id="grainVal">30</span></label><input type="range" id="grain" min="0" max="100" value="30"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -134,6 +135,36 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Bushes after Chris's canvases: a near-black core with stippled highlights
+// that thicken toward the lit edge. lit runs 0 (deep shadow) to 1 (sunlit
+// rim); cell sets the stipple size. Two offset layers of jittered dots.
+fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, hiA: vec3f, hiB: vec3f, warm: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mix(dark, mid, 0.55), smoothstep(0.35, 0.9, l));
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / cell + vec2f(fl * 0.5, fl * 0.37);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 7.1);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3 + fl), hash21(id + 2.7 + fl)) - 0.5) * 0.55;
+    let dens = smoothstep(0.05, 0.85, l + (hash21(id + 5.9) - 0.5) * 0.45);
+    if (h < 0.4 + 0.6 * dens) {
+      let k = hash21(id + 9.1 + fl);
+      var dc = select(select(hiA, hiB, k > 0.55), warm, k > 0.95);
+      dc = mix(mix(dark, mid, 0.8), dc, smoothstep(0.15, 0.75, l + (h - 0.5) * 0.3));
+      let r = (0.24 + 0.2 * hash21(id + 3.3)) * mix(0.8, 1.0, l);
+      c = mix(c, dc, fillA((length(f) - r) * cell, px));
+    }
+  }
+  return c;
+}
+// Shadow pooled on the ground under a clump: a flat ellipse pushed away
+// from the sun, longer when the sun is low. Returns coverage.
+fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
+  let len = r * (1.1 + 2.2 * low);
+  let c = foot + vec2f(-side * len * 0.55, r * 0.12);
+  return fillA((length((p - c) / vec2f(len, r * 0.32)) - 1.0) * r * 0.32, px);
+}
 // Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
 fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
   let f = fract(rot2(p, 0.785) / cell) - 0.5;
@@ -171,6 +202,7 @@ struct U {
   b: vec4f,   // wind, gust, grain, zoom
   c: vec4f,   // sun x, sun y, sun height, dark
   d: vec4f,   // moon x, moon y, moon height, tilt x
+  e: vec4f,   // fog, _, _, _
   cols: array<vec4f, 26>,
 }
 @group(0) @binding(0) var<uniform> u: U;
@@ -262,7 +294,7 @@ const SEA_BASE = 0.3;
   let q = (p - b) / s;
   let wind = u.b.x + u.b.y;
   let t = u.a.x;
-  let px = u.a.z / s;
+  let px = u.a.z * u.b.w / s;
   // Trunk: a thick, twisting limb leaning downwind.
   let j0 = vec2f(0.0, 0.0);
   let j1 = vec2f(-0.035, -0.07);
@@ -302,17 +334,13 @@ const SEA_BASE = 0.3;
     let d = pad(v, w);
     if (d < px * 2.0) {
       // Depth across the shelf: dark underside, mid body, lit rim on top.
+      // Near-black underside, stippled light thickening toward the top rim
+      // and the sunward end.
       let yy = clamp((v.y + h) / (h * 1.4), 0.0, 1.0);
-      var fc = mix(C(18), C(17), post(smoothstep(0.35, 0.95, yy), 2.0));
-      let rim = smoothstep(0.0, -0.012, d + 0.0) * (1.0 - smoothstep(0.0, 0.3, yy));
-      fc = mix(fc, C(19), post(rim, 2.0) * (0.4 + 0.6 * lt));
-      // Foliage pattern: rows of small scallops.
-      let g = v / 0.0105;
-      let row = floor(g.y);
-      let gx = g.x + 0.5 * (row - 2.0 * floor(row * 0.5)) + fi * 0.37;
-      let arc = length(vec2f(fract(gx) - 0.5, fract(g.y) - 0.15)) - 0.45;
-      let pat = strokeA(arc * 0.0105, 0.0006, px) * step(fract(g.y), 0.62);
-      fc = mix(fc, select(C(18), C(19), yy < 0.35 && lt > 0.3), pat * 0.7);
+      let side = sign(u.c.x - b.x + 1e-4);
+      let blit = (0.25 + 0.75 * lt) * clamp(1.05 - yy * 1.25 + v.x / w * 0.25 * side, 0.0, 1.0);
+      var fc = stippleBush(v, blit, 0.0062, px, mix(C(17), C(24), 0.4), C(18), C(19), mix(C(19), C(14), 0.45), C(21), fi * 3.1 + sd);
+      fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.6, 1.0, yy) * 0.7);
       fc = mix(fc, C(24), strokeA(d, 0.0008, px) * 0.8);
       col = mix(col, fc, fillA(d, px));
       a = max(a, fillA(d, px));
@@ -462,6 +490,23 @@ const SEA_BASE = 0.3;
     }
   }
 
+  // ---- Marine layer: flat banks with scalloped tops, pooling along the
+  // horizon and round the feet of the headlands, drifting in off the sea.
+  let fog = u.e.x;
+  if (fog > 0.02) {
+    for (var m = 0; m < 4; m++) {
+      let fm = f32(m);
+      let base = HZ + 0.004 + fm * 0.022;
+      let sx = pMid.x + t * 0.006 * (1.0 + fm * 0.4) + fm * 2.3;
+      let top = base - (0.012 + 0.03 * fog) * (0.5 + 0.5 * abs(sin(sx * (7.0 + fm) + fm))) - 0.01 * sin(sx * 2.3);
+      let depth = clamp((pMid.y - top) / (0.03 + 0.05 * fog), 0.0, 1.0);
+      let fc = mix(mix(C(5), C(2), 0.35), mix(C(6), C(8), 0.4), post(depth, 3.0));
+      let a = fillA(top - pMid.y, px) * (1.0 - post(depth, 3.0) * 0.8) * smoothstep(0.02, 0.5, fog) * (0.9 - fm * 0.12);
+      col = mix(col, fc, a);
+      col = mix(col, mix(C(5), C(4), 0.3), strokeA(pMid.y - top, px * 0.5, px) * a * 0.6 * (1.0 - dark * 0.7));
+    }
+  }
+
   // ---- Bluff and cliff.
   let bt = bluffTop(p.x);
   let cxAt = cliffX(min(p.y, SEA_BASE));
@@ -518,11 +563,13 @@ const SEA_BASE = 0.3;
           let r = 0.008 + dy * 0.05 + 0.006 * h;
           let cyv = bt + (bb + 1.0 - 0.35 * sin(cx * 9.0 + u.a.w)) * 0.026;
           let v = p - vec2f(cx, cyv);
-          let sd = max(length(v / vec2f(1.3, 1.0)) - r * (1.0 + 0.12 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.2);
-          var bc = mix(C(16), C(18), 0.4);
-          bc = mix(bc, mix(C(15), C(19), 0.5), post(smoothstep(0.0, -r, v.y + r * 0.2) * lt, 2.0) * step(v.y, -r * 0.35));
+          let sd = max(length(v / vec2f(1.3, 1.0)) - r * (1.0 + 0.12 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.45);
+          let side = sign(sun.x - cx + 1e-4);
+          gc = mix(gc, mix(C(16), C(24), 0.55), groundShadow(p, vec2f(cx, cyv + r * 0.15), r * 1.2, side, lowSun(), px) * (0.25 + 0.5 * lt));
+          let blit = lt * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
+          let bc = stippleBush(p, blit, 0.0032 + r * 0.12, px, mix(C(17), C(24), 0.35), C(18), mix(C(19), C(14), 0.5), C(14), C(21), h * 13.0);
           gc = mix(gc, bc, fillA(sd, px));
-          gc = mix(gc, C(24), strokeA(sd, px * 0.45, px) * 0.7);
+          gc = mix(gc, C(24), strokeA(sd, px * 0.45, px) * 0.5);
         }
       }
       col = mix(col, gc, fillA(bt - p.y, px));
@@ -531,6 +578,14 @@ const SEA_BASE = 0.3;
   col = mix(col, C(24), strokeA(p.y - bt, px * 0.6, px) * step(p.x, cxAt) * 0.7);
   col = mix(col, C(24), strokeA(p.x - cxAt, px * 0.6, px) * step(bt, p.y) * step(p.y, SEA_BASE + 0.08) * 0.6);
 
+  // ---- Shadows the cypresses throw across the bluff.
+  {
+    let side = sign(sun.x - p.x + 1e-4);
+    var sh = groundShadow(p, vec2f(-0.56, bluffTop(-0.56) + 0.006), 0.07, side, lowSun(), px);
+    sh = max(sh, groundShadow(p, vec2f(0.14, bluffTop(0.14) + 0.006), 0.05, side, lowSun(), px));
+    sh = max(sh, groundShadow(p, vec2f(-0.08, bluffTop(-0.08) + 0.008), 0.13, side, lowSun(), px));
+    col = mix(col, mix(C(16), C(24), 0.6), sh * step(bt, p.y) * step(p.x, CLIFF) * (0.2 + 0.45 * lt));
+  }
   // ---- Cypresses: two behind, the big one in front.
   let c1 = cypress(p, vec2f(-0.56, bluffTop(-0.56) + 0.004), 0.55, 2.0);
   col = mix(col, c1.rgb, c1.a);
@@ -696,12 +751,19 @@ function readControls() {
   p.wind = +$('wind').value / 100 * 1.5;
   p.speed = +$('speed').value / 100;
   p.grain = +$('grain').value / 100 * 0.1;
-  for (const id of ['wind', 'speed', 'grain']) $(id + 'Val').textContent = $(id).value;
+  p.fog = +$('fog').value / 100 * 1.25;
+  for (const id of ['wind', 'speed', 'fog', 'grain']) $(id + 'Val').textContent = $(id).value;
   if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
 }
 let timeHooked = false;
 let gust = 0, gustGoal = 0, shown = -1;
 function generate() {}
+// Marine layer: rolls in at blue hour, lies thick through the night and
+// burns off a while after dawn.
+function fogAt(tau) {
+  const bump = (x, a, b, c, d) => x < a || x > d ? 0 : x < b ? (x - a) / (b - a) : x < c ? 1 : 1 - (x - c) / (d - c);
+  return 0.18 + 0.82 * bump(tau, 0.3, 0.42, 0.8, 0.95);
+}
 function uniforms() {
   const zoom = Math.max(1, 1.2 / aspect);
   const s = celestial(tau, -0.02);
@@ -711,6 +773,7 @@ function uniforms() {
     b: [p.wind, gust, p.grain, zoom],
     c: [s.sx, s.sy, s.elev, dark],
     d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
+    e: [fogAt(tau) * p.fog, 0, 0, 0],
     cols: dayCols(tau, SKIES, LAND, KEEP),
   };
 }

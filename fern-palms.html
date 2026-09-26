@@ -141,6 +141,36 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Bushes after Chris's canvases: a near-black core with stippled highlights
+// that thicken toward the lit edge. lit runs 0 (deep shadow) to 1 (sunlit
+// rim); cell sets the stipple size. Two offset layers of jittered dots.
+fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, hiA: vec3f, hiB: vec3f, warm: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mix(dark, mid, 0.55), smoothstep(0.35, 0.9, l));
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / cell + vec2f(fl * 0.5, fl * 0.37);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 7.1);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3 + fl), hash21(id + 2.7 + fl)) - 0.5) * 0.55;
+    let dens = smoothstep(0.05, 0.85, l + (hash21(id + 5.9) - 0.5) * 0.45);
+    if (h < 0.4 + 0.6 * dens) {
+      let k = hash21(id + 9.1 + fl);
+      var dc = select(select(hiA, hiB, k > 0.55), warm, k > 0.95);
+      dc = mix(mix(dark, mid, 0.8), dc, smoothstep(0.15, 0.75, l + (h - 0.5) * 0.3));
+      let r = (0.24 + 0.2 * hash21(id + 3.3)) * mix(0.8, 1.0, l);
+      c = mix(c, dc, fillA((length(f) - r) * cell, px));
+    }
+  }
+  return c;
+}
+// Shadow pooled on the ground under a clump: a flat ellipse pushed away
+// from the sun, longer when the sun is low. Returns coverage.
+fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
+  let len = r * (1.1 + 2.2 * low);
+  let c = foot + vec2f(-side * len * 0.55, r * 0.12);
+  return fillA((length((p - c) / vec2f(len, r * 0.32)) - 1.0) * r * 0.32, px);
+}
 // Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
 fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
   let f = fract(rot2(p, 0.785) / cell) - 0.5;
@@ -353,6 +383,13 @@ const SUN = vec2f(-0.3, -0.36);
     col = mix(col, dc, fillA(dd, pxs) * 0.9);
     // Bumpy tops of the bush masses.
     col = mix(col, C(8), strokeA(s.y - bt, pxs * 0.6, pxs) * 0.6);
+  }
+  // Stippled light along the bush tops, as in the canvases.
+  if (s.y > bt) {
+    let dy = s.y - bt;
+    let blit = clamp(1.0 - dy / 0.07, 0.0, 1.0);
+    let bc = stippleBush(s, blit, 0.004, pxs, mix(C(8), vec3f(0.02, 0.05, 0.05), 0.5), C(9), C(11), C(10), C(15), 3.0);
+    col = mix(col, bc, smoothstep(0.1, 0.0, dy) * 0.85);
   }
   // Halftone shade deepening down into the bushes.
   col = mix(col, C(8) * 0.8, halftone(s, 0.0075, 0.4 * smoothstep(bt + 0.06, bt + 0.45, s.y), pxs) * step(bt, s.y) * 0.8);
