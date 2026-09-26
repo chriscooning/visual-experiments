@@ -6,6 +6,24 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
+**Big Sur · WebGPU** (newest first)
+
+The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees drawn leaf by leaf, fog, glitter and a lot of small detail. Drag to move the sun in each.
+
+- **Cove**
+  - Striated cliff with a grassy crown, lighthouse and fence
+  - Boulders ringed in surf, swell, glitter path, gulls
+  - Flax with seed pods and dune grass in the wind
+
+- **Golden Hills**
+  - Sunlit hills with oak groves of dotted canopies
+  - Mackerel sky, sun path, trail, fence, rocks, poppies and lupine, a hawk
+
+- **Headlands**
+  - Receding ridges with combed gullies and drifting fog
+  - Arch bridge, Highway 1, sea stacks, boats, pelicans
+  - Cabin and windswept cypresses on the near headland
+
 **Print & Pattern · WebGPU** (newest first)
 
 Flat silkscreen colour, fine contour bands and hairline ink outlines, crossed with a late-90s digital layer of registration marks, ruler ticks, dimension lines and dot grids. The symbols are their own: California coast, machines and AI, optics and space, and invented sigils.

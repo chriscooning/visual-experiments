@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Golden Hills — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="golden" selected>Golden Hour</option>
+      <option value="earle">Earle</option>
+      <option value="spring">Spring</option>
+      <option value="dusk">Dusk</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Fence</label>
+    <select id="fence">
+      <option value="on" selected>Fence</option>
+      <option value="off">No fence</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Wind <span class="val" id="windVal">45</span></label><input type="range" id="wind" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Clouds <span class="val" id="cloudsVal">55</span></label><input type="range" id="clouds" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Wildflowers <span class="val" id="flowersVal">50</span></label><input type="range" id="flowers" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Oaks <span class="val" id="oaksVal">60</span></label><input type="range" id="oaks" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Grain <span class="val" id="grainVal">35</span></label><input type="range" id="grain" min="0" max="100" value="35"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to move the sun · Tilt for depth · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+const SHADER = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var a = 0.5; var s = 0.0;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, 9.2); a *= 0.5; }
+  return s / 0.9375;
+}
+// Coverage of a shape from its signed distance (negative inside), one pixel wide.
+fn fillA(d: f32, px: f32) -> f32 { return clamp(0.5 - d / px, 0.0, 1.0); }
+// Coverage of an outline of half-width w along the shape's edge.
+fn strokeA(d: f32, w: f32, px: f32) -> f32 { return clamp(0.5 - (abs(d) - w) / px, 0.0, 1.0); }
+fn sdBox(p: vec2f, b: vec2f) -> f32 { let d = abs(p) - b; return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0); }
+fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+fn rot2(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * p.x - s * p.y, s * p.x + c * p.y); }
+// Paper: a little fibre and grain, and ink that prints slightly unevenly.
+fn paperize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
+  let fibre = 0.965 + 0.035 * vnoise(pos * vec2f(0.02, 0.09));
+  let speck = hash21(floor(pos / 1.5)) - 0.5;
+  return col * fibre * (1.0 + speck * grain * 0.6) + (hash21(pos) - 0.5) * grain * 0.25;
+}
+// Registration mark: a ring with a cross through it.
+fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
+  let q = p - c;
+  let ring = strokeA(length(q) - r, px * 0.6, px);
+  let cross = max(strokeA(sdSeg(q, vec2f(-r * 1.7, 0.0), vec2f(r * 1.7, 0.0)), px * 0.5, px),
+                  strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
+  return max(ring, cross);
+}
+
+// Golden Hills: a Big Sur ridge at sundown after Eyvind Earle. Rounded hills
+// lit on their sunward faces in flat steps, oaks built from clusters of
+// dotted canopies, a combed field of grass with poppies and lupine bending in
+// the wind, rocks, a fence and a trail. Above: a mackerel sky over a dark
+// cloud mass, the sun low over the Pacific and its path on the water, a hawk
+// circling, and a small green lens flare.
+struct U {
+  a: vec4f,   // time, aspect, px, seed
+  b: vec4f,   // wind, clouds, flowers, oak count
+  c: vec4f,   // _, _, flow time, grain
+  d: vec4f,   // tilt x, y, sun x, sun y
+  e: vec4f,   // fence, trail, _, _
+  cols: array<vec4f, 18>,
+  oaks: array<vec4f, 12>,   // X, layer, scale, seed
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+const HY = -0.02;
+
+@diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+@diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
+
+@diagnostic(off, derivative_uniformity) fn ridgeTop(X: f32) -> f32 {
+  return HY + 0.015 - 0.2 * smoothstep(0.05, 1.25, X) - 0.025 * sin(X * 6.0 + u.a.w) * smoothstep(0.1, 0.6, X)
+       + 0.008 * (fbm(vec2f(X * 14.0, u.a.w)) - 0.5);
+}
+@diagnostic(off, derivative_uniformity) fn hillShape(X: f32) -> f32 {
+  return 0.1 - 0.13 * exp(-pow((X + 0.42) / 0.34, 2.0)) - 0.075 * exp(-pow((X - 0.28) / 0.28, 2.0)) - 0.025 * sin(X * 2.0 + u.a.w);
+}
+@diagnostic(off, derivative_uniformity) fn hillTop(X: f32) -> f32 {
+  return 0.1 - 0.13 * exp(-pow((X + 0.42) / 0.34, 2.0)) - 0.075 * exp(-pow((X - 0.28) / 0.28, 2.0))
+       - 0.025 * sin(X * 2.0 + u.a.w) + 0.006 * (fbm(vec2f(X * 12.0, u.a.w)) - 0.5);
+}
+@diagnostic(off, derivative_uniformity) fn fgTop(X: f32) -> f32 { return 0.25 - 0.06 * X + 0.025 * sin(X * 3.0 + u.a.w * 2.0); }
+@diagnostic(off, derivative_uniformity) fn layerTop(l: i32, X: f32) -> f32 {
+  if (l == 0) { return ridgeTop(X); }
+  if (l == 1) { return hillTop(X); }
+  return fgTop(X);
+}
+
+// An Earle oak: a short trunk under a cluster of round canopies, each filled
+// with a grid of leaf dots, lit on the sunward side, dark underneath.
+@diagnostic(off, derivative_uniformity) fn oak(q: vec2f, s: f32, sd: f32, sway: f32, sunDir: vec2f, px: f32) -> vec4f {
+  let h = 0.05 * s;
+  var trunk = sdSeg(q, vec2f(0.0), vec2f(0.0, -h * 0.55)) - 0.0035 * s;
+  trunk = min(trunk, sdSeg(q, vec2f(0.0, -h * 0.35), vec2f(-h * 0.35, -h * 0.7)) - 0.002 * s);
+  trunk = min(trunk, sdSeg(q, vec2f(0.0, -h * 0.4), vec2f(h * 0.4, -h * 0.72)) - 0.002 * s);
+  var col = C(13);
+  var a = fillA(trunk, px);
+  var cd = 1e3;
+  var cc = vec2f(0.0);
+  var cr = 1.0;
+  for (var k = 0; k < 6; k++) {
+    let fk = f32(k);
+    let ang = fk * 1.05 + sd;
+    var c = vec2f(cos(ang) * h * 0.45 * (0.6 + 0.4 * hash1(sd + fk)), -h * (0.85 + 0.22 * sin(ang)));
+    c.x += sway * h * 0.08 * (-c.y / h);
+    let r = h * (0.3 + 0.14 * hash1(sd * 2.0 + fk));
+    let dk = length(q - c) - r;
+    if (dk < cd) { cd = dk; cc = c; cr = r; }
+  }
+  if (cd < px * 2.0) {
+    let nrm = (q - cc) / cr;
+    let L = dot(nrm, sunDir);
+    // Leaf dots on a staggered grid.
+    let g = q / (h * 0.085);
+    let row = floor(g.y);
+    let gx = g.x + 0.5 * (row - 2.0 * floor(row * 0.5));
+    let dotD = length(vec2f(fract(gx) - 0.5, fract(g.y) - 0.5)) - 0.36;
+    var fc = mix(C(13), mix(C(13), C(12), 0.5), post(L * 0.5 + 0.5, 2.0));
+    fc = mix(fc, select(mix(C(13), C(12), 0.6), C(12), L > 0.25), fillA(dotD * h * 0.085, px) * 0.9);
+    // Deep shadow under the canopy.
+    fc = mix(fc, C(13), smoothstep(0.35, 0.9, nrm.y) * 0.8);
+    col = mix(col, fc, fillA(cd, px));
+    a = max(a, fillA(cd, px));
+  }
+  return vec4f(col, a);
+}
+
+@diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let t = u.a.x; let asp = u.a.y; let px = u.a.z; let ft = u.c.z;
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
+  let X0 = p.x / (0.5 * asp);
+  let tilt = u.d.xy;
+  let sun = u.d.zw;
+  let sunDir = normalize(vec2f(sign(sun.x - p.x + 1e-4) * 0.8, -0.6));
+  let wind = u.b.x;
+  var col: vec3f;
+
+  if (p.y < HY) {
+    let g = clamp((p.y + 0.5) / (HY + 0.5), 0.0, 1.0);
+    col = mix(C(0), C(1), post(pow(g, 2.2), 9.0));
+    let ds = length(p - sun);
+    col = mix(col, C(2), post(exp(-ds * 14.0) * 0.8, 5.0));
+    col = mix(col, C(2), fillA(ds - 0.03, px));
+    // Mackerel sky: rows of small puffs over a dark mass at the swath's core.
+    let M = fbm(vec2f(X0 * 0.7 + ft * 0.006, p.y * 2.4) + vec2f(u.a.w, 0.0)) * smoothstep(HY - 0.02, HY - 0.14, p.y);
+    let th = 0.56 - u.b.y * 0.2;
+    if (M > th) {
+      let fw = max(fwidth(M), 1e-4);
+      let edge = clamp(0.5 + (M - th) / fw, 0.0, 1.0);
+      let massA = clamp(0.5 + (M - th - 0.15) / fw, 0.0, 1.0);
+      col = mix(col, mix(col, C(4), 0.35), edge * 0.6);
+      col = mix(col, C(4), massA);
+      let gp = vec2f(p.x / 0.028 + ft * 0.03, p.y / 0.015);
+      let row = floor(gp.y);
+      let gx = gp.x + 0.5 * (row - 2.0 * floor(row * 0.5));
+      let id = vec2f(floor(gx), row);
+      let f = vec2f(fract(gx), fract(gp.y)) - 0.5 - (vec2f(hash21(id + 1.3), hash21(id + 7.1)) - 0.5) * 0.2;
+      let r = 0.42 * smoothstep(th, th + 0.1, M) * (0.75 + 0.35 * hash21(id)) * (1.0 - 0.55 * massA);
+      let pd = (length(f * vec2f(1.0, 1.5)) - r) * 0.015;
+      var pc = mix(C(3), mix(C(3), C(4), 0.55), step(0.08, f.y));
+      pc = mix(pc, C(2), exp(-length(p - sun) * 4.0) * 0.6);
+      col = mix(col, pc, fillA(pd, px));
+    }
+    // A hawk circling.
+    let ha = t * 0.35;
+    let hp = vec2f(-0.25 * asp + cos(ha) * 0.07, -0.33 + sin(ha) * 0.025);
+    let hq = rot2(p - hp, sin(ha) * 0.2);
+    let wing = 0.014;
+    let hawk = min(sdSeg(hq, vec2f(0.0), vec2f(-wing, -0.004)), sdSeg(hq, vec2f(0.0), vec2f(wing, -0.004)));
+    col = mix(col, C(13), strokeA(hawk, px * 0.9, px));
+  } else {
+    let yS = p.y - HY;
+    var sc = mix(C(5), C(6), post(smoothstep(0.0, 0.2, yS), 5.0));
+    // The sun's path: broken gold dashes.
+    let w = 0.012 + yS * 0.25;
+    let inPath = exp(-pow((p.x - sun.x) / w, 2.0)) * step(sun.y, HY);
+    let row = floor(log(yS + 0.002) * 70.0);
+    let dash = step(0.35, hash21(vec2f(floor((p.x - sun.x) / (0.004 + yS * 0.04)), row) + floor(t * 2.0)));
+    sc = mix(sc, C(2), inPath * dash * 0.9);
+    sc = mix(sc, C(2), strokeA(yS, px * 0.5, px) * 0.6);
+    col = sc;
+  }
+
+  // Oaks for one layer, drawn after that layer's ground.
+  let n = i32(u.b.w);
+
+  // Far ridge on the right.
+  let Xr = X0 + tilt.x * 0.02;
+  let rt = ridgeTop(Xr);
+  if (p.y > rt - px * 2.0) {
+    var rc = C(7);
+    rc = mix(rc, mix(C(7), C(8), 0.35), post(clamp(0.7 - (p.y - rt) * 6.0, 0.0, 1.0), 3.0) * 0.6);
+    rc = mix(rc, C(5), 0.25);
+    col = mix(col, rc, fillA(rt - p.y, px));
+    col = mix(col, C(2), strokeA(p.y - rt, px * 0.5, px) * 0.5);
+  }
+  for (var j = 0; j < 12; j++) {
+    if (j >= n) { break; }
+    let o = u.oaks[j];
+    if (i32(o.y) != 0) { continue; }
+    let bx = vec2f((o.x - tilt.x * 0.02) * 0.5 * asp, ridgeTop(o.x) + 0.004);
+    let oc = oak(p - bx, o.z, o.w, sin(t * 1.3 + o.w) * wind, sunDir, px);
+    col = mix(col, mix(oc.rgb, C(7), 0.35), oc.a);
+  }
+
+  // Middle hills.
+  let Xm = X0 + tilt.x * 0.04;
+  let mt = hillTop(Xm);
+  if (p.y > mt - px * 2.0) {
+    // Light from the smooth hill shape, sloping with depth so the terminator
+    // curves down the hill instead of falling in vertical stripes.
+    let s = (hillShape(Xm + 0.06) - hillShape(Xm - 0.06)) / 0.12;
+    let lit = clamp(0.5 + s * 2.4 * sign(sun.x - p.x + 1e-4) - (p.y - mt) * 3.0, 0.0, 1.0);
+    var hc = mix(C(9), C(8), post(lit, 4.0));
+    hc = mix(hc, C(9), smoothstep(0.0, 0.25, p.y - mt) * 0.3);
+    // Combed strokes following the crest.
+    let comb = fract((p.y - mt + 0.003 * sin(Xm * 40.0 + u.a.w)) / 0.0055);
+    hc = mix(hc, hc * 0.9, step(0.78, comb));
+    // Cloud shadows sliding over the slopes.
+    let cs = fbm(vec2f(Xm * 2.2 - ft * 0.03, p.y * 5.0 + u.a.w));
+    hc = mix(hc, C(9), step(0.6, cs) * 0.4);
+    // Trail: a pale path switchbacking up the slope.
+    if (u.e.y > 0.5) {
+      let tx = (-0.15 + 0.12 * sin(p.y * 16.0 + u.a.w) - tilt.x * 0.04) * 0.5 * asp;
+      let tw = 0.002 + max(p.y - mt, 0.0) * 0.06;
+      let td = abs(p.x - tx) - tw;
+      hc = mix(hc, C(17), fillA(td, px) * step(mt + 0.012, p.y));
+    }
+    col = mix(col, hc, fillA(mt - p.y, px));
+    col = mix(col, C(2), strokeA(p.y - mt, px * 0.6, px) * lit * 0.6);
+  }
+  for (var j = 0; j < 12; j++) {
+    if (j >= n) { break; }
+    let o = u.oaks[j];
+    if (i32(o.y) != 1) { continue; }
+    let bx = vec2f((o.x - tilt.x * 0.04) * 0.5 * asp, hillTop(o.x) + 0.006);
+    let oc = oak(p - bx, o.z, o.w, sin(t * 1.3 + o.w) * wind, sunDir, px);
+    col = mix(col, oc.rgb, oc.a);
+  }
+  // Fence along the lower slope: posts and two wires.
+  if (u.e.x > 0.5) {
+    let Xf = X0 + tilt.x * 0.05;
+    let fy = hillTop(Xf) + 0.055 + 0.02 * Xf;
+    let inRun = step(-0.95, Xf) * step(Xf, 0.25);
+    let wires = max(strokeA(p.y - (fy - 0.014), px * 0.45, px), strokeA(p.y - (fy - 0.007), px * 0.45, px)) * inRun;
+    let pxX = Xf / 0.075;
+    let postX = (round(pxX) * 0.075 - tilt.x * 0.05) * 0.5 * asp;
+    let pyy = hillTop(round(pxX) * 0.075) + 0.055 + 0.02 * round(pxX) * 0.075;
+    let postD = sdSeg(p, vec2f(postX, pyy), vec2f(postX, pyy - 0.019)) - 0.0012;
+    col = mix(col, C(13), max(wires * 0.8, fillA(postD, px) * inRun));
+  }
+
+  // Foreground field.
+  let Xg = X0 + tilt.x * 0.08;
+  let gt = fgTop(Xg);
+  let d = p.y - gt;
+  if (d > -0.01) {
+    var gc = mix(C(10), C(11), post(smoothstep(0.0, 0.3, d), 4.0));
+    // Grass in rows that widen toward the viewer; each cell holds one blade.
+    let rr = sqrt(max(d, 0.0)) * 46.0;
+    let rowId = floor(rr);
+    let fy = fract(rr);
+    let wr = 0.004 + max(d, 0.0) * 0.035;
+    let cx = p.x / wr + hash1(rowId) * 7.0;
+    let cid = floor(cx);
+    let fx = fract(cx) - 0.5;
+    let hsh = hash21(vec2f(cid, rowId));
+    let bend = (sin(t * 1.6 + cid * 0.35 + p.x * 4.0) * 0.35 + 0.15) * wind + (hsh - 0.5) * 0.3;
+    let up = 1.0 - fy;
+    let bd = abs(fx - (hsh - 0.5) * 0.3 - bend * up * up) - 0.13 * fy;
+    let bc = select(mix(C(11), C(10), 0.6), C(10), hsh > 0.5);
+    gc = mix(gc, mix(bc, C(2), 0.25 * up * step(0.7, hsh)), fillA(bd * wr, px) * step(0.0, d));
+    // Flowers: poppies and lupine at some blade tips.
+    let fh = hash21(vec2f(cid * 1.7, rowId + 3.0));
+    if (fh < u.b.z * 0.09 && d > 0.01) {
+      let fc2 = select(C(15), C(14), fh < u.b.z * 0.055);
+      let fdist = length(vec2f(fx - bend * 0.9 - (hsh - 0.5) * 0.3, (fy - 0.18) * 0.8)) - 0.24;
+      gc = mix(gc, fc2, fillA(fdist * wr, px));
+    }
+    // Rocks settled into the grass.
+    for (var k = 0; k < 3; k++) {
+      let fk = f32(k);
+      let rX = -0.7 + fk * 0.6 + 0.3 * hash1(u.a.w + fk);
+      let rp = vec2f((rX - tilt.x * 0.08) * 0.5 * asp, fgTop(rX) + 0.04 + 0.12 * hash1(u.a.w * 2.0 + fk));
+      let rs = (0.012 + 0.018 * hash1(fk + u.a.w * 3.0)) * (1.0 + (rp.y - 0.25) * 3.0);
+      let q = p - rp;
+      let rd = (length(q / vec2f(1.0, 0.6)) - rs) * 0.6 + 0.3 * rs * (fbm(q / rs * 1.5 + fk) - 0.5);
+      var rcol = mix(C(16), C(13), step(0.0, q.y) * 0.45);
+      rcol = mix(rcol, vec3f(1.0), fillA(length(q + vec2f(rs * 0.35, rs * 0.25)) - rs * 0.25, px) * 0.35);
+      gc = mix(gc, C(11), fillA(length((q - vec2f(0.0, rs * 0.45)) / vec2f(1.2, 0.35)) - rs, px) * 0.6);
+      gc = mix(gc, rcol, fillA(rd, px));
+    }
+    col = mix(col, gc, fillA(gt - p.y, px));
+    col = mix(col, C(2), strokeA(d, px * 0.6, px) * 0.4);
+  }
+  for (var j = 0; j < 12; j++) {
+    if (j >= n) { break; }
+    let o = u.oaks[j];
+    if (i32(o.y) != 2) { continue; }
+    let bx = vec2f((o.x - tilt.x * 0.08) * 0.5 * asp, fgTop(o.x) + 0.01);
+    let oc = oak(p - bx, o.z, o.w, sin(t * 1.3 + o.w) * wind, sunDir, px);
+    col = mix(col, oc.rgb, oc.a);
+  }
+  // Lens flare: a small green dot and ring, mirrored through the centre.
+  if (sun.y < HY) {
+    let fp = -sun * 0.85 + vec2f(0.0, 0.12);
+    let fd = length(p - fp);
+    col = mix(col, vec3f(0.55, 1.0, 0.45), fillA(fd - 0.006, px) * 0.85);
+    col = mix(col, vec3f(0.6, 1.0, 0.6), strokeA(fd - 0.03, px * 0.8, px) * 0.25);
+  }
+  return vec4f(paperize(col, pos.xy, u.c.w), 1.0);
+}
+`;
+
+const NAME = 'golden-hills';
+// skyTop, skyLow, sun, cloud, cloudShade, seaFar, seaNear, ridge, hillLight, hillShadow,
+// grassLight, grassDark, oakLight, oakDark, poppy, lupine, rock, trail
+const PALETTES = {
+  golden: ['#3e6fb2', '#f2c98e', '#fff3c4', '#eef0f2', '#5d6272', '#b9c7cf', '#5f7f95', '#4a4f2a', '#a8c24a', '#4e6a2a', '#d3e04f', '#6f8f22', '#6f9a3a', '#233d1c', '#f08a1c', '#7a5bc4', '#c9c3b5', '#e6d9a8'],
+  earle:  ['#16495a', '#f0b56a', '#ffe9a8', '#f4d8b0', '#6a4a6e', '#e6b98a', '#264d6e', '#3c2d55', '#d8b24a', '#6a4a5e', '#e8c65a', '#7c5a3a', '#4f7a5a', '#16263a', '#ff7a3a', '#9a6ad4', '#d9c6a8', '#f3dcae'],
+  spring: ['#2d7fd6', '#cfe7f5', '#fffbe0', '#ffffff', '#8a9ab0', '#bfe0ec', '#2c7fa8', '#3e6a3a', '#8ed14a', '#3f7a2e', '#b8e85a', '#4f8f2a', '#5fa04a', '#1d4a22', '#ff8c1a', '#6a5ae0', '#d6d2c8', '#efe2b8'],
+  dusk:   ['#1d1f45', '#f07a4f', '#ffd28a', '#f4a88a', '#3c2d4e', '#e08a6a', '#232c55', '#241d38', '#c98a4a', '#3a2a45', '#e0a04a', '#5a3a3e', '#6a5a5a', '#140f22', '#ff6a3a', '#8a6ad4', '#b08a7a', '#f0c08a'],
+};
+
+const p = {};
+function readControls() {
+  p.pal = colsOf($('palette').value);
+  p.wind = +$('wind').value / 100;
+  p.clouds = +$('clouds').value / 100;
+  p.flowers = +$('flowers').value / 100;
+  p.oaks = +$('oaks').value / 100;
+  p.grain = +$('grain').value / 100 * 0.1;
+  p.fence = $('fence').value === 'on' ? 1 : 0;
+  for (const id of ['wind', 'clouds', 'flowers', 'oaks', 'grain']) $(id + 'Val').textContent = $(id).value;
+  if (oakSeed) placeOaks();
+}
+let ft = 0, sun = [0.3, -0.07], sunGoal = [0.3, -0.07], oaks = [], oakSeed = 0;
+function placeOaks() {
+  let s = oakSeed;
+  const R = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  oaks = [];
+  const nMid = 2 + Math.round(p.oaks * 6), nFar = 1 + Math.round(p.oaks * 3);
+  for (let i = 0; i < nFar; i++) oaks.push([0.25 + R() * 0.7, 0, 0.45 + R() * 0.3, R() * 50]);
+  // Mid-hill oaks gather into a couple of groves.
+  const groves = [-0.3 + (R() - 0.5) * 0.5, 0.35 + (R() - 0.5) * 0.4];
+  for (let i = 0; i < nMid; i++) oaks.push([groves[i % 2] + (R() - 0.5) * 0.4, 1, 0.8 + R() * 0.7, R() * 50]);
+  if (p.oaks > 0.4 && R() < 0.7) oaks.push([R() < 0.5 ? -0.93 : 0.93, 2, 1.5 + R() * 0.5, R() * 50]);
+  oaks = oaks.slice(0, 12);
+}
+function generate() { oakSeed = 1 + Math.floor(Math.random() * 1e6); placeOaks(); ft = Math.random() * 100; }
+function uniforms() {
+  const o = [];
+  for (let i = 0; i < 12; i++) o.push(oaks[i] || [0, 9, 1, 0]);
+  return {
+    a: [t, aspect, 1 / Math.max(1, H), seed],
+    b: [p.wind, p.clouds, p.flowers, oaks.length],
+    c: [0, 0, ft, p.grain],
+    d: [tl.active ? tl.x : 0, tl.active ? tl.y - 0.5 : 0, sun[0], sun[1]],
+    e: [p.fence, 1, 0, 0],
+    cols: p.pal, oaks: o,
+  };
+}
+function step(dt) {
+  ft += dt * (0.3 + p.wind * 1.5);
+  const k = 1 - Math.exp(-dt * 4);
+  sun[0] += (sunGoal[0] - sun[0]) * k; sun[1] += (sunGoal[1] - sun[1]) * k;
+}
+function onDown(q) { sunGoal = [q[0], Math.min(q[1], -0.022)]; }
+function onMove(q) { sunGoal = [q[0], Math.min(q[1], -0.022)]; }
+function onUp() {}
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const colsOf = (name) => PALETTES[name].map((h) => [...hex(h), 1]);
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const clk = clock(gpu);
+const tl = tilt();
+let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
+let seed = Math.random() * 100;
+
+function toP(e) {
+  const r = canvas.getBoundingClientRect();
+  return [((e.clientX - r.left) / r.width - 0.5) * aspect, (e.clientY - r.top) / r.height - 0.5];
+}
+let dragging = false, pointer = [0, 0];
+canvas.addEventListener('pointerdown', (e) => { dragging = true; pointer = toP(e); canvas.setPointerCapture(e.pointerId); onDown(pointer); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) { pointer = toP(e); onMove(pointer); } });
+const release = () => { if (dragging) { dragging = false; onUp(); } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+readControls();
+generate();
+const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
+
+function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
+let fpsCount = 0, fpsAt = performance.now();
+let loop = null, playing = false;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  t += dt;
+  step(dt);
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const el of document.querySelectorAll('#panel input[type=range]')) el.addEventListener('input', readControls);
+for (const el of document.querySelectorAll('#panel select')) el.addEventListener('change', readControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => { seed = Math.random() * 100; generate(); if (!playing) frame(gpu, render); });
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = NAME + '-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+// The viewer may already have pressed Play while WebGPU was starting up.
+if (!playing) togglePlay();
+</script>
+</body>
+</html>
