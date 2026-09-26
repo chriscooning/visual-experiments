@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Liquid Chrome — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Finish</label>
+    <select id="palette">
+      <option value="chrome" selected>Chrome</option>
+      <option value="gold">Gold</option>
+      <option value="film">Oil Slick</option>
+      <option value="obsidian">Obsidian</option>
+      <option value="candy">Candy</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Blobs <span class="val" id="countVal">6</span></label><input type="range" id="count" min="2" max="8" value="6"></div>
+  <div class="control-group"><label>Melt <span class="val" id="meltVal">45</span></label><input type="range" id="melt" min="5" max="100" value="45"></div>
+  <div class="control-group"><label>Size <span class="val" id="sizeVal">50</span></label><input type="range" id="size" min="20" max="100" value="50"></div>
+  <div class="control-group"><label>Motion <span class="val" id="speedVal">35</span></label><input type="range" id="speed" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Studio Spin <span class="val" id="spinVal">20</span></label><input type="range" id="spin" min="0" max="100" value="20"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to pull the metal · Tilt to turn the studio · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADER
+// Ray-marched metaballs: spheres on slow Lissajous paths, joined with a smooth
+// minimum so they melt into one surface. A finger adds one more sphere that
+// melts in the same way, which reads as pulling taffy. The surface is a
+// mirror of a procedural photo studio (softboxes, a horizon, a coloured rim).
+// ═══════════════════════════════════════
+const CHROME = /* wgsl */ `
+struct U {
+  tint: vec3f, time: f32,
+  rim: vec3f, aspect: f32,
+  pointer: vec2f, pull: f32, count: f32,
+  melt: f32, size: f32, seed: f32, film: f32,
+  yaw: f32, pitch: f32, spin: f32, gloss: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+fn hash1(n: f32) -> f32 { return fract(sin(n * 91.345) * 47453.5453); }
+
+fn smin(a: f32, b: f32, k: f32) -> f32 {
+  let h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+  return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+fn rotY(v: vec3f, a: f32) -> vec3f { let c = cos(a); let s = sin(a); return vec3f(c * v.x + s * v.z, v.y, -s * v.x + c * v.z); }
+fn rotX(v: vec3f, a: f32) -> vec3f { let c = cos(a); let s = sin(a); return vec3f(v.x, c * v.y - s * v.z, s * v.y + c * v.z); }
+
+// Camera: orbits the origin; tilt nudges yaw and pitch.
+fn camPos() -> vec3f { return rotY(rotX(vec3f(0.0, 0.0, 6.0), u.pitch), u.yaw); }
+fn camRay(uv: vec2f) -> vec3f {
+  let q = vec2f((uv.x - 0.5) * u.aspect, 0.5 - uv.y);
+  return normalize(rotY(rotX(normalize(vec3f(q, -1.6)), u.pitch), u.yaw));
+}
+
+// Where the finger is: its view ray, pushed to the depth of the origin.
+fn pullPoint() -> vec3f {
+  let ro = camPos();
+  let rd = camRay(u.pointer);
+  let fwd = normalize(-ro);
+  return ro + rd * (dot(-ro, fwd) / dot(rd, fwd));
+}
+
+fn blob(i: f32) -> vec4f {
+  let a = hash1(i + u.seed) * 6.2831;
+  let b = hash1(i * 1.7 + u.seed) * 6.2831;
+  let s1 = 0.35 + hash1(i * 2.3 + u.seed) * 0.5;
+  let s2 = 0.3 + hash1(i * 3.1 + u.seed) * 0.5;
+  let t = u.time;
+  // Keep the cluster inside the frame: narrower and taller on a portrait phone.
+  let sx = clamp(u.aspect * 0.75, 0.42, 1.0);
+  let sy = 1.0 + (1.0 - sx) * 0.7;
+  let c = vec3f(sin(t * s1 + a) * 0.95 * sx, cos(t * s2 + b) * 0.7 * sy, sin(t * (s1 + s2) * 0.5 + a + b) * 0.6);
+  let r = u.size * (0.55 + 0.45 * hash1(i * 5.9 + u.seed));
+  return vec4f(c, r);
+}
+
+fn map(p: vec3f) -> f32 {
+  var d = 1e5;
+  for (var i = 0; i < 8; i++) {
+    if (f32(i) >= u.count) { break; }
+    let b = blob(f32(i));
+    d = smin(d, length(p - b.xyz) - b.w, u.melt);
+  }
+  if (u.pull > 0.01) {
+    d = smin(d, length(p - pullPoint()) - u.size * 0.55 * u.pull, u.melt * 1.4);
+  }
+  return d;
+}
+
+fn normalAt(p: vec3f) -> vec3f {
+  let e = vec2f(0.0015, -0.0015);
+  return normalize(e.xyy * map(p + e.xyy) + e.yyx * map(p + e.yyx) + e.yxy * map(p + e.yxy) + e.xxx * map(p + e.xxx));
+}
+
+// The studio the metal reflects.
+fn studio(d0: vec3f) -> vec3f {
+  let d = rotY(d0, u.time * u.spin);
+  // Near-black room above, a pale floor below: the classic chrome product shot.
+  var c = vec3f(0.004, 0.004, 0.005) + vec3f(0.01) * smoothstep(0.0, 0.8, d.y);
+  c += vec3f(0.22, 0.22, 0.24) * smoothstep(0.02, -0.25, d.y) * (0.6 + 0.4 * smoothstep(-1.0, -0.3, d.y));
+  c += vec3f(0.9) * exp(-abs(d.y + 0.02) * 40.0) * 0.6;                        // horizon line
+  c += vec3f(3.2) * smoothstep(0.84, 0.9, d.y);                                 // overhead panel
+  c += vec3f(2.4) * smoothstep(0.1, 0.05, abs(d.x - 0.55)) * smoothstep(-0.2, 0.2, d.y) * smoothstep(0.0, -0.3, d.z); // right strip
+  c += vec3f(1.4) * smoothstep(0.06, 0.02, abs(d.x + 0.7)) * smoothstep(0.7, 0.3, abs(d.y - 0.2));                  // left strip
+  c += u.rim * 1.8 * smoothstep(0.2, 0.9, -d.z) * smoothstep(0.4, -0.2, abs(d.y));                                   // coloured rim behind
+  return c;
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let ro = camPos();
+  let rd = camRay(uv);
+  var t = 0.0;
+  var hit = false;
+  for (var i = 0; i < 90; i++) {
+    let d = map(ro + rd * t);
+    if (d < 0.001 * t) { hit = true; break; }
+    t += d * 0.9;
+    if (t > 14.0) { break; }
+  }
+  // Background: the studio itself, dimmed and out of focus.
+  var col = studio(rd) * 0.07 + vec3f(0.008);
+  if (hit) {
+    let p = ro + rd * t;
+    let n = normalAt(p);
+    let r = reflect(rd, n);
+    let fres = pow(1.0 - max(dot(-rd, n), 0.0), 5.0);
+    var tint = u.tint;
+    // Oil slick: thin-film colour that shifts with viewing angle.
+    let filmCol = 0.5 + 0.5 * cos(6.2831 * (vec3f(0.0, 0.33, 0.67) + dot(n, -rd) * 1.6 + p.y * 0.3));
+    tint = mix(tint, filmCol, u.film);
+    let refl = studio(r);
+    col = refl * mix(tint, vec3f(1.0), fres) * mix(0.35, 1.0, u.gloss);
+    // A little diffuse fill so obsidian still has form.
+    col += tint * 0.02 * max(n.y, 0.0);
+  }
+  col = col / (1.0 + col * 0.35);                     // soft shoulder for the hot softboxes
+  let vig = 1.0 - 0.35 * smoothstep(0.3, 1.1, length((uv - 0.5) * vec2f(u.aspect, 1.0)));
+  return vec4f(pow(col * vig, vec3f(0.4545)), 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// FINISHES — metal tint, rim light, thin film, gloss
+// ═══════════════════════════════════════
+const PALETTES = {
+  chrome:   { tint: [0.9, 0.92, 0.95], rim: [0.25, 0.45, 1.0], film: 0, gloss: 1 },
+  gold:     { tint: [1.0, 0.72, 0.32], rim: [1.0, 0.35, 0.15], film: 0, gloss: 1 },
+  film:     { tint: [0.8, 0.8, 0.85], rim: [0.6, 0.2, 1.0], film: 0.75, gloss: 1 },
+  obsidian: { tint: [0.08, 0.08, 0.09], rim: [0.3, 0.9, 0.8], film: 0, gloss: 0.9 },
+  candy:    { tint: [1.0, 0.25, 0.45], rim: [0.2, 0.8, 1.0], film: 0.15, gloss: 1 },
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+
+const p = {};
+function readControls() {
+  p.count = +$('count').value;
+  p.melt = 0.05 + +$('melt').value / 100 * 0.75;
+  p.size = 0.35 + +$('size').value / 100 * 0.6;
+  p.speed = +$('speed').value / 100;
+  p.spin = +$('spin').value / 100 * 0.3;
+  p.palette = PALETTES[$('palette').value];
+  for (const id of ['count', 'melt', 'size', 'speed', 'spin']) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+let seed = Math.random() * 100;
+let t = Math.random() * 50;
+let pull = 0, pointer = [0.5, 0.5], dragging = false;
+const tl = tilt();
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+// Ray marching is per-pixel work, so cap the pixel ratio lower than the
+// other experiments; the soft studio hides it.
+const surf = surface(gpu, canvas, { dpr: [1, 1.5] });
+const fx = effect(gpu, CHROME, { set: { u: {
+  tint: p.palette.tint, time: t, rim: p.palette.rim, aspect: 1,
+  pointer, pull: 0, count: p.count,
+  melt: p.melt, size: p.size, seed, film: p.palette.film,
+  yaw: 0, pitch: 0, spin: p.spin, gloss: p.palette.gloss,
+} } });
+
+surf.onResize(({ width, height }) => fx.set({ u: { aspect: width / height } }));
+
+function applyControls() {
+  readControls();
+  const pal = p.palette;
+  fx.set({ u: { tint: pal.tint, rim: pal.rim, film: pal.film, gloss: pal.gloss,
+    count: p.count, melt: p.melt, size: p.size, spin: p.spin, seed } });
+}
+
+function toUV(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+}
+canvas.addEventListener('pointerdown', (e) => { dragging = true; pointer = toUV(e); canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) pointer = toUV(e); });
+const release = () => { dragging = false; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+const clk = clock(gpu);
+let fpsCount = 0, fpsAt = performance.now();
+let yaw = 0, pitch = 0;
+
+function render(f) { f.pass(surf, fx); }
+
+let loop = null, playing = false;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  t += dt * (0.15 + p.speed * 1.6);
+  // The finger's blob swells in while dragging and drains away after.
+  pull += ((dragging ? 1 : 0) - pull) * (1 - Math.exp(-dt * (dragging ? 8 : 3)));
+  // Tilt turns the studio; a slow drift keeps it alive on desktop.
+  yaw += ((tl.x * 0.9 + Math.sin(t * 0.07) * 0.25) - yaw) * (1 - Math.exp(-dt * 4));
+  pitch += ((-tl.y * 0.35 + 0.12) - pitch) * (1 - Math.exp(-dt * 4));
+  fx.set({ u: { time: t, pull, pointer, yaw, pitch } });
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of ['count', 'melt', 'size', 'speed', 'spin']) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  seed = Math.random() * 100;
+  t = Math.random() * 50;
+  applyControls();
+  if (!playing) frame(gpu, render);
+});
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'liquid-chrome-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+togglePlay();
+</script>
+</body>
+</html>
