@@ -1,6 +1,6 @@
 # visual-experiments
 
-Browser-based generative art: fractals, Perlin noise, swarm intelligence, reaction-diffusion, and emergent systems. No dependencies, no build step.
+Browser-based generative art: fractals, Perlin noise, swarm intelligence, reaction-diffusion, emergent systems, and WebGPU light. No build step: every experiment is a single HTML file, and the WebGPU ones import a prebuilt [vgpu](https://github.com/vercel-labs/vgpu) bundle from `lib/vgpu.js` (its first line records how it was built).
 
 **[Live →](https://chriscooning.github.io/visual-experiments/)**
 
@@ -61,6 +61,14 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
   - Lloyd's algorithm
   - Cells, edges, points modes
   - Click add seeds, drag push
+
+**Light · WebGPU**
+
+- **Light Rays**
+  - Three-pass god rays: occlusion mask, radial blur, composite
+  - Domain-warped fbm clouds, drag to move the light
+  - Prism palette splits the rays by channel
+  - Needs a browser with WebGPU
 
 **Data & AI**
 
