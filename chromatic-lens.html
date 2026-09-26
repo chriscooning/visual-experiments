@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Chromatic Lens — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Scene</label>
+    <select id="palette">
+      <option value="poster" selected>Poster</option>
+      <option value="swiss">Swiss Grid</option>
+      <option value="halftone">Halftone</option>
+      <option value="barcode">Barcode</option>
+      <option value="night">Night Type</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Lens Size <span class="val" id="sizeVal">50</span></label><input type="range" id="size" min="15" max="100" value="50"></div>
+  <div class="control-group"><label>Magnify <span class="val" id="magVal">45</span></label><input type="range" id="mag" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Dispersion <span class="val" id="dispVal">55</span></label><input type="range" id="disp" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Screen Split <span class="val" id="splitVal">15</span></label><input type="range" id="split" min="0" max="100" value="15"></div>
+  <div class="control-group"><label>Drift <span class="val" id="driftVal">30</span></label><input type="range" id="drift" min="0" max="100" value="30"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag the lens · Tilt to bend the light · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, texture, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADER
+// A glass disc over a flat printed scene. Inside the disc the scene is
+// magnified, most at the centre, and bent hard near the rim. Each ray is
+// traced at nine wavelengths across the spectrum, each bent by a slightly
+// different amount, and blended back into RGB, so edges break into a smooth
+// rainbow rather than three hard copies. Outside, a softer version of the
+// same split runs toward the screen edges, like a cheap camera lens.
+// ═══════════════════════════════════════
+const LENS = /* wgsl */ `
+struct U {
+  center: vec2f, radius: f32, aspect: f32,
+  mag: f32, disp: f32, split: f32, time: f32,
+  scroll: vec2f, bend: vec2f,
+  ink: vec3f, dark: f32,
+  texAspect: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var scene: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+// Where the scene is sampled for screen point p (aspect-corrected), for a
+// wavelength weight w in -1..1 (red bends least, violet most).
+fn bentUV(p: vec2f, w: f32) -> vec2f {
+  let d = p - u.center;
+  let x = length(d) / u.radius;
+  var q = p;
+  if (x < 1.0) {
+    // Spherical-cap profile: the surface slope grows toward the rim.
+    let slope = x / sqrt(max(1.0 - x * x * 0.985, 0.012));
+    // Dispersion mostly lives at the rim (the slope term); the centre stays sharp.
+    let k = u.mag * (1.0 + w * u.disp * 0.08);
+    q = u.center + d * (1.0 - k * 0.55 * (1.0 - x * x)) - normalize(d + 1e-6) * slope * u.radius * 0.035 * (u.mag + w * u.disp * 0.6);
+    q += u.bend * u.radius * 0.3 * (1.0 + w * u.disp) * (1.0 - x * x);
+  } else {
+    // Screen split, stronger toward the edges.
+    let c = p - vec2f(0.5 * u.aspect, 0.5);
+    q = p + c * dot(c, c) * u.split * w * 0.05;
+  }
+  // The scene keeps its own proportions: one texture height = one screen height.
+  return vec2f(q.x / u.texAspect, q.y) + u.scroll;
+}
+
+fn spectrum(w: f32) -> vec3f {
+  // Red → green → blue weights across w in -1..1.
+  let r = clamp(1.0 - abs(w + 0.55) * 1.4, 0.0, 1.0) + clamp(-w - 0.7, 0.0, 1.0) * 0.6;
+  let g = clamp(1.0 - abs(w) * 1.6, 0.0, 1.0);
+  let b = clamp(1.0 - abs(w - 0.55) * 1.4, 0.0, 1.0) + clamp(w - 0.75, 0.0, 1.0) * 0.4;
+  return vec3f(r, g, b);
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let p = vec2f(uv.x * u.aspect, uv.y);
+  let d = p - u.center;
+  let x = length(d) / u.radius;
+  var col = vec3f(0.0);
+  var wsum = vec3f(0.0);
+  // Twelve wavelengths, each nudged by a per-pixel offset so the rainbow
+  // blends smoothly instead of stepping into bands.
+  let jit = fract(sin(dot(floor(uv * 1400.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
+  for (var i = 0; i < 12; i++) {
+    let w = clamp((f32(i) + 0.5 + jit) / 6.0 - 1.0, -1.0, 1.0);
+    let s = spectrum(w);
+    col += textureSampleLevel(scene, samp, bentUV(p, w), 0.0).rgb * s;
+    wsum += s;
+  }
+  col /= wsum;
+  // Soft shadow the lens casts on the page, down and to the right.
+  let sh = length(p - u.center - vec2f(0.012, 0.022)) / u.radius;
+  col *= 1.0 - (1.0 - smoothstep(0.9, 1.25, sh)) * 0.22 * step(1.0, x) * (1.0 - u.dark * 0.5);
+  if (x < 1.0) {
+    // Glass: a faint tint, a bright rim and a soft window reflection.
+    let rim = smoothstep(0.93, 1.0, x);
+    col = mix(col, col * 0.92 + vec3f(0.04), rim * 0.6);
+    let hl = normalize(vec2f(-0.6, -0.8));
+    let n = d / u.radius;
+    let spec = pow(max(dot(n, hl), 0.0), 3.0) * smoothstep(0.55, 0.97, x) * smoothstep(1.0, 0.975, x);
+    col += vec3f(1.0) * spec * 0.55;
+  }
+  // Crisp outline where glass meets page.
+  let px = fwidth(x);
+  col = mix(col, u.ink, (1.0 - smoothstep(0.0, px * 1.5, abs(x - 1.0))) * 0.35);
+  // Paper grain.
+  let g = fract(sin(dot(floor(uv * 900.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
+  return vec4f(col + g * 0.018, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// SCENES — drawn once on a 2D canvas, then uploaded as a texture that
+// tiles horizontally and scrolls under the lens.
+// ═══════════════════════════════════════
+const WORDS = ['LIGHT', 'BENDS', 'SPLITS', 'REFRACTS', 'SPECTRUM', 'PRISM', 'GLASS', 'CHROMA', 'LENS', 'FOCUS'];
+const SANS = "'Helvetica Neue', Helvetica, Arial, sans-serif";
+const MONO = "'Space Mono', ui-monospace, Menlo, monospace";
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+
+function drawScene(kind, w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  const S = h / 1000;
+  const scenes = {
+    poster() {
+      g.fillStyle = '#efece4'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#111';
+      let y = 60 * S;
+      const words = [...WORDS].sort(() => Math.random() - 0.5);
+      for (let i = 0; y < h; i++) {
+        const size = (i % 3 === 0 ? 210 : i % 3 === 1 ? 120 : 64) * S;
+        g.font = `${i % 2 ? 300 : 800} ${size}px ${SANS}`;
+        g.textBaseline = 'top';
+        let x = -((i * 137) % 400) * S;
+        for (let k = 0; x < w; k++) { const t = words[(i + k) % words.length]; g.fillText(t, x, y); x += g.measureText(t + ' ').width; }
+        y += size * 1.02;
+        g.fillRect(0, y, w, 3 * S); y += 22 * S;
+      }
+    },
+    swiss() {
+      g.fillStyle = '#e8412c'; g.fillRect(0, 0, w, h);
+      g.strokeStyle = '#111'; g.lineWidth = 2 * S;
+      const step = 80 * S;
+      for (let x = 0; x < w; x += step) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+      for (let y = 0; y < h; y += step) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+      g.fillStyle = '#111';
+      for (let i = 0; i < 18; i++) {
+        const cx = Math.floor(Math.random() * w / step) * step, cy = Math.floor(Math.random() * h / step) * step;
+        const r = step * (1 + Math.floor(Math.random() * 3));
+        if (Math.random() < 0.5) { g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill(); }
+        else g.fillRect(cx, cy, r * 1.5, step);
+      }
+      g.fillStyle = '#f5f1e6'; g.font = `900 ${260 * S}px ${SANS}`; g.textBaseline = 'alphabetic';
+      for (let x = 0; x < w; x += 1400 * S) g.fillText(pick(WORDS), x + 40 * S, h - 80 * S);
+    },
+    halftone() {
+      // Dot size follows a few big soft shapes spread along the strip.
+      g.fillStyle = '#f4f0e8'; g.fillRect(0, 0, w, h);
+      const step = 30 * S;
+      const blobs = [...Array(7)].map((_, i) => ({ x: (i + 0.5) / 7 * w, y: (0.25 + Math.random() * 0.5) * h, r: (180 + Math.random() * 220) * S }));
+      for (let y = step / 2, row = 0; y < h + step; y += step * 0.866, row++) {
+        for (let x = (row % 2) * step / 2; x < w + step; x += step) {
+          let v = 0;
+          for (const b of blobs) { const dx = Math.min(Math.abs(x - b.x), w - Math.abs(x - b.x)); v = Math.max(v, Math.exp(-(dx * dx + (y - b.y) ** 2) / (2 * b.r * b.r))); }
+          const r = step * (0.06 + 0.46 * v);
+          g.fillStyle = v > 0.55 ? '#1d2b8f' : '#111';
+          g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+        }
+      }
+    },
+    barcode() {
+      g.fillStyle = '#fafafa'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#0b0b0b';
+      let x = 0;
+      while (x < w) { const bw = (1 + Math.floor(Math.random() * 4)) * 5 * S; if (Math.random() < 0.55) g.fillRect(x, 0, bw, h * 0.78); x += bw + 5 * S * (1 + Math.floor(Math.random() * 3)); }
+      g.font = `400 ${46 * S}px ${MONO}`; g.textBaseline = 'top';
+      for (let xx = 0; xx < w; xx += 60 * S) g.fillText(String(Math.floor(Math.random() * 10)), xx + 10 * S, h * 0.82);
+    },
+    night() {
+      g.fillStyle = '#07070a'; g.fillRect(0, 0, w, h);
+      g.textBaseline = 'middle'; g.textAlign = 'left';
+      const cols = ['#ffffff', '#ffffff', '#ff4fb0', '#4fd8ff'];
+      let y = 90 * S;
+      for (let i = 0; y < h; i++) {
+        const size = (i % 2 ? 90 : 180) * S;
+        g.font = `${i % 2 ? 300 : 900} ${size}px ${SANS}`;
+        g.fillStyle = cols[i % cols.length];
+        let x = -((i * 211) % 500) * S;
+        while (x < w) { const t = pick(WORDS); g.fillText(t, x, y); x += g.measureText(t + '  ').width; }
+        y += size * 1.1;
+      }
+    },
+  };
+  scenes[kind]();
+  return c;
+}
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const IDS = ['size', 'mag', 'disp', 'split', 'drift'];
+
+const p = {};
+function readControls() {
+  p.scene = $('palette').value;
+  p.radius = 0.1 + +$('size').value / 100 * 0.32;
+  p.mag = 0.2 + +$('mag').value / 100 * 1.1;
+  p.disp = +$('disp').value / 100 * 1.6;
+  p.split = +$('split').value / 100 * 2.5;
+  p.drift = +$('drift').value / 100;
+  for (const id of IDS) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const repeatLinear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'repeat', addressModeV: 'mirror-repeat' });
+let sceneTex = null;
+let aspect = 1;
+
+// The scene texture is twice the screen's width so the scroll has room,
+// and at the screen's pixel height for sharp type.
+function buildScene() {
+  const h = Math.min(2048, Math.max(512, surf.size[1]));
+  const w = Math.min(8192, Math.round(h * Math.max(aspect, 0.6) * 2));
+  const src = drawScene(p.scene, w, h);
+  const tex = texture(gpu, { kind: '2d', size: [w, h], format: 'rgba8unorm', usage: ['texture_binding', 'copy_dst', 'render_attachment'] });
+  gpu.gpu.queue.copyExternalImageToTexture({ source: src }, { texture: tex.gpu }, [w, h]);
+  const old = sceneTex;
+  sceneTex = tex;
+  fx.set({ scene: tex, u: { ink: p.scene === 'night' ? [1, 1, 1] : [0, 0, 0], dark: p.scene === 'night' ? 1 : 0 } });
+  fx.set({ u: { texAspect: w / h } });
+  if (old) old.destroy();
+}
+
+const fx = effect(gpu, LENS, { set: { u: {
+  center: [0.5, 0.5], radius: p.radius, aspect: 1, mag: p.mag, disp: p.disp, split: p.split, time: 0,
+  scroll: [0, 0], bend: [0, 0], ink: [0, 0, 0], dark: 0, texAspect: 2,
+}, samp: repeatLinear } });
+
+let needScene = true;
+surf.onResize(({ width, height }) => {
+  aspect = width / height;
+  fx.set({ u: { aspect, radius: Math.min(p.radius, 0.4 * aspect) } });
+  needScene = true;
+});
+
+function applyControls() {
+  const prev = p.scene;
+  readControls();
+  // Never wider than most of a narrow phone screen.
+  fx.set({ u: { radius: Math.min(p.radius, 0.4 * aspect), mag: p.mag, disp: p.disp, split: p.split } });
+  if (p.scene !== prev) needScene = true;
+}
+
+// ═══════════════════════════════════════
+// LENS: follows the finger while dragging, glides on its own otherwise
+// ═══════════════════════════════════════
+let lens = [0.5, 0.5], goal = null, dragging = false, heldUntil = 0, wander = Math.random() * 20;
+function toP(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.height, (e.clientY - r.top) / r.height];
+}
+canvas.addEventListener('pointerdown', (e) => { dragging = true; goal = toP(e); heldUntil = Infinity; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) goal = toP(e); });
+const release = () => { if (dragging) { dragging = false; heldUntil = performance.now() + 3000; } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+const clk = clock(gpu);
+const tl = tilt();
+let fpsCount = 0, fpsAt = performance.now();
+let t = 0, scroll = 0;
+
+function step(dt) {
+  t += dt;
+  wander += dt * (0.15 + p.drift * 0.5);
+  scroll += dt * p.drift * 0.02;
+  let target = goal;
+  if (!dragging && performance.now() > heldUntil) {
+    target = [aspect * (0.5 + 0.28 * Math.sin(wander * 0.7)), 0.5 + 0.22 * Math.sin(wander * 1.13 + 1.0)];
+  }
+  if (target) {
+    const k = 1 - Math.exp(-dt * (dragging ? 16 : 1.6));
+    lens = [lens[0] + (target[0] - lens[0]) * k, lens[1] + (target[1] - lens[1]) * k];
+  }
+  const bend = tl.active ? [tl.x * 0.6, (tl.y - 0.5) * 0.6] : [0, 0];
+  fx.set({ u: { center: lens, time: t, scroll: [scroll % 1, 0], bend } });
+}
+
+function render(f) {
+  if (needScene) { needScene = false; buildScene(); }
+  f.pass(surf, fx);
+}
+
+let loop = null, playing = false;
+function tick(f) {
+  step(Math.min(clk.deltaTime, 0.1));
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of IDS) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  needScene = true;   // redraw the same scene with new words and shapes
+  wander = Math.random() * 50;
+  if (!playing) frame(gpu, render);
+});
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'chromatic-lens-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+togglePlay();
+</script>
+</body>
+</html>

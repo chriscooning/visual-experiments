@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ridgelines — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="pulsar" selected>Pulsar</option>
+      <option value="ink">Ink</option>
+      <option value="neon">Neon</option>
+      <option value="dusk">Dusk</option>
+      <option value="signal">Signal Blue</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Lines <span class="val" id="linesVal">60</span></label><input type="range" id="lines" min="20" max="100" value="60"></div>
+  <div class="control-group"><label>Peaks <span class="val" id="ampVal">55</span></label><input type="range" id="amp" min="5" max="100" value="55"></div>
+  <div class="control-group"><label>Roughness <span class="val" id="roughVal">45</span></label><input type="range" id="rough" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Spread <span class="val" id="spreadVal">40</span></label><input type="range" id="spread" min="10" max="100" value="40"></div>
+  <div class="control-group"><label>Speed <span class="val" id="speedVal">35</span></label><input type="range" id="speed" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Weight <span class="val" id="weightVal">40</span></label><input type="range" id="weight" min="10" max="100" value="40"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Touch to raise a peak · Tilt to tip the stack · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADER
+// Stacked ridgelines, drawn per pixel front to back. Each line is filled
+// down to its own baseline, so it hides the lines behind it; the first
+// line whose fill or stroke covers a pixel decides its colour, so only a
+// handful of lines are ever evaluated. Strokes are measured perpendicular
+// to the curve, which keeps steep peaks the same weight as flat runs.
+// ═══════════════════════════════════════
+const RIDGE = /* wgsl */ `
+struct U {
+  bg: vec3f, time: f32,
+  lineA: vec3f, n: f32,
+  lineB: vec3f, amp: f32,
+  fill: vec3f, rough: f32,
+  center: vec2f, size: vec2f,
+  touch: vec3f, weight: f32,
+  spread: f32, seed: f32, shear: f32, glow: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn noise1(x: f32) -> f32 {
+  let i = floor(x); let f = fract(x);
+  let w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  return mix(hash1(i), hash1(i + 1.0), w);
+}
+// Line i's height at x (0..1 across the stack), in line spacings.
+fn ridge(i: f32, x: f32) -> f32 {
+  let c = 0.5 + (x - 0.5) * (1.0 + u.shear * (i / u.n - 0.5));
+  let env = exp(-pow((c - 0.5) / (0.12 + u.spread * 0.2), 2.0));
+  let row = i * 3.17 + u.seed;
+  let t = u.time;
+  var s = 0.0;
+  var a = 1.0;
+  var f = 7.0;
+  for (var k = 0; k < 4; k++) {
+    s += a * noise1(x * f + row + t * (0.4 + f32(k) * 0.15));
+    a *= 0.35 + u.rough * 0.3;
+    f *= 2.3;
+  }
+  s = s / 1.6;
+  var h = env * pow(s, 2.2) * u.amp * 9.0;
+  h += (1.0 - env) * noise1(x * 60.0 + row) * 0.25 * u.rough;
+  // Touch: a peak that rises under the finger and spreads to nearby lines.
+  let di = (i - u.touch.y) / 3.5;
+  let dx = (x - u.touch.x) / 0.06;
+  h += u.touch.z * 12.0 * exp(-dx * dx - di * di);
+  return h;
+}
+
+@fragment fn fs_main(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let sp = u.size.y / (u.n - 1.0);
+  let left = u.center.x - u.size.x * 0.5;
+  let top = u.center.y - u.size.y * 0.5;
+  let x = (pos.x - left) / u.size.x;
+  let y = pos.y;
+  var col = u.bg;
+  let lw = u.weight;
+  if (x > -0.002 && x < 1.002) {
+    let xc = clamp(x, 0.0, 1.0);
+    let maxH = (u.amp * 9.0 + 12.0) * sp;
+    let iHi = min(u.n - 1.0, floor((y + maxH - top) / sp));
+    let iLo = max(0.0, ceil((y - lw - top) / sp));
+    let dx = 1.0 / u.size.x;
+    var i = iHi;
+    for (var k = 0; k < 64; k++) {
+      if (i < iLo) { break; }
+      let base = top + i * sp;
+      let h = ridge(i, xc) * sp;
+      let yc = base - h;
+      // Perpendicular distance to the curve from its local slope.
+      let slope = (ridge(i, xc + dx) - ridge(i, xc - dx)) * sp * 0.5;
+      let d = (y - yc) / sqrt(1.0 + slope * slope);
+      let tone = mix(u.lineA, u.lineB, i / (u.n - 1.0));
+      // Stack ends fade the stroke so the edges are clean.
+      let edge = smoothstep(0.0, 0.004, x) * smoothstep(1.0, 0.996, x);
+      let stroke = (1.0 - smoothstep(lw * 0.5 - 0.6, lw * 0.5 + 0.6, abs(d))) * edge;
+      if (d > -lw * 0.5 - 0.6 && y <= base + lw) {
+        // Inside this line's fill (or on its stroke): it hides everything behind.
+        col = mix(u.fill, tone, stroke);
+        col += tone * u.glow * exp(-max(d, 0.0) * 0.35) * 0.35;
+        break;
+      }
+      // Just above the curve: a soft glow, then keep looking behind.
+      col += tone * u.glow * exp(-abs(d) * 0.35) * 0.18;
+      i -= 1.0;
+    }
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// PALETTES — background, front and back line colours, fill, glow
+// ═══════════════════════════════════════
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const PALETTES = {
+  pulsar: { bg: '#050505', a: '#f2f2f2', b: '#f2f2f2', fill: '#050505', glow: 0 },
+  ink:    { bg: '#f1ede3', a: '#161616', b: '#161616', fill: '#f1ede3', glow: 0 },
+  neon:   { bg: '#07031a', a: '#ff3cd4', b: '#2af4ff', fill: '#07031a', glow: 1 },
+  dusk:   { bg: '#1b0f1f', a: '#ffb36b', b: '#ff4f7b', fill: '#1b0f1f', glow: 0.5 },
+  signal: { bg: '#02060c', a: '#7dd3fc', b: '#3b82f6', fill: '#02060c', glow: 0.7 },
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const IDS = ['lines', 'amp', 'rough', 'spread', 'speed', 'weight'];
+
+const p = {};
+function readControls() {
+  p.n = +$('lines').value;
+  p.amp = 0.1 + +$('amp').value / 100 * 0.9;
+  p.rough = +$('rough').value / 100;
+  p.spread = +$('spread').value / 100;
+  p.speed = +$('speed').value / 100;
+  p.weight = +$('weight').value / 100;
+  p.pal = PALETTES[$('palette').value];
+  for (const id of IDS) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+let seed = Math.random() * 100, t = 0, W = 1, H = 1, dpr = 1;
+
+const uni = () => {
+  const c = p.pal;
+  return { bg: hex(c.bg), lineA: hex(c.a), lineB: hex(c.b), fill: hex(c.fill), glow: c.glow,
+    n: p.n, amp: p.amp, rough: p.rough, spread: p.spread, seed, weight: (0.8 + p.weight * 2.6) * dpr };
+};
+const fx = effect(gpu, RIDGE, { set: { u: { ...uni(), time: 0, center: [0, 0], size: [1, 1], touch: [0.5, 0, 0], shear: 0 } } });
+
+function layout() {
+  // A tall column like the record sleeve, centred with room for the peaks.
+  const w = Math.min(W * 0.84, H * 0.62);
+  const h = Math.min(H * 0.66, w * 1.35);
+  fx.set({ u: { center: [W / 2, H * 0.54], size: [w, h] } });
+}
+surf.onResize(({ width, height }) => {
+  W = width; H = height;
+  dpr = width / Math.max(1, canvas.clientWidth);
+  layout();
+  fx.set({ u: uni() });
+});
+
+function applyControls() {
+  readControls();
+  fx.set({ u: uni() });
+  layout();
+  document.body.style.background = p.pal.bg;
+}
+
+// ═══════════════════════════════════════
+// TOUCH: the peak follows the finger and sinks away after release
+// ═══════════════════════════════════════
+let touching = false, touch = [0.5, 0, 0], goal = [0.5, 0];
+function toStack(e) {
+  const r = canvas.getBoundingClientRect();
+  const px = (e.clientX - r.left) * dpr, py = (e.clientY - r.top) * dpr;
+  const w = Math.min(W * 0.84, H * 0.62), h = Math.min(H * 0.66, w * 1.35);
+  const x = (px - (W / 2 - w / 2)) / w;
+  const i = (py - (H * 0.54 - h / 2)) / (h / (p.n - 1)) + 4;
+  return [x, i];
+}
+canvas.addEventListener('pointerdown', (e) => { touching = true; goal = toStack(e); if (touch[2] < 0.05) touch = [goal[0], goal[1], touch[2]]; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => { if (touching) goal = toStack(e); });
+const release = () => { touching = false; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+const clk = clock(gpu);
+const tl = tilt();
+let fpsCount = 0, fpsAt = performance.now(), shear = 0;
+
+function step(dt) {
+  t += dt * (0.05 + p.speed * 0.9);
+  const k = 1 - Math.exp(-dt * 10);
+  touch[0] += (goal[0] - touch[0]) * k;
+  touch[1] += (goal[1] - touch[1]) * k;
+  touch[2] += ((touching ? 1 : 0) - touch[2]) * (1 - Math.exp(-dt * (touching ? 4 : 1.5)));
+  shear += ((tl.active ? tl.x * 0.6 : 0) - shear) * (1 - Math.exp(-dt * 4));
+  fx.set({ u: { time: t, touch, shear } });
+}
+
+function render(f) { f.pass(surf, fx); }
+
+let loop = null, playing = false;
+function tick(f) {
+  step(Math.min(clk.deltaTime, 0.1));
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of IDS) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  seed = Math.random() * 100;
+  applyControls();
+  if (!playing) frame(gpu, render);
+});
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'ridgelines-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+togglePlay();
+</script>
+</body>
+</html>

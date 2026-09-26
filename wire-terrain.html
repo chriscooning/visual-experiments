@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Wire Terrain — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="outrun" selected>Outrun</option>
+      <option value="vapor">Vaporwave</option>
+      <option value="grid">Grid</option>
+      <option value="amber">Amber CRT</option>
+      <option value="mono">Monochrome</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Speed <span class="val" id="speedVal">40</span></label><input type="range" id="speed" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Mountains <span class="val" id="heightVal">55</span></label><input type="range" id="height" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Grid <span class="val" id="gridVal">50</span></label><input type="range" id="grid" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Aberration <span class="val" id="aberrationVal">35</span></label><input type="range" id="aberration" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Glow <span class="val" id="glowVal">55</span></label><input type="range" id="glow" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Scanlines <span class="val" id="scanVal">15</span></label><input type="range" id="scan" min="0" max="100" value="15"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to steer and climb · Tilt to bank · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADERS
+// 1. Scene: ray-march a height field. A winding valley runs down the middle
+//    (the road the camera follows); ridged noise mountains rise either side.
+//    The terrain is drawn as a lit grid: line width is measured against the
+//    pixel's footprint on the ground, so lines stay one crisp pixel wide up
+//    close and fade to an even tone before they can shimmer in the distance.
+// 2. Glow: downsample the bright parts, blur across, blur down.
+// 3. Finish: chromatic aberration (red and blue sampled a little further in
+//    and out from the centre), the glow, scanlines, vignette and grain.
+// ═══════════════════════════════════════
+const COMMON = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 {
+  var q = fract(p * vec2f(123.34, 456.21));
+  q += dot(q, q + 45.32);
+  return fract(q.x * q.y);
+}
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x),
+             mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+`;
+
+const SCENE = COMMON + /* wgsl */ `
+struct U {
+  skyTop: vec3f, time: f32,
+  skyLow: vec3f, height: f32,
+  sunTop: vec3f, gridScale: f32,
+  sunLow: vec3f, seed: f32,
+  line: vec3f, aspect: f32,
+  fill: vec3f, camZ: f32,
+  camPos: vec3f, yaw: f32,
+  pitch: f32, roll: f32, pixel: f32, stars: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+fn path(z: f32) -> f32 { return sin(z * 0.045) * 6.0 + sin(z * 0.013 + 1.3) * 10.0; }
+
+fn terrain(p: vec2f) -> f32 {
+  let d = abs(p.x - path(p.y));
+  let valley = smoothstep(2.2, 10.0, d);
+  var q = p * 0.07 + vec2f(u.seed, u.seed * 1.7);
+  var a = 0.55;
+  var s = 0.0;
+  for (var k = 0; k < 4; k++) {
+    let r = 1.0 - abs(vnoise(q) * 2.0 - 1.0);
+    s += a * r * r;
+    q = q * 2.1 + vec2f(3.1, 1.7);
+    a *= 0.45;
+  }
+  // Mountains grow taller the further they are from the road.
+  return s * u.height * valley * (0.6 + 0.4 * smoothstep(8.0, 30.0, d));
+}
+
+fn camBasis(q: vec2f) -> vec3f {
+  let c = cos(u.roll); let s = sin(u.roll);
+  let r = vec2f(c * q.x - s * q.y, s * q.x + c * q.y);
+  var d = normalize(vec3f(r.x, r.y, 1.55));
+  let cp = cos(u.pitch); let sp = sin(u.pitch);
+  d = vec3f(d.x, cp * d.y + sp * d.z, -sp * d.y + cp * d.z);
+  let cy = cos(u.yaw); let sy = sin(u.yaw);
+  return vec3f(cy * d.x + sy * d.z, d.y, -sy * d.x + cy * d.z);
+}
+
+fn sky(rd: vec3f) -> vec3f {
+  let h = rd.y;
+  var col = mix(u.skyLow, u.skyTop, pow(smoothstep(-0.02, 0.4, h), 0.55));
+  // Sun: sits ahead down the valley, sliced by bands that thicken toward
+  // the horizon.
+  // It rides straight ahead of the camera's heading, centred on the road.
+  let sd = normalize(vec3f(sin(u.yaw), 0.1, cos(u.yaw)));
+  let side = normalize(vec3f(cos(u.yaw), 0.0, -sin(u.yaw)));
+  let dp = rd - sd;
+  let r = length(vec2f(dot(dp, side), dp.y));
+  // Narrow screens get a smaller sun so it doesn't fill the width.
+  let R = 0.17 * clamp(u.aspect * 1.15, 0.6, 1.0);
+  let sy = clamp((rd.y - (sd.y - R)) / (2.0 * R), 0.0, 1.0);
+  var sun = mix(u.sunLow, u.sunTop, sy) * smoothstep(R, R - 0.004, r);
+  let bandPos = (sd.y + 0.02 - rd.y) / R;
+  let band = smoothstep(0.0, 0.02, bandPos) * step(0.5 - bandPos * 0.42, fract(bandPos * 7.0 - u.time * 0.15));
+  sun *= 1.0 - band;
+  col += sun * 1.6;
+  col += mix(u.sunLow, u.sunTop, 0.5) * exp(-r * 9.0) * 0.3;
+  // Stars above the glow.
+  if (h > 0.08) {
+    let g = rd.xy / max(rd.z, 0.2) * 120.0;
+    let id = floor(g);
+    let st = hash21(id + u.seed);
+    let tw = 0.6 + 0.4 * sin(u.time * 2.0 + st * 40.0);
+    let off = vec2f(hash21(id + 3.1), hash21(id + 7.7)) - 0.5;
+    let dd = length(fract(g) - 0.5 - off * 0.6);
+    col += vec3f(1.0) * step(0.985, st) * smoothstep(0.12, 0.0, dd) * tw * u.stars * smoothstep(0.08, 0.35, h);
+  }
+  return col;
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let q = vec2f((uv.x - 0.5) * u.aspect, 0.5 - uv.y);
+  let ro = u.camPos;
+  let rd = camBasis(q);
+  let far = 140.0;
+  let top = u.height * 1.1 + 0.2;
+  var col = sky(rd);
+  var t = 0.0;
+  var hit = false;
+  if (ro.y > top) {
+    if (rd.y < 0.0) { t = (top - ro.y) / rd.y; } else { t = far; }
+  }
+  var prevT = t;
+  for (var i = 0; i < 150; i++) {
+    if (t >= far) { break; }
+    let p = ro + rd * t;
+    let dh = p.y - terrain(p.xz);
+    if (dh < 0.002 * t) { hit = true; break; }
+    prevT = t;
+    t += max(dh * 0.42, 0.015 + t * 0.004);
+  }
+  if (hit) {
+    // Tighten the crossing so the grid sits exactly on the surface.
+    var lo = prevT;
+    var hi = t;
+    var dLo = (ro + rd * lo).y - terrain((ro + rd * lo).xz);
+    var dHi = (ro + rd * hi).y - terrain((ro + rd * hi).xz);
+    for (var k = 0; k < 7; k++) {
+      // Secant step: aim where the height gap crosses zero, not just halfway.
+      let m = mix(lo, hi, clamp(dLo / max(dLo - dHi, 1e-5), 0.1, 0.9));
+      let pm = ro + rd * m;
+      let dm = pm.y - terrain(pm.xz);
+      if (dm < 0.0) { hi = m; dHi = dm; } else { lo = m; dLo = dm; }
+    }
+    t = mix(lo, hi, clamp(dLo / max(dLo - dHi, 1e-5), 0.0, 1.0));
+    let p = ro + rd * t;
+    let e = 0.05;
+    let hC = terrain(p.xz);
+    let n = normalize(vec3f(hC - terrain(p.xz + vec2f(e, 0.0)), e, hC - terrain(p.xz + vec2f(0.0, e))));
+    // Pixel footprint on the ground, in grid cells.
+    let foot = u.pixel * t / max(abs(dot(n, rd)), 0.12) / u.gridScale;
+    let g = p.xz / u.gridScale;
+    let dist = abs(fract(g - 0.5) - 0.5);
+    let wpx = dist / max(foot, 1e-5);
+    let lineW = 1.35;
+    var lineA = 1.0 - smoothstep(lineW - 0.5, lineW + 0.5, min(wpx.x, wpx.y));
+    // Past the point where cells shrink under a few pixels, trade lines for
+    // their average brightness so nothing shimmers.
+    let fade = smoothstep(0.25, 0.08, foot);
+    lineA = mix(clamp(foot * 2.2, 0.0, 0.6), lineA, fade);
+    let shade = 0.35 + 0.65 * clamp(dot(n, normalize(vec3f(0.3, 0.7, 0.6))), 0.0, 1.0);
+    let heightTint = smoothstep(0.0, u.height, p.y);
+    var surf = u.fill * shade * (0.6 + 0.8 * heightTint);
+    surf += u.line * lineA * (1.3 + 0.9 * heightTint);
+    // Haze toward the horizon, tinted like the sky low down.
+    let fog = 1.0 - exp(-pow(t / far, 1.6) * 5.0);
+    col = mix(surf, u.skyLow * 0.9 + mix(u.sunLow, u.sunTop, 0.5) * 0.08, fog);
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+const DOWN = /* wgsl */ `
+struct P { texel: vec2f, threshold: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  var c = vec3f(0.0);
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      c += textureSampleLevel(src, samp, uv + vec2f(f32(x), f32(y)) * p.texel * 1.5, 0.0).rgb;
+    }
+  }
+  c /= 9.0;
+  let l = max(c.r, max(c.g, c.b));
+  return vec4f(c * smoothstep(p.threshold, p.threshold + 0.4, l), 1.0);
+}
+`;
+
+const BLUR = /* wgsl */ `
+struct P { dir: vec2f }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let w = array<f32, 5>(0.227, 0.194, 0.122, 0.054, 0.016);
+  var c = textureSampleLevel(src, samp, uv, 0.0).rgb * w[0];
+  for (var i = 1; i < 5; i++) {
+    let o = p.dir * f32(i) * 1.8;
+    c += (textureSampleLevel(src, samp, uv + o, 0.0).rgb + textureSampleLevel(src, samp, uv - o, 0.0).rgb) * w[i];
+  }
+  return vec4f(c, 1.0);
+}
+`;
+
+const FINISH = /* wgsl */ `
+struct F { aberration: f32, glow: f32, scan: f32, time: f32, aspect: f32, lines: f32 }
+@group(0) @binding(0) var<uniform> f: F;
+@group(0) @binding(1) var scene: texture_2d<f32>;
+@group(0) @binding(2) var glow: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+fn h(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(12.9898, 78.233))) * 43758.5453); }
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let c = uv - 0.5;
+  let r2 = dot(c * vec2f(f.aspect, 1.0), c * vec2f(f.aspect, 1.0));
+  // Stronger toward the edges, like a real lens.
+  let off = c * f.aberration * (0.4 + r2 * 1.6);
+  var col = vec3f(
+    textureSampleLevel(scene, samp, uv - off, 0.0).r,
+    textureSampleLevel(scene, samp, uv, 0.0).g,
+    textureSampleLevel(scene, samp, uv + off, 0.0).b);
+  let gl = vec3f(
+    textureSampleLevel(glow, samp, uv - off * 2.0, 0.0).r,
+    textureSampleLevel(glow, samp, uv, 0.0).g,
+    textureSampleLevel(glow, samp, uv + off * 2.0, 0.0).b);
+  col += gl * f.glow;
+  let sl = 0.5 + 0.5 * sin(pos.y * 3.14159 * f.lines);
+  col *= 1.0 - f.scan * 0.35 * sl;
+  col *= 1.0 - 0.5 * smoothstep(0.25, 0.95, r2);
+  col = col / (1.0 + col * 0.18);
+  // Palettes and lighting work in linear light; the canvas wants sRGB-ish.
+  col = pow(max(col, vec3f(0.0)), vec3f(1.0 / 2.2));
+  col += (h(pos.xy + f.time) - 0.5) * 0.025;
+  return vec4f(col, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// PALETTES
+// ═══════════════════════════════════════
+const hex = (s) => [1, 3, 5].map((i) => Math.pow(parseInt(s.slice(i, i + 2), 16) / 255, 2.2));
+const PALETTES = {
+  outrun: { skyTop: '#07021a', skyLow: '#7a0f5a', sunTop: '#ffe36b', sunLow: '#ff2d7a', line: '#ff3cd4', fill: '#12031f', stars: 1 },
+  vapor:  { skyTop: '#130a33', skyLow: '#e37ac2', sunTop: '#fff6b0', sunLow: '#ff79c6', line: '#7df9ff', fill: '#1c1040', stars: 0.8 },
+  grid:   { skyTop: '#000207', skyLow: '#032a3a', sunTop: '#e8fdff', sunLow: '#35d9ff', line: '#2af4ff', fill: '#010912', stars: 1 },
+  amber:  { skyTop: '#050200', skyLow: '#3b1600', sunTop: '#ffd27a', sunLow: '#ff7a00', line: '#ffb000', fill: '#0c0500', stars: 0.6 },
+  mono:   { skyTop: '#040404', skyLow: '#2a2a2a', sunTop: '#ffffff', sunLow: '#9a9a9a', line: '#f2f2f2', fill: '#0a0a0a', stars: 1 },
+};
+const pal = (name) => {
+  const p = PALETTES[name];
+  return { skyTop: hex(p.skyTop), skyLow: hex(p.skyLow), sunTop: hex(p.sunTop), sunLow: hex(p.sunLow), line: hex(p.line), fill: hex(p.fill), stars: p.stars };
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const IDS = ['speed', 'height', 'grid', 'aberration', 'glow', 'scan'];
+
+const p = {};
+function readControls() {
+  p.speed = +$('speed').value / 100;
+  p.height = 1.5 + +$('height').value / 100 * 9;
+  p.gridScale = 1.6 - +$('grid').value / 100 * 1.1;
+  p.aberration = +$('aberration').value / 100 * 0.018;
+  p.glow = +$('glow').value / 100 * 1.6;
+  p.scan = +$('scan').value / 100;
+  p.pal = pal($('palette').value);
+  for (const id of IDS) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+// Same winding road as the shader, so the camera can follow it.
+const path = (z) => Math.sin(z * 0.045) * 6 + Math.sin(z * 0.013 + 1.3) * 10;
+
+let seed = Math.random() * 50;
+let t = 0, camZ = 0;
+let steer = 0, climb = 1.3, steerGoal = 0, climbGoal = 1.3;
+let yaw = 0, roll = 0;
+const tl = tilt();
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+// Ray marching is the expensive part, so the scene renders at up to 1.5×
+// pixel density and the glow at a quarter of that.
+const surf = surface(gpu, canvas, { dpr: [1, 1.5] });
+const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+const size = () => [Math.max(1, surf.size[0]), Math.max(1, surf.size[1])];
+const quarter = () => [Math.max(1, Math.round(surf.size[0] / 4)), Math.max(1, Math.round(surf.size[1] / 4))];
+const sceneT = target(gpu, { size: size(), format: 'rgba16float' });
+const glowA = target(gpu, { size: quarter(), format: 'rgba16float' });
+const glowB = target(gpu, { size: quarter(), format: 'rgba16float' });
+
+const sceneE = effect(gpu, SCENE, { set: { u: {
+  skyTop: p.pal.skyTop, time: 0, skyLow: p.pal.skyLow, height: p.height,
+  sunTop: p.pal.sunTop, gridScale: p.gridScale, sunLow: p.pal.sunLow, seed,
+  line: p.pal.line, aspect: 1, fill: p.pal.fill, camZ: 0,
+  camPos: [0, 1, 0], yaw: 0, pitch: 0, roll: 0, pixel: 0.001, stars: p.pal.stars,
+} } });
+const downE = effect(gpu, DOWN, { set: { p: { texel: [0.001, 0.001], threshold: 0.35 }, src: sceneT, samp: linear } });
+const blurH = effect(gpu, BLUR, { set: { p: { dir: [0.01, 0] }, src: glowB, samp: linear } });
+const blurV = effect(gpu, BLUR, { set: { p: { dir: [0, 0.01] }, src: glowA, samp: linear } });
+const finE = effect(gpu, FINISH, { set: {
+  f: { aberration: p.aberration, glow: p.glow, scan: p.scan, time: 0, aspect: 1, lines: 0.5 },
+  scene: sceneT, glow: glowB, samp: linear,
+} });
+
+surf.onResize(({ width, height }) => {
+  const aspect = width / height;
+  sceneT.resize(size());
+  glowA.resize(quarter()); glowB.resize(quarter());
+  downE.set({ p: { texel: [1 / width, 1 / height] }, src: sceneT });
+  blurH.set({ p: { dir: [1 / glowA.size[0], 0] }, src: glowB });
+  blurV.set({ p: { dir: [0, 1 / glowA.size[1]] }, src: glowA });
+  finE.set({ f: { aspect, lines: Math.max(0.33, 1 / (window.devicePixelRatio || 1)) * 0.66 }, scene: sceneT, glow: glowB });
+  // Height of one pixel on a plane one unit in front of the camera.
+  sceneE.set({ u: { aspect, pixel: 1 / (1.55 * height) } });
+});
+
+function applyControls() {
+  readControls();
+  const c = p.pal;
+  sceneE.set({ u: { skyTop: c.skyTop, skyLow: c.skyLow, sunTop: c.sunTop, sunLow: c.sunLow, line: c.line, fill: c.fill,
+    stars: c.stars, height: p.height, gridScale: p.gridScale, seed } });
+  finE.set({ f: { aberration: p.aberration, glow: p.glow, scan: p.scan } });
+}
+
+// ═══════════════════════════════════════
+// FLYING: drag steers across the valley and climbs; tilt banks
+// ═══════════════════════════════════════
+let dragging = false, dragFrom = null, dragStart = null;
+canvas.addEventListener('pointerdown', (e) => { dragging = true; dragFrom = [e.clientX, e.clientY]; dragStart = [steerGoal, climbGoal]; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = (e.clientX - dragFrom[0]) / canvas.clientWidth, dy = (e.clientY - dragFrom[1]) / canvas.clientHeight;
+  steerGoal = Math.max(-1.6, Math.min(1.6, dragStart[0] + dx * 4));
+  climbGoal = Math.max(0.35, Math.min(6, dragStart[1] - dy * 8));
+});
+const release = () => { dragging = false; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+const clk = clock(gpu);
+let fpsCount = 0, fpsAt = performance.now();
+
+function step(dt) {
+  t += dt;
+  camZ += dt * (1.5 + p.speed * 16);
+  const ease = 1 - Math.exp(-dt * 2.5);
+  const tiltSteer = tl.active ? tl.x * 1.4 : 0;
+  steer += (Math.max(-1.6, Math.min(1.6, steerGoal + tiltSteer)) - steer) * ease;
+  climb += (climbGoal - climb) * ease;
+  const x = path(camZ) + steer;
+  // Look a little way down the road so the camera leans into the bends.
+  const ahead = 9;
+  const yawGoal = Math.atan2(path(camZ + ahead) + steer - x, ahead);
+  const bend = yawGoal - yaw;
+  yaw += bend * (1 - Math.exp(-dt * 4));
+  const rollGoal = -bend * 2.2 - (tl.active ? tl.x * 0.35 : 0);
+  roll += (rollGoal - roll) * (1 - Math.exp(-dt * 3));
+  // Keep the horizon a little above the middle, lower as the camera climbs.
+  const pitch = 0.03 - climb * 0.035 + (tl.active ? (tl.y - 0.5) * 0.12 : 0);
+  sceneE.set({ u: { time: t, camZ, camPos: [x, climb, camZ], yaw, pitch, roll } });
+  finE.set({ f: { time: t % 50 } });
+}
+
+function render(f) {
+  f.pass(sceneT, sceneE);
+  f.pass(glowB, downE);    // scene → bright parts, quarter size
+  f.pass(glowA, blurH);    // glowB → glowA, across
+  f.pass(glowB, blurV);    // glowA → glowB, down
+  f.pass(surf, finE);
+}
+
+let loop = null, playing = false;
+function tick(f) {
+  step(Math.min(clk.deltaTime, 0.1));
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of IDS) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  seed = Math.random() * 50;
+  camZ = Math.random() * 400;
+  applyControls();
+  if (!playing) frame(gpu, render);
+});
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'wire-terrain-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+step(0);
+togglePlay();
+</script>
+</body>
+</html>
