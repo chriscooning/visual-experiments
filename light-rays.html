@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Light Rays — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="dawn" selected>Dawn</option>
+      <option value="prism">Prism</option>
+      <option value="ice">Ice</option>
+      <option value="violet">Violet</option>
+      <option value="ember">Ember</option>
+      <option value="mono">Monochrome</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Cloud Scale <span class="val" id="scaleVal">3</span></label><input type="range" id="scale" min="10" max="80" value="30"></div>
+  <div class="control-group"><label>Coverage <span class="val" id="coverVal">50</span></label><input type="range" id="cover" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Drift <span class="val" id="driftVal">30</span></label><input type="range" id="drift" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Ray Length <span class="val" id="lengthVal">70</span></label><input type="range" id="length" min="10" max="100" value="70"></div>
+  <div class="control-group"><label>Falloff <span class="val" id="decayVal">95</span></label><input type="range" id="decay" min="80" max="99" value="95"></div>
+  <div class="control-group"><label>Exposure <span class="val" id="exposureVal">120</span></label><input type="range" id="exposure" min="10" max="300" value="120"></div>
+  <div class="control-group"><label>Grain <span class="val" id="grainVal">25</span></label><input type="range" id="grain" min="0" max="100" value="25"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to move the light · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+
+// ═══════════════════════════════════════
+// SHADERS
+// Three passes: an occlusion mask (the light, minus the clouds in front of
+// it) at half resolution, a radial blur that streaks that mask away from the
+// light, then a full-resolution composite with the clouds drawn crisp on top.
+// ═══════════════════════════════════════
+const NOISE = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 {
+  var q = fract(p * vec2f(123.34, 456.21));
+  q += dot(q, q + 45.32);
+  return fract(q.x * q.y);
+}
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x),
+             mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0;
+  var a = 0.5;
+  var s = 0.0;
+  for (var k = 0; k < 5; k++) {
+    s += a * vnoise(p);
+    p = p * 2.03 + vec2f(1.7, 9.2);
+    a *= 0.5;
+  }
+  return s;
+}
+// 1 where a cloud blocks the light, 0 where it is clear. Domain-warped fbm
+// so the edges curl instead of looking like blotchy noise.
+fn cover(uv: vec2f, aspect: f32, t: f32, scale: f32, amount: f32, seed: f32) -> f32 {
+  let p = vec2f(uv.x * aspect, uv.y) * scale + vec2f(seed, seed * 0.37);
+  let w = vec2f(fbm(p + vec2f(0.0, t * 0.05)), fbm(p + vec2f(5.2, 1.3) - vec2f(t * 0.04)));
+  let n = fbm(p + 2.2 * w + vec2f(t * 0.03, 0.0));
+  let edge = mix(0.66, 0.36, amount);
+  return smoothstep(edge - 0.035, edge + 0.035, n);
+}
+`;
+
+const OCCLUDE = NOISE + /* wgsl */ `
+struct Scene { light: vec2f, aspect: f32, time: f32, scale: f32, amount: f32, seed: f32, sun: f32 }
+@group(0) @binding(0) var<uniform> scene: Scene;
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let d = length((uv - scene.light) * vec2f(scene.aspect, 1.0));
+  // A hot core and a tight halo, no ambient term: rays should only come
+  // from the light itself, through the gaps.
+  let glow = smoothstep(0.075, 0.0, d) * 4.0 + 0.9 * exp(-d * 10.0);
+  let open = 1.0 - cover(uv, scene.aspect, scene.time, scene.scale, scene.amount, scene.seed);
+  return vec4f(vec3f(glow * open * scene.sun), 1.0);
+}
+`;
+
+const RAYS = /* wgsl */ `
+struct Rays { light: vec2f, reach: f32, decay: f32, disp: f32, seed: f32 }
+@group(0) @binding(0) var<uniform> rays: Rays;
+@group(0) @binding(1) var occ: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+const N = 48;
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  // Step from this pixel toward the light, summing the mask with a falloff.
+  let stepv = (rays.light - uv) * rays.reach / f32(N);
+  // A per-pixel start offset trades banding for fine noise the grain hides.
+  let jitter = fract(sin(dot(uv, vec2f(12.9898, 78.233)) + rays.seed) * 43758.5453);
+  var sum = vec3f(0.0);
+  var w = 1.0;
+  for (var i = 0; i < N; i++) {
+    let o = f32(i) + jitter;
+    // Prism: red streaks a little further than green, blue a little less.
+    let r = textureSampleLevel(occ, samp, uv + stepv * o * (1.0 + rays.disp), 0.0).r;
+    let g = textureSampleLevel(occ, samp, uv + stepv * o, 0.0).r;
+    let b = textureSampleLevel(occ, samp, uv + stepv * o * (1.0 - rays.disp), 0.0).r;
+    sum += vec3f(r, g, b) * w;
+    w *= rays.decay;
+  }
+  let norm = (1.0 - pow(rays.decay, f32(N))) / (1.0 - rays.decay);
+  return vec4f(sum / norm, 1.0);
+}
+`;
+
+const COMPOSITE = NOISE + /* wgsl */ `
+struct Look {
+  tint: vec3f, exposure: f32,
+  bg: vec3f, grain: f32,
+  ink: vec3f, time: f32,
+  light: vec2f, aspect: f32, scale: f32,
+  amount: f32, seed: f32, drift: f32,
+}
+@group(0) @binding(0) var<uniform> look: Look;
+@group(0) @binding(1) var raysTex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let d = length((uv - look.light) * vec2f(look.aspect, 1.0));
+  let cov = cover(uv, look.aspect, look.drift, look.scale, look.amount, look.seed);
+  var col = look.bg * (0.25 + 0.75 * exp(-d * 2.5));
+  col = mix(col, look.ink, cov * 0.92);
+  col += textureSampleLevel(raysTex, samp, uv, 0.0).rgb * look.tint * look.exposure * 5.0;
+  col += look.tint * smoothstep(0.03, 0.0, d) * (1.0 - cov) * 2.5;
+  col = 1.0 - exp(-col * 1.3);
+  let vig = 1.0 - 0.45 * smoothstep(0.35, 1.1, length((uv - 0.5) * vec2f(look.aspect, 1.0)));
+  let n = hash21(pos.xy + vec2f(look.time * 61.0, look.time * 17.0)) - 0.5;
+  return vec4f(col * vig + n * look.grain, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// PALETTES — ray tint, sky, cloud ink, prism split
+// ═══════════════════════════════════════
+const PALETTES = {
+  dawn:   { tint: [1.0, 0.72, 0.4],  bg: [0.18, 0.09, 0.05], ink: [0.02, 0.012, 0.015], disp: 0 },
+  prism:  { tint: [1.0, 1.0, 1.0],   bg: [0.05, 0.05, 0.07], ink: [0.008, 0.008, 0.012], disp: 0.16 },
+  ice:    { tint: [0.55, 0.86, 1.0], bg: [0.03, 0.08, 0.13], ink: [0.004, 0.01, 0.02],   disp: 0 },
+  violet: { tint: [0.82, 0.56, 1.0], bg: [0.08, 0.03, 0.13], ink: [0.012, 0.005, 0.02],  disp: 0.04 },
+  ember:  { tint: [1.0, 0.36, 0.16], bg: [0.13, 0.03, 0.02], ink: [0.015, 0.004, 0.004], disp: 0 },
+  mono:   { tint: [0.95, 0.94, 0.9], bg: [0.07, 0.07, 0.07], ink: [0.0, 0.0, 0.0],       disp: 0 },
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+const p = {};
+function readControls() {
+  p.scale = +$('scale').value / 10;
+  p.amount = +$('cover').value / 100;
+  p.drift = +$('drift').value / 100;
+  p.reach = +$('length').value / 100;
+  p.decay = +$('decay').value / 100;
+  p.exposure = +$('exposure').value / 100;
+  p.grain = +$('grain').value / 100 * 0.12;
+  p.palette = PALETTES[$('palette').value];
+  $('scaleVal').textContent = p.scale.toFixed(1);
+  for (const id of ['cover', 'drift', 'length', 'decay', 'exposure', 'grain']) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+let seed = Math.random() * 100;
+let t = 0;                     // cloud time: advances with Drift, freezes on pause
+let orbit = Math.random() * 50; // the light's idle wander
+let light = [0.5, 0.4];
+let userLight = null, userUntil = 0;
+
+// ═══════════════════════════════════════
+// GPU
+// ═══════════════════════════════════════
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();   // added by controls.js; nothing to control here
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const half = () => [Math.max(1, Math.round(surf.size[0] / 2)), Math.max(1, Math.round(surf.size[1] / 2))];
+const occT = target(gpu, { size: half(), format: 'rgba16float' });
+const raysT = target(gpu, { size: half(), format: 'rgba16float' });
+const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+
+const occE = effect(gpu, OCCLUDE, { set: { scene: {
+  light, aspect: 1, time: 0, scale: p.scale, amount: p.amount, seed, sun: 1,
+} } });
+const raysE = effect(gpu, RAYS, { set: {
+  rays: { light, reach: p.reach, decay: p.decay, disp: p.palette.disp, seed },
+  occ: occT, samp: linear,
+} });
+const compE = effect(gpu, COMPOSITE, { set: {
+  look: {
+    tint: p.palette.tint, exposure: p.exposure, bg: p.palette.bg, grain: p.grain, ink: p.palette.ink,
+    time: 0, light, aspect: 1, scale: p.scale, amount: p.amount, seed, drift: 0,
+  },
+  raysTex: raysT, samp: linear,
+} });
+
+surf.onResize(({ width, height }) => {
+  const aspect = width / height;
+  occT.resize(half());
+  raysT.resize(half());
+  raysE.set({ occ: occT });
+  compE.set({ raysTex: raysT });
+  occE.set({ scene: { aspect } });
+  compE.set({ look: { aspect } });
+});
+
+function applyControls() {
+  readControls();
+  const pal = p.palette;
+  occE.set({ scene: { scale: p.scale, amount: p.amount, seed } });
+  raysE.set({ rays: { reach: p.reach, decay: p.decay, disp: pal.disp, seed } });
+  compE.set({ look: {
+    tint: pal.tint, bg: pal.bg, ink: pal.ink, exposure: p.exposure, grain: p.grain,
+    scale: p.scale, amount: p.amount, seed,
+  } });
+}
+
+// ═══════════════════════════════════════
+// LIGHT: follows a finger or the mouse while dragging, wanders otherwise
+// ═══════════════════════════════════════
+function toUV(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+}
+let dragging = false;
+canvas.addEventListener('pointerdown', (e) => { dragging = true; userLight = toUV(e); userUntil = Infinity; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) userLight = toUV(e); });
+const release = () => { if (dragging) { dragging = false; userUntil = performance.now() + 2500; } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+function wander() {
+  return [0.5 + 0.26 * Math.sin(orbit * 0.23) + 0.06 * Math.sin(orbit * 0.71),
+          0.42 + 0.16 * Math.cos(orbit * 0.31) + 0.05 * Math.sin(orbit * 0.53)];
+}
+
+// ═══════════════════════════════════════
+// FRAME
+// ═══════════════════════════════════════
+const clk = clock(gpu);
+let fpsCount = 0, fpsAt = performance.now();
+
+function step(dt) {
+  t += dt * (0.2 + p.drift * 3);
+  orbit += dt;
+  const goal = userLight && performance.now() < userUntil ? userLight : wander();
+  if (!userLight || performance.now() >= userUntil) userLight = null;
+  const k = 1 - Math.exp(-dt * (dragging ? 18 : 2.5));
+  light = [light[0] + (goal[0] - light[0]) * k, light[1] + (goal[1] - light[1]) * k];
+  occE.set({ scene: { light, time: t } });
+  raysE.set({ rays: { light } });
+  compE.set({ look: { light, time: clk.time, drift: t } });
+}
+
+function render(f) {
+  f.pass(occT, occE);
+  f.pass(raysT, raysE);
+  f.pass(surf, compE);
+}
+
+let loop = null, playing = false;
+function tick(f) {
+  step(Math.min(clk.deltaTime, 0.1));
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+// ═══════════════════════════════════════
+// CONTROLS
+// ═══════════════════════════════════════
+for (const id of ['scale', 'cover', 'drift', 'length', 'decay', 'exposure', 'grain']) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  seed = Math.random() * 100;
+  t = Math.random() * 40;
+  applyControls();
+  if (!playing) frame(gpu, render);
+});
+$('save').addEventListener('click', () => {
+  // A WebGPU canvas only holds its image until the browser presents it, so
+  // draw a frame and read it back in the same task.
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'light-rays-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+light = wander();
+applyControls();
+togglePlay();
+</script>
+</body>
+</html>
