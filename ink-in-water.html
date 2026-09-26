@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Ink in Water — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Ink</label>
+    <select id="palette">
+      <option value="indigo" selected>Indigo</option>
+      <option value="marbling">Marbling</option>
+      <option value="sumi">Sumi</option>
+      <option value="glow">Bioluminescent</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Ink Amount <span class="val" id="amountVal">55</span></label><input type="range" id="amount" min="10" max="100" value="55"></div>
+  <div class="control-group"><label>Swirl <span class="val" id="swirlVal">45</span></label><input type="range" id="swirl" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Sink <span class="val" id="sinkVal">35</span></label><input type="range" id="sink" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Linger <span class="val" id="lingerVal">60</span></label><input type="range" id="linger" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Drips <span class="val" id="dripsVal">35</span></label><input type="range" id="drips" min="0" max="100" value="35"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to stir in ink · Tilt to pour · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADERS — a stable-fluids solver (Stam), one small effect per step.
+// Velocity lives on a coarse grid of square cells, in screen-height units per
+// second, with y pointing down the screen like uv. Ink lives on a finer grid
+// as the amount of red, green and blue light it absorbs.
+// ═══════════════════════════════════════
+const ADVECT = /* wgsl */ `
+struct A { dt: f32, keep: f32, aspect: f32 }
+@group(0) @binding(0) var<uniform> a: A;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var vel: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let v = textureSampleLevel(vel, samp, uv, 0.0).xy;
+  let back = uv - a.dt * vec2f(v.x / a.aspect, v.y);
+  return textureSampleLevel(src, samp, back, 0.0) * a.keep;
+}
+`;
+
+const SPLAT = /* wgsl */ `
+struct S { pos: vec2f, radius: f32, aspect: f32, value: vec3f, on: f32 }
+@group(0) @binding(0) var<uniform> s: S;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let d = (uv - s.pos) * vec2f(s.aspect, 1.0);
+  let g = exp(-dot(d, d) / (s.radius * s.radius)) * s.on;
+  let c = textureSampleLevel(src, samp, uv, 0.0);
+  return vec4f(c.rgb + s.value * g, 1.0);
+}
+`;
+
+// Ink is heavier than water: it sinks along gravity in proportion to how
+// much of it there is. Tilting the phone turns gravity.
+const BODY = /* wgsl */ `
+struct B { gravity: vec2f, dt: f32 }
+@group(0) @binding(0) var<uniform> b: B;
+@group(0) @binding(1) var vel: texture_2d<f32>;
+@group(0) @binding(2) var ink: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let v = textureSampleLevel(vel, samp, uv, 0.0);
+  let i = textureSampleLevel(ink, samp, uv, 0.0).rgb;
+  let density = min(i.r + i.g + i.b, 3.0);
+  return vec4f(v.xy + b.gravity * density * b.dt, 0.0, 1.0);
+}
+`;
+
+const GRID = /* wgsl */ `
+struct G { texel: vec2f, h: f32, dt: f32, amount: f32 }
+@group(0) @binding(0) var<uniform> g: G;
+`;
+
+const CURL = GRID + /* wgsl */ `
+@group(0) @binding(1) var vel: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let l = textureSampleLevel(vel, samp, uv - vec2f(g.texel.x, 0.0), 0.0).y;
+  let r = textureSampleLevel(vel, samp, uv + vec2f(g.texel.x, 0.0), 0.0).y;
+  let u = textureSampleLevel(vel, samp, uv - vec2f(0.0, g.texel.y), 0.0).x;
+  let d = textureSampleLevel(vel, samp, uv + vec2f(0.0, g.texel.y), 0.0).x;
+  return vec4f(((r - l) - (d - u)) / (2.0 * g.h), 0.0, 0.0, 1.0);
+}
+`;
+
+// Vorticity confinement: puts back the small eddies the coarse grid smears
+// out, which is what makes ink curl instead of just blurring.
+const VORT = GRID + /* wgsl */ `
+@group(0) @binding(1) var vel: texture_2d<f32>;
+@group(0) @binding(2) var curl: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let l = abs(textureSampleLevel(curl, samp, uv - vec2f(g.texel.x, 0.0), 0.0).x);
+  let r = abs(textureSampleLevel(curl, samp, uv + vec2f(g.texel.x, 0.0), 0.0).x);
+  let u = abs(textureSampleLevel(curl, samp, uv - vec2f(0.0, g.texel.y), 0.0).x);
+  let d = abs(textureSampleLevel(curl, samp, uv + vec2f(0.0, g.texel.y), 0.0).x);
+  let w = textureSampleLevel(curl, samp, uv, 0.0).x;
+  var n = vec2f(r - l, d - u);
+  n = n / (length(n) + 1e-5);
+  // Scaled by the cell size so the push is proportional to the local flow.
+  let f = g.amount * g.h * w * vec2f(n.y, -n.x);
+  let v = textureSampleLevel(vel, samp, uv, 0.0).xy;
+  return vec4f(v + f * g.dt, 0.0, 1.0);
+}
+`;
+
+const DIVERGE = GRID + /* wgsl */ `
+@group(0) @binding(1) var vel: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let l = textureSampleLevel(vel, samp, uv - vec2f(g.texel.x, 0.0), 0.0).x;
+  let r = textureSampleLevel(vel, samp, uv + vec2f(g.texel.x, 0.0), 0.0).x;
+  let u = textureSampleLevel(vel, samp, uv - vec2f(0.0, g.texel.y), 0.0).y;
+  let d = textureSampleLevel(vel, samp, uv + vec2f(0.0, g.texel.y), 0.0).y;
+  return vec4f(((r - l) + (d - u)) / (2.0 * g.h), 0.0, 0.0, 1.0);
+}
+`;
+
+const PRESSURE = GRID + /* wgsl */ `
+@group(0) @binding(1) var pres: texture_2d<f32>;
+@group(0) @binding(2) var div: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let l = textureSampleLevel(pres, samp, uv - vec2f(g.texel.x, 0.0), 0.0).x;
+  let r = textureSampleLevel(pres, samp, uv + vec2f(g.texel.x, 0.0), 0.0).x;
+  let u = textureSampleLevel(pres, samp, uv - vec2f(0.0, g.texel.y), 0.0).x;
+  let d = textureSampleLevel(pres, samp, uv + vec2f(0.0, g.texel.y), 0.0).x;
+  let dv = textureSampleLevel(div, samp, uv, 0.0).x;
+  return vec4f((l + r + u + d - dv * g.h * g.h) * 0.25, 0.0, 0.0, 1.0);
+}
+`;
+
+const PROJECT = GRID + /* wgsl */ `
+@group(0) @binding(1) var pres: texture_2d<f32>;
+@group(0) @binding(2) var vel: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let l = textureSampleLevel(pres, samp, uv - vec2f(g.texel.x, 0.0), 0.0).x;
+  let r = textureSampleLevel(pres, samp, uv + vec2f(g.texel.x, 0.0), 0.0).x;
+  let u = textureSampleLevel(pres, samp, uv - vec2f(0.0, g.texel.y), 0.0).x;
+  let d = textureSampleLevel(pres, samp, uv + vec2f(0.0, g.texel.y), 0.0).x;
+  let v = textureSampleLevel(vel, samp, uv, 0.0).xy - vec2f(r - l, d - u) / (2.0 * g.h);
+  // Walls: stop flow through the screen edges.
+  let e = g.texel * 1.5;
+  var w = v;
+  if (uv.x < e.x || uv.x > 1.0 - e.x) { w.x = 0.0; }
+  if (uv.y < e.y || uv.y > 1.0 - e.y) { w.y = 0.0; }
+  return vec4f(w, 0.0, 1.0);
+}
+`;
+
+// Ink absorbs light, so thicker ink is darker in its own colour; the glow
+// palette flips that and lets ink emit instead. A little shading from the
+// ink's slope gives the clouds some body.
+const DISPLAY = /* wgsl */ `
+struct D { paper: vec3f, emissive: f32, texel: vec2f, aspect: f32, time: f32 }
+@group(0) @binding(0) var<uniform> d: D;
+@group(0) @binding(1) var ink: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let i = max(textureSampleLevel(ink, samp, uv, 0.0).rgb, vec3f(0.0));
+  let sx = textureSampleLevel(ink, samp, uv + vec2f(d.texel.x * 2.0, 0.0), 0.0).rgb - textureSampleLevel(ink, samp, uv - vec2f(d.texel.x * 2.0, 0.0), 0.0).rgb;
+  let sy = textureSampleLevel(ink, samp, uv + vec2f(0.0, d.texel.y * 2.0), 0.0).rgb - textureSampleLevel(ink, samp, uv - vec2f(0.0, d.texel.y * 2.0), 0.0).rgb;
+  let slope = dot(sx + sy, vec3f(0.333));
+  let bg = d.paper * (1.0 - 0.18 * smoothstep(0.3, 1.1, length((uv - 0.5) * vec2f(d.aspect, 1.0))));
+  var col: vec3f;
+  if (d.emissive > 0.5) {
+    col = bg + (1.0 - exp(-i * 1.4)) * 1.1 + max(slope, 0.0) * 0.4;
+  } else {
+    col = bg * exp(-i * 1.6) * (1.0 + clamp(slope * 0.8, -0.25, 0.25));
+  }
+  let n = fract(sin(dot(pos.xy, vec2f(12.9898, 78.233)) + d.time) * 43758.5453) - 0.5;
+  return vec4f(col + n * 0.012, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// INKS — paper colour and the inks one stroke cycles through (as the
+// colour you see; absorbing inks are converted to what they absorb).
+// ═══════════════════════════════════════
+const PALETTES = {
+  indigo:   { paper: [0.93, 0.94, 0.92], inks: [[0.12, 0.2, 0.55], [0.2, 0.35, 0.7]], emissive: 0 },
+  marbling: { paper: [0.95, 0.92, 0.86], inks: [[0.75, 0.12, 0.15], [0.1, 0.3, 0.65], [0.95, 0.7, 0.1], [0.1, 0.5, 0.45]], emissive: 0 },
+  sumi:     { paper: [0.92, 0.9, 0.84], inks: [[0.05, 0.05, 0.06], [0.25, 0.24, 0.24]], emissive: 0 },
+  glow:     { paper: [0.0, 0.015, 0.035], inks: [[0.1, 0.9, 0.8], [0.3, 0.4, 1.0], [0.8, 0.25, 0.9]], emissive: 1 },
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+
+const p = {};
+function readControls() {
+  p.amount = 0.4 + +$('amount').value / 100 * 1.6;
+  p.swirl = +$('swirl').value / 100 * 30;
+  p.sink = +$('sink').value / 100 * 1.2;
+  // Fraction of ink kept per frame: 0.99 fades in a second, 0.9998 lingers for a minute.
+  p.linger = 0.99 + Math.sqrt(+$('linger').value / 100) * 0.0098;
+  p.drips = +$('drips').value / 100;
+  p.palette = PALETTES[$('palette').value];
+  for (const id of ['amount', 'swirl', 'sink', 'linger', 'drips']) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+const tl = tilt();
+let inkIndex = 0;
+function nextInk(scale) {
+  const pal = p.palette;
+  const c = pal.inks[inkIndex++ % pal.inks.length];
+  // Absorbing ink: absorb what it doesn't reflect. Glowing ink: emit its colour.
+  const v = pal.emissive ? c : c.map((x) => (1 - x) * 1.2);
+  return v.map((x) => x * scale * p.amount);
+}
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+const F = 'rgba16float';
+
+// Grids keep the screen's aspect so their cells stay square.
+const VEL_H = 150, INK_H = 720;
+let aspect = 1;
+const velSize = () => [Math.max(8, Math.round(VEL_H * aspect)), VEL_H];
+const inkSize = () => {
+  const h = Math.min(INK_H, Math.max(64, surf.size[1]));
+  return [Math.max(8, Math.round(h * aspect)), h];
+};
+const mk = (size) => target(gpu, { size, format: F });
+let velA = mk(velSize()), velB = mk(velSize()), inkA = mk(inkSize()), inkB = mk(inkSize());
+const presA = mk(velSize()), presB = mk(velSize()), curlT = mk(velSize()), divT = mk(velSize());
+
+const gridU = () => ({ texel: [1 / velA.size[0], 1 / velA.size[1]], h: 1 / velA.size[1], dt: 1 / 60, amount: p.swirl });
+const advV = effect(gpu, ADVECT, { set: { a: { dt: 1 / 60, keep: 0.999, aspect }, samp: linear } });
+const advI = effect(gpu, ADVECT, { set: { a: { dt: 1 / 60, keep: p.linger, aspect }, samp: linear } });
+const splatV = effect(gpu, SPLAT, { set: { s: { pos: [0.5, 0.5], radius: 0.05, aspect, value: [0, 0, 0], on: 0 }, samp: linear } });
+const splatI = effect(gpu, SPLAT, { set: { s: { pos: [0.5, 0.5], radius: 0.05, aspect, value: [0, 0, 0], on: 0 }, samp: linear } });
+const body = effect(gpu, BODY, { set: { b: { gravity: [0, 0], dt: 1 / 60 }, samp: linear } });
+const curlE = effect(gpu, CURL, { set: { g: gridU(), samp: linear } });
+const vortE = effect(gpu, VORT, { set: { g: gridU(), samp: linear } });
+const divE = effect(gpu, DIVERGE, { set: { g: gridU(), samp: linear } });
+const presE = effect(gpu, PRESSURE, { set: { g: gridU(), samp: linear } });
+const projE = effect(gpu, PROJECT, { set: { g: gridU(), samp: linear } });
+const show = effect(gpu, DISPLAY, { set: { d: { paper: p.palette.paper, emissive: p.palette.emissive, texel: [1 / inkA.size[0], 1 / inkA.size[1]], aspect, time: 0 }, samp: linear } });
+
+let needClear = true;
+surf.onResize(({ width, height }) => {
+  aspect = width / height;
+  for (const tgt of [velA, velB, presA, presB, curlT, divT]) tgt.resize(velSize());
+  inkA.resize(inkSize()); inkB.resize(inkSize());
+  const gu = gridU();
+  for (const e of [curlE, vortE, divE, presE, projE]) e.set({ g: gu });
+  advV.set({ a: { aspect } }); advI.set({ a: { aspect } });
+  splatV.set({ s: { aspect } }); splatI.set({ s: { aspect } });
+  show.set({ d: { aspect, texel: [1 / inkA.size[0], 1 / inkA.size[1]] } });
+  needClear = true;   // vgpu resizes at the start of a frame; clear inside it
+});
+
+function applyControls() {
+  readControls();
+  advI.set({ a: { keep: p.linger } });
+  const gu = gridU();
+  for (const e of [curlE, vortE, divE, presE, projE]) e.set({ g: gu });
+  show.set({ d: { paper: p.palette.paper, emissive: p.palette.emissive } });
+}
+
+// ═══════════════════════════════════════
+// INPUT: drags stir and ink, drips fall on their own
+// ═══════════════════════════════════════
+const queue = [];
+let last = null, dragging = false;
+function toUV(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+}
+canvas.addEventListener('pointerdown', (e) => {
+  dragging = true; last = toUV(e); canvas.setPointerCapture(e.pointerId);
+  queue.push({ pos: last, vel: [0, 0], ink: nextInk(1.4), radius: 0.035 });
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const now = toUV(e);
+  const dv = [(now[0] - last[0]) * aspect * 60 * 1.6, (now[1] - last[1]) * 60 * 1.6];
+  if (Math.hypot(dv[0], dv[1]) > 0.02) queue.push({ pos: now, vel: dv, ink: nextInk(0.5), radius: 0.028 });
+  last = now;
+});
+const release = () => { dragging = false; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+function drip() {
+  const x = 0.15 + Math.random() * 0.7;
+  queue.push({ pos: [x, 0.08 + Math.random() * 0.25], vel: [(Math.random() - 0.5) * 0.4, 0.6 + Math.random() * 0.6], ink: nextInk(1.1), radius: 0.03 + Math.random() * 0.025 });
+}
+
+// ═══════════════════════════════════════
+// FRAME
+// ═══════════════════════════════════════
+const clk = clock(gpu);
+let fpsCount = 0, fpsAt = performance.now(), t = 0;
+
+function pass(f, tgt, fx) { f.pass(tgt, fx); }
+
+function clearAll(f) {
+  needClear = false;
+  for (const tgt of [velA, velB, inkA, inkB, presA, presB]) f.pass({ target: tgt, clear: [0, 0, 0, 1] }, () => {});
+}
+
+function simulate(f) {
+  if (needClear) clearAll(f);
+  let s;
+  // splats: one per field per frame, the rest wait their turn
+  if ((s = queue.shift())) {
+    splatV.set({ s: { pos: s.pos, radius: s.radius, value: [s.vel[0], s.vel[1], 0], on: 1 }, src: velA });
+    pass(f, velB, splatV); [velA, velB] = [velB, velA];
+    splatI.set({ s: { pos: s.pos, radius: s.radius, value: s.ink, on: 1 }, src: inkA });
+    pass(f, inkB, splatI); [inkA, inkB] = [inkB, inkA];
+  }
+  const down = tl.active && Math.hypot(tl.x, tl.y) > 0.15 ? [tl.x, tl.y] : [0, 1];
+  body.set({ b: { gravity: [down[0] * p.sink, down[1] * p.sink] }, vel: velA, ink: inkA });
+  pass(f, velB, body); [velA, velB] = [velB, velA];
+
+  curlE.set({ vel: velA }); pass(f, curlT, curlE);
+  vortE.set({ vel: velA, curl: curlT }); pass(f, velB, vortE); [velA, velB] = [velB, velA];
+
+  divE.set({ vel: velA }); pass(f, divT, divE);
+  f.pass({ target: presA, clear: [0, 0, 0, 1] }, () => {});
+  let pa = presA, pb = presB;
+  for (let i = 0; i < 20; i++) {
+    presE.set({ pres: pa, div: divT }); pass(f, pb, presE); [pa, pb] = [pb, pa];
+  }
+  projE.set({ pres: pa, vel: velA }); pass(f, velB, projE); [velA, velB] = [velB, velA];
+
+  advV.set({ src: velA, vel: velA }); pass(f, velB, advV); [velA, velB] = [velB, velA];
+  advI.set({ src: inkA, vel: velA }); pass(f, inkB, advI); [inkA, inkB] = [inkB, inkA];
+}
+
+function render(f) {
+  show.set({ ink: inkA, d: { time: t % 100 } });
+  f.pass(surf, show);
+}
+
+let loop = null, playing = false, dripClock = 0;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  t += dt;
+  dripClock += dt * p.drips;
+  if (dripClock > 0.9) { dripClock = 0; drip(); }
+  simulate(f);
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of ['amount', 'swirl', 'sink', 'linger', 'drips']) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', () => {
+  // Absorbing and glowing inks store different things, so start clean.
+  needClear = true;
+  queue.length = 0;
+  applyControls();
+  for (let i = 0; i < 3; i++) drip();
+});
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  needClear = true;
+  queue.length = 0;
+  for (let i = 0; i < 3; i++) drip();
+  if (!playing) frame(gpu, (f) => { clearAll(f); render(f); });
+});
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'ink-in-water-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+for (let i = 0; i < 3; i++) drip();
+togglePlay();
+</script>
+</body>
+</html>
