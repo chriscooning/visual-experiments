@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Headlands — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="fog" selected>Fog</option>
+      <option value="golden">Golden Hour</option>
+      <option value="earle">Earle</option>
+      <option value="dusk">Dusk</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Bridge</label>
+    <select id="bridge">
+      <option value="on" selected>Bridge</option>
+      <option value="off">No bridge</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Fog <span class="val" id="fogVal">60</span></label><input type="range" id="fog" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Ridges <span class="val" id="ridgesVal">50</span></label><input type="range" id="ridges" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Clouds <span class="val" id="cloudsVal">45</span></label><input type="range" id="clouds" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Glitter <span class="val" id="glitterVal">60</span></label><input type="range" id="glitter" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Drift <span class="val" id="speedVal">30</span></label><input type="range" id="speed" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Grain <span class="val" id="grainVal">35</span></label><input type="range" id="grain" min="0" max="100" value="35"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to move the sun · Tilt for depth · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+const SHADER = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var a = 0.5; var s = 0.0;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, 9.2); a *= 0.5; }
+  return s / 0.9375;
+}
+// Coverage of a shape from its signed distance (negative inside), one pixel wide.
+fn fillA(d: f32, px: f32) -> f32 { return clamp(0.5 - d / px, 0.0, 1.0); }
+// Coverage of an outline of half-width w along the shape's edge.
+fn strokeA(d: f32, w: f32, px: f32) -> f32 { return clamp(0.5 - (abs(d) - w) / px, 0.0, 1.0); }
+fn sdBox(p: vec2f, b: vec2f) -> f32 { let d = abs(p) - b; return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0); }
+fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+fn sdTri(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f) -> f32 {
+  let e0 = p1 - p0; let e1 = p2 - p1; let e2 = p0 - p2;
+  let v0 = p - p0; let v1 = p - p1; let v2 = p - p2;
+  let pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  let pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  let pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  let s = sign(e0.x * e2.y - e0.y * e2.x);
+  let d = min(min(vec2f(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+                  vec2f(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+                  vec2f(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+  return -sqrt(d.x) * sign(d.y);
+}
+fn rot2(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * p.x - s * p.y, s * p.x + c * p.y); }
+// Paper: a little fibre and grain, and ink that prints slightly unevenly.
+fn paperize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
+  let fibre = 0.965 + 0.035 * vnoise(pos * vec2f(0.02, 0.09));
+  let speck = hash21(floor(pos / 1.5)) - 0.5;
+  return col * fibre * (1.0 + speck * grain * 0.6) + (hash21(pos) - 0.5) * grain * 0.25;
+}
+// Registration mark: a ring with a cross through it.
+fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
+  let q = p - c;
+  let ring = strokeA(length(q) - r, px * 0.6, px);
+  let cross = max(strokeA(sdSeg(q, vec2f(-r * 1.7, 0.0), vec2f(r * 1.7, 0.0)), px * 0.5, px),
+                  strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
+  return max(ring, cross);
+}
+
+// Headlands: the Big Sur coast after Eyvind Earle. Ridges recede in flat,
+// graduated colour with gullies combed into their slopes and fog pooling at
+// their feet; a banded sky of stratus; a sea whose ripples crowd toward the
+// horizon and glitter under the sun. In front: a dark headland with a cabin
+// and windswept cypresses, a concrete arch bridge on a far ridge, pelicans
+// and a couple of boats.
+struct U {
+  a: vec4f,   // time, aspect, px, seed
+  b: vec4f,   // fog, ridge count, clouds, glitter
+  c: vec4f,   // _, _, flow time, grain
+  d: vec4f,   // tilt x, y, sun x, sun y
+  e: vec4f,   // tree count, bridge, _, _
+  cols: array<vec4f, 14>,
+  trees: array<vec4f, 6>,
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+const HY = 0.06;   // horizon
+
+
+@diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+@diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
+
+@diagnostic(off, derivative_uniformity) fn ridgeT(i: i32) -> f32 { return f32(i) / max(u.b.y - 1.0, 1.0); }
+@diagnostic(off, derivative_uniformity) fn ridgeBase(i: i32) -> f32 { return HY + mix(0.0, 0.03, ridgeT(i)); }
+@diagnostic(off, derivative_uniformity) fn ridgeTop(i: i32, X: f32) -> f32 {
+  let ti = ridgeT(i);
+  let endX = mix(1.4, 0.35, ti);
+  let H = mix(0.13, 0.34, ti);
+  let s = smoothstep(endX, endX - 1.3 - 0.3 * ti, X);
+  let bumps = 0.82 + 0.16 * sin(X * (5.0 + ti * 4.0) + f32(i) * 2.1 + u.a.w)
+            + 0.4 * (fbm(vec2f(X * 3.0 + f32(i) * 11.0, u.a.w)) - 0.5);
+  return ridgeBase(i) - H * s * bumps;
+}
+@diagnostic(off, derivative_uniformity) fn headTop(X: f32) -> f32 {
+  let k = smoothstep(-0.85, 0.05, X);
+  return 0.1 + 0.02 * sin(X * 4.0 + u.a.w) + 0.62 * k * k + 0.012 * (fbm(vec2f(X * 16.0, u.a.w)) - 0.5);
+}
+
+// An Earle cypress: a leaning trunk and flat, layered canopy pads with
+// scalloped undersides and combed needle lines. Returns colour and coverage.
+@diagnostic(off, derivative_uniformity) fn cypress(q: vec2f, s: f32, lean: f32, sd: f32, px: f32) -> vec4f {
+  let h = 0.13 * s;
+  let top = vec2f(lean * h * 0.35, -h * 0.55);
+  var trunk = sdSeg(q, vec2f(0.0), top) - 0.0045 * s;
+  trunk = min(trunk, sdSeg(q, top * 0.55, top * 0.55 + vec2f(-h * 0.32, -h * 0.22)) - 0.0026 * s);
+  trunk = min(trunk, sdSeg(q, top * 0.7, top * 0.7 + vec2f(h * 0.38, -h * 0.28)) - 0.0024 * s);
+  var col = C(11);
+  var a = fillA(trunk, px);
+  for (var k = 0; k < 4; k++) {
+    let fk = f32(k);
+    let c = vec2f(top.x + (hash1(sd + fk * 3.7) - 0.5) * h * 0.7, -h * (0.5 + 0.14 * fk));
+    let r = vec2f(h * (0.5 - 0.08 * fk) * (0.8 + 0.4 * hash1(sd + fk)), h * 0.085);
+    var pad = (length((q - c) / r) - 1.0) * r.y;
+    // Lumps hanging from the underside.
+    pad -= step(c.y, q.y) * step(abs(q.x - c.x), r.x * 0.9) * 0.45 * r.y * abs(sin((q.x - c.x) / r.x * 7.0 + sd));
+    let inPad = fillA(pad, px);
+    var fc = C(12);
+    // Combed needle lines, following the pad.
+    let comb = fract((q.y - c.y + 0.25 * r.y * sin((q.x - c.x) / r.x * 9.0)) / (r.y * 0.28));
+    fc = mix(fc, C(11), step(0.72, comb) * 0.55);
+    // Sunward rim along the top of each pad.
+    fc = mix(fc, C(13), strokeA(pad, px * 0.7, px) * step(q.y, c.y) * 0.8);
+    col = mix(col, fc, inPad);
+    a = max(a, inPad);
+  }
+  return vec4f(col, a);
+}
+
+@diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let t = u.a.x; let asp = u.a.y; let px = u.a.z; let ft = u.c.z;
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
+  let X0 = p.x / (0.5 * asp);
+  let tilt = u.d.xy;
+  let sun = u.d.zw;
+  var col: vec3f;
+
+  if (p.y < HY) {
+    // Sky: graduated in flat steps like a serigraph.
+    let g = clamp((p.y + 0.5) / (HY + 0.5), 0.0, 1.0);
+    col = mix(C(0), C(1), post(pow(g, 1.3), 10.0));
+    let ds = length(p - sun);
+    col = mix(col, C(2), post(exp(-ds * 11.0) * 0.7, 5.0));
+    col = mix(col, C(2), fillA(ds - 0.042, px));
+    // Stratus bands drifting slowly.
+    for (var k = 0; k < 7; k++) {
+      let fk = f32(k);
+      let yk = -0.47 + fk * 0.072 + 0.02 * sin(fk * 3.1 + u.a.w);
+      let dy = p.y - yk;
+      if (abs(dy) < 0.06) {
+        let n = fbm(vec2f(X0 * 0.7 + ft * 0.012 * (1.0 + fk * 0.3) + fk * 5.0, dy * 24.0 + fk + u.a.w));
+        let m = n * (1.0 - smoothstep(0.015, 0.055, abs(dy)));
+        let th = 0.6 - u.b.z * 0.3;
+        let ca = clamp(0.5 + (m - th) / max(fwidth(m), 1e-4), 0.0, 1.0);
+        var cc = mix(C(4), C(3), post(smoothstep(th + 0.02, th + 0.16, m), 1.0));
+        // Edges nearest the sun catch the light.
+        cc = mix(cc, C(2), post(exp(-length(p - sun) * 4.0) * smoothstep(th + 0.1, th, m), 2.0) * 0.8);
+        col = mix(col, cc, ca * (0.55 + 0.45 * u.b.z));
+      }
+    }
+    // Pelicans gliding in a line, wings beating now and then.
+    for (var k = 0; k < 6; k++) {
+      let fk = f32(k);
+      let bp = vec2f(-0.65 * asp + fract(t * 0.01 + u.a.w * 0.1) * 1.5 * asp + fk * 0.028,
+                     -0.2 + fk * 0.007 + 0.012 * sin(t * 0.3 + fk * 0.4));
+      let flap = sin(t * 5.0 + fk * 0.6) * step(0.0, sin(t * 0.7 + fk * 0.3));
+      let w = 0.009;
+      let q = p - bp;
+      let bird = min(sdSeg(q, vec2f(0.0), vec2f(-w, -0.003 - flap * 0.004)), sdSeg(q, vec2f(0.0), vec2f(w, -0.003 - flap * 0.004)));
+      col = mix(col, C(11), strokeA(bird, px * 0.7, px) * 0.85);
+    }
+  } else {
+    // Sea.
+    let yS = p.y - HY;
+    var sc = mix(C(8), C(9), post(smoothstep(0.0, 0.42, yS), 6.0));
+    let sunUp = step(sun.y, HY);
+    let path = exp(-abs(p.x - sun.x) / (0.006 + yS * 0.18)) * sunUp;
+    sc = mix(sc, C(10), path * 0.3);
+    // Ripple rows crowd toward the horizon.
+    let r = log(yS + 0.004) * 55.0;
+    let rowId = floor(r);
+    let fr = fract(r);
+    let c = p.x / (0.003 + yS * 0.05) + hash1(rowId) * 13.0 + sin(t * 0.4 + rowId) * 0.3;
+    let colId = floor(c);
+    let rip = step(fr, 0.14) * step(0.4, hash21(vec2f(floor(colId * 0.3), rowId)));
+    sc = mix(sc, sc * 0.86, rip);
+    // Glitter: short dashes that blink, thickest along the sun's path.
+    let h = hash21(vec2f(colId, rowId) + floor(t * 3.0 + hash1(colId + rowId * 7.0) * 3.0));
+    let prob = u.b.w * (0.03 + 0.6 * path);
+    let dash = step(abs(fract(c) - 0.5), 0.34) * step(abs(fr - 0.5), 0.2);
+    sc = mix(sc, C(10), step(h, prob) * dash);
+    col = sc;
+    // Boats with spreading wakes.
+    for (var k = 0; k < 2; k++) {
+      let fk = f32(k);
+      let bpos = vec2f((hash1(u.a.w + fk) - 0.4) * asp * 0.6 + fract(t * 0.002 + fk * 0.5) * 0.1, HY + 0.01 + 0.05 * hash1(u.a.w * 2.0 + fk));
+      let q = p - bpos;
+      let sz = 0.4 + (bpos.y - HY) * 8.0;
+      let wake = min(sdSeg(q, vec2f(0.0), vec2f(-0.03, 0.004) * sz), sdSeg(q, vec2f(0.0), vec2f(-0.03, -0.001) * sz));
+      col = mix(col, C(10), strokeA(wake, px * 0.5, px) * 0.6);
+      col = mix(col, C(11), fillA(sdBox(q, vec2f(0.004, 0.0012) * sz), px));
+      col = mix(col, C(3), fillA(sdTri(q, vec2f(0.0, -0.0012), vec2f(0.0, -0.008) * sz, vec2f(0.004, -0.0012) * sz), px));
+    }
+  }
+
+  // Ridges, far to near, each with fog drifting at its feet.
+  let n = i32(u.b.y);
+  for (var i = 0; i < 8; i++) {
+    if (i >= n) { break; }
+    let ti = ridgeT(i);
+    let X = X0 + tilt.x * 0.03 * ti;
+    let tp = ridgeTop(i, X);
+    let base = ridgeBase(i);
+    if (p.y > tp - px * 2.0 && p.y < base + px * 2.0) {
+      var rc = mix(C(5), C(6), ti);
+      let depth = clamp((p.y - tp) / max(base - tp, 1e-3), 0.0, 1.0);
+      let gv = X * (24.0 + 34.0 * ti) + 2.8 * fbm(vec2f(X * 5.0 + f32(i), p.y * 28.0));
+      let gully = smoothstep(0.7, 0.88, fract(gv));
+      rc = mix(rc, rc * 0.8, gully * (1.0 - depth) * 0.9);
+      rc = mix(rc, C(7), post(smoothstep(0.25, 1.0, depth) * u.b.x * 0.9, 4.0));
+      rc = mix(rc, C(7), (1.0 - ti) * 0.55 * u.b.x);
+      let a = fillA(tp - p.y, px) * fillA(p.y - base, px);
+      col = mix(col, rc, a);
+      col = mix(col, C(13), strokeA(p.y - tp, px * 0.6, px) * (0.35 + 0.5 * ti) * step(p.y, base));
+      // Surf line where the ridge meets the sea.
+      let land = step(tp, base - 0.003);
+      let foam = step(0.45, fbm(vec2f(X * 50.0 + t * 0.3, f32(i))));
+      col = mix(col, C(10), strokeA(p.y - base, px * 0.7, px) * land * foam * 0.8);
+      // Highway 1, cut into the nearer slopes: a pale line with a dark shoulder.
+      if (ti > 0.45) {
+        let ry = mix(tp, base, 0.55 + 0.08 * sin(X * 9.0 + f32(i))) ;
+        let rd = p.y - ry;
+        let on = step(tp + 0.01, ry) * step(ry, base - 0.006);
+        col = mix(col, mix(rc, C(11), 0.5), strokeA(rd - px * 1.2, px * 0.6, px) * on * a);
+        col = mix(col, C(3), strokeA(rd, px * 0.6, px) * on * a);
+      }
+    }
+    // Sea stacks: a few jagged rocks off the nearer points, ringed with foam.
+    let endX = mix(1.4, 0.35, ti);
+    let nStacks = i32(step(0.3, ti) + step(0.7, hash1(f32(i) * 5.3 + u.a.w)));
+    for (var k = 0; k < 2; k++) {
+      if (k >= nStacks) { break; }
+      let fk = f32(k);
+      let sx = (endX - 0.02 + fk * 0.09 + 0.05 * hash1(f32(i) + fk + u.a.w) - tilt.x * 0.03 * ti) * 0.5 * asp;
+      let ssz = (0.006 + 0.012 * ti) * (0.6 + 0.8 * hash1(f32(i) * 3.0 + fk));
+      let q = p - vec2f(sx, base + 0.003 * ti);
+      // A lumpy, flat-topped rock: its top edge follows noise.
+      let edge = -ssz * (0.9 + 0.5 * (fbm(vec2f(q.x / ssz * 1.3 + fk * 7.0, f32(i))) - 0.5)) * (1.0 - pow(abs(q.x) / (ssz * 1.6), 2.0));
+      let rock = max(edge - q.y, max(abs(q.x) - ssz * 1.6, q.y));
+      var rcol = mix(C(6), C(7), (1.0 - ti) * 0.5 * u.b.x);
+      rcol = mix(rcol, C(13), strokeA(edge - q.y, px * 0.6, px) * step(q.x, 0.0) * 0.6);
+      col = mix(col, rcol, fillA(rock, px));
+      let ring = abs(length(q / vec2f(1.0, 0.22)) - ssz * (1.9 + 0.25 * sin(t * 1.5 + fk + f32(i))));
+      col = mix(col, C(10), strokeA(ring * 0.22, px * 0.5, px) * step(0.0, q.y) * 0.8);
+    }
+    // The bridge on the second-nearest ridge.
+    if (i == n - 2 && u.e.y > 0.5) {
+      let ti2 = ridgeT(i);
+      let Xb = mix(1.4, 0.35, ti2) - 0.5;
+      let bx = (Xb - tilt.x * 0.03 * ti2) * 0.5 * asp;
+      let tb = ridgeTop(i, Xb);
+      let deck = mix(tb, base, 0.4);
+      let w = 0.045;
+      let q = p - vec2f(bx, deck);
+      // Canyon shadow under the span.
+      let canyon = sdTri(q, vec2f(-w, 0.0), vec2f(w, 0.0), vec2f(0.0, base - deck));
+      col = mix(col, mix(C(6), C(11), 0.5), fillA(canyon, px) * 0.7);
+      let archR = vec2f(w * 0.85, (base - deck) * 0.75);
+      let arch = abs(length((q - vec2f(0.0, archR.y)) / archR) - 1.0) * archR.y - 0.0012;
+      let archD = max(arch, q.y - archR.y);
+      var bd = min(archD, sdBox(q, vec2f(w, 0.0014)));
+      for (var k = -5; k <= 5; k++) {
+        let cx = f32(k) * w * 0.16;
+        let ay = archR.y * (1.0 - sqrt(max(0.0, 1.0 - pow(cx / archR.x, 2.0))));
+        bd = min(bd, sdSeg(q, vec2f(cx, 0.0), vec2f(cx, ay)) - 0.0006);
+      }
+      col = mix(col, C(3), fillA(bd, px));
+    }
+    // Fog drifting along the ridge's feet.
+    let fy = base - 0.012 - 0.03 * ti;
+    let fd = p.y - fy;
+    if (abs(fd) < 0.05) {
+      let fnz = fbm(vec2f(X0 * 2.4 - ft * 0.02 * (1.0 + ti), fd * 22.0 + f32(i) * 7.0 + u.a.w));
+      let fm = fnz * (1.0 - smoothstep(0.012, 0.05, abs(fd)));
+      let fa = clamp(0.5 + (fm - 0.42) / max(fwidth(fm), 1e-4), 0.0, 1.0) * u.b.x;
+      col = mix(col, C(7), fa * 0.85);
+    }
+  }
+
+  // Foreground headland.
+  let Xh = X0 + tilt.x * 0.06;
+  let ht = headTop(Xh);
+  if (p.y > ht - 0.2) {
+    var hc = C(11);
+    // Chaparral clumps catching a little light near the crest.
+    let g = p / 0.011;
+    let cell = floor(g);
+    let hh = hash21(cell + u.a.w);
+    let clump = fillA(length(fract(g) - 0.5 - (vec2f(hash1(hh), hash1(hh * 3.0)) - 0.5) * 0.4) - 0.28 * hh, 1.0 / 0.011 * px);
+    hc = mix(hc, C(12), clump * smoothstep(0.12, 0.0, p.y - ht) * 0.6);
+    col = mix(col, hc, fillA(ht - p.y, px));
+    col = mix(col, C(13), strokeA(p.y - ht, px * 0.6, px) * 0.4);
+    // Cabin with a lit window.
+    let Xc = -0.9;
+    let cb = vec2f((Xc - tilt.x * 0.06) * 0.5 * asp, headTop(Xc) + 0.002);
+    let q = p - cb;
+    let body = sdBox(q - vec2f(0.0, -0.012), vec2f(0.016, 0.012));
+    let roof = sdTri(q, vec2f(-0.022, -0.022), vec2f(0.022, -0.022), vec2f(0.0, -0.045));
+    let chim = sdBox(q - vec2f(-0.009, -0.038), vec2f(0.003, 0.008));
+    col = mix(col, C(11), fillA(min(min(body, roof), chim), px));
+    col = mix(col, C(13), strokeA(roof, px * 0.6, px) * step(q.x, 0.0) * 0.6);
+    col = mix(col, C(2), fillA(sdBox(q - vec2f(0.005, -0.013), vec2f(0.004, 0.004)), px));
+  }
+  // Cypresses along the crest.
+  for (var j = 0; j < 6; j++) {
+    if (f32(j) >= u.e.x) { break; }
+    let tr = u.trees[j];
+    let bx = vec2f((tr.x - tilt.x * 0.06) * 0.5 * asp, headTop(tr.x) + 0.004);
+    let cy = cypress(p - bx, tr.y, tr.z, tr.w, px);
+    col = mix(col, cy.rgb, cy.a);
+  }
+  return vec4f(paperize(col, pos.xy, u.c.w), 1.0);
+}
+`;
+
+const NAME = 'headlands';
+// skyTop, skyLow, sun, cloud, cloudShade, ridgeFar, ridgeNear, fog, seaFar, seaNear, glitter, dark, foliage, rim
+const PALETTES = {
+  fog:    ['#5e5e5e', '#d2d2cf', '#f6f6f2', '#bcbcb9', '#7c7c7a', '#a8a8a5', '#3e3e3d', '#dededa', '#cbcbc8', '#858583', '#ffffff', '#0c0c0c', '#161616', '#e8e8e4'],
+  golden: ['#3d6fb3', '#f3cf8a', '#fff4c2', '#ebe3d4', '#6c6d7e', '#6f8a8a', '#3a6436', '#f1d9a8', '#9fb3c1', '#2c5c84', '#fff1b0', '#1c3518', '#2e5024', '#ffd36a'],
+  earle:  ['#133a47', '#e7a55f', '#ffe7a6', '#f2c9a0', '#7b4f6e', '#8c6088', '#3a2d5a', '#e9b7a0', '#e4b389', '#1b3d61', '#fff0c4', '#0f1829', '#1d3040', '#ffcf7a'],
+  dusk:   ['#1a1a3a', '#e46a4f', '#ffd08a', '#f0907a', '#5a3a5e', '#6c4a79', '#2d2346', '#f2a58e', '#e8896e', '#212855', '#ffd9a8', '#0d0b19', '#161428', '#ffb070'],
+};
+
+const p = {};
+function readControls() {
+  p.pal = colsOf($('palette').value);
+  p.fog = +$('fog').value / 100;
+  p.ridges = 3 + Math.round(+$('ridges').value / 100 * 4);
+  p.clouds = +$('clouds').value / 100;
+  p.glitter = +$('glitter').value / 100;
+  p.speed = +$('speed').value / 100;
+  p.grain = +$('grain').value / 100 * 0.1;
+  p.bridge = $('bridge').value === 'on' ? 1 : 0;
+  for (const id of ['fog', 'ridges', 'clouds', 'glitter', 'speed', 'grain']) $(id + 'Val').textContent = $(id).value;
+}
+let ft = 0, sun = [0.2, -0.06], sunGoal = [0.2, -0.06], trees = [];
+function generate() {
+  const R = Math.random;
+  trees = [];
+  const n = 2 + Math.floor(R() * 4);
+  for (let i = 0; i < n; i++) trees.push([-0.82 + R() * 0.55, 0.7 + R() * 0.6, -0.4 + R() * 1.2, R() * 50]);
+  trees.sort((a, b) => a[1] - b[1]);
+  ft = R() * 100;
+}
+function uniforms() {
+  const tr = [];
+  for (let i = 0; i < 6; i++) tr.push(trees[i] || [0, 1, 0, 0]);
+  return {
+    a: [t, aspect, 1 / Math.max(1, H), seed],
+    b: [p.fog, p.ridges, p.clouds, p.glitter],
+    c: [0, 0, ft, p.grain],
+    d: [tl.active ? tl.x : 0, tl.active ? tl.y - 0.5 : 0, sun[0], sun[1]],
+    e: [trees.length, p.bridge, 0, 0],
+    cols: p.pal, trees: tr,
+  };
+}
+function step(dt) {
+  ft += dt * (0.2 + p.speed * 2);
+  const k = 1 - Math.exp(-dt * 4);
+  sun[0] += (sunGoal[0] - sun[0]) * k; sun[1] += (sunGoal[1] - sun[1]) * k;
+}
+function onDown(q) { sunGoal = [q[0], Math.min(q[1], 0.03)]; }
+function onMove(q) { sunGoal = [q[0], Math.min(q[1], 0.03)]; }
+function onUp() {}
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const colsOf = (name) => PALETTES[name].map((h) => [...hex(h), 1]);
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const clk = clock(gpu);
+const tl = tilt();
+let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
+let seed = Math.random() * 100;
+
+function toP(e) {
+  const r = canvas.getBoundingClientRect();
+  return [((e.clientX - r.left) / r.width - 0.5) * aspect, (e.clientY - r.top) / r.height - 0.5];
+}
+let dragging = false, pointer = [0, 0];
+canvas.addEventListener('pointerdown', (e) => { dragging = true; pointer = toP(e); canvas.setPointerCapture(e.pointerId); onDown(pointer); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) { pointer = toP(e); onMove(pointer); } });
+const release = () => { if (dragging) { dragging = false; onUp(); } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+readControls();
+generate();
+const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
+
+function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
+let fpsCount = 0, fpsAt = performance.now();
+let loop = null, playing = false;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  t += dt;
+  step(dt);
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const el of document.querySelectorAll('#panel input[type=range]')) el.addEventListener('input', readControls);
+for (const el of document.querySelectorAll('#panel select')) el.addEventListener('change', readControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => { seed = Math.random() * 100; generate(); if (!playing) frame(gpu, render); });
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = NAME + '-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+// The viewer may already have pressed Play while WebGPU was starting up.
+if (!playing) togglePlay();
+</script>
+</body>
+</html>
