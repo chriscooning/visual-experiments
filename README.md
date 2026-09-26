@@ -6,6 +6,14 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
+**Studio · WebGPU** (newest first)
+
+Animated versions of my own paintings. A brush layer rebuilds each scene from hundreds of painted marks laid along the scene's own stroke directions, with a second pass of fine strokes and pointillist dots.
+
+- **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, dark brush with spirals of yellow dots
+- **Palm Row**: palms with dotted trunks and shaggy heads against a coral-to-mint sky, over a pointillist hillside
+- **Windswept**: wind-bent cypresses on a dune above a turquoise sea
+
 **Big Sur · WebGPU** (newest first)
 
 The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees drawn leaf by leaf, fog, glitter and a lot of small detail. Drag to move the sun in each.
