@@ -141,6 +141,31 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
+fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
+  let f = fract(rot2(p, 0.785) / cell) - 0.5;
+  let r = sqrt(clamp(amt, 0.0, 1.0) / 3.14159) * cell;
+  return fillA(length(f) * cell - r, px) * step(0.01, amt);
+}
+// Printed sun or moon: rings around a disc of radius r0.
+fn rings(p: vec2f, c: vec2f, r0: f32, gap: f32, n: f32, px: f32) -> f32 {
+  let d = length(p - c) - r0;
+  let on = step(gap * 0.5, d) * step(d, gap * (n + 0.5));
+  return strokeA((fract(d / gap + 0.5) - 0.5) * gap, px * 0.55, px) * on;
+}
+// Scalloped wave crests: a row of arcs along y = y0.
+fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
+  let f = (fract(p.x / w) - 0.5) * w;
+  let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
+  return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
+}
+// Small bird: two ink arcs.
+fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
+  let q = (p - c) / s;
+  let x = abs(q.x);
+  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
+  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
+}
 
 // Poppy Hill: a hillside of poppies broken by dark scrub, a eucalyptus
 // grove with pale trunks, a dark cypress windbreak, a violet forested ridge
@@ -160,6 +185,13 @@ struct U {
 
 @diagnostic(off, derivative_uniformity) fn goldTop(x: f32) -> f32 { return -0.42 + 0.12 * smoothstep(-0.2, 0.7, x) + 0.02 * sin(x * 5.0 + u.a.w); }
 @diagnostic(off, derivative_uniformity) fn ridgeTop(x: f32) -> f32 { return -0.3 + 0.1 * smoothstep(-0.8, 0.2, x) - 0.08 * smoothstep(0.3, 0.8, x) + 0.012 * sin(x * 21.0 + u.a.w) + 0.01 * (vnoise(vec2f(x * 60.0, 1.0)) - 0.5); }
+// The ridge's crest is a row of conifer tips.
+@diagnostic(off, derivative_uniformity) fn ridgeEdge(x: f32) -> f32 {
+  let w = 0.013;
+  let id = floor(x / w);
+  let f = fract(x / w);
+  return ridgeTop(x) - (0.008 + 0.014 * hash1(id + u.a.w)) * (1.0 - abs(f - 0.5) * 2.0);
+}
 @diagnostic(off, derivative_uniformity) fn fieldTop(x: f32) -> f32 { return -0.02 + 0.03 * sin(x * 3.0 + u.a.w) - 0.05 * smoothstep(0.1, 0.8, x); }
 @diagnostic(off, derivative_uniformity) fn groveD(q: vec2f) -> f32 {
   // Eucalyptus crowns: a lumpy mass on the right.
@@ -219,7 +251,7 @@ struct U {
     P.ang = -0.3 + (r - 0.5);
     return P;
   }
-  if (q.y > ridgeTop(q.x)) {
+  if (q.y > ridgeEdge(q.x)) {
     let band = i32(floor(ridgeField(q)));
     let shade = smoothstep(-0.3, 0.1, q.y);
     P.col = mix(C(2 + (band % 2)), C(4), shade * 0.6 + select(0.0, 0.15, band % 3 == 2));
@@ -244,7 +276,7 @@ struct U {
   let pxs = px * k;
   let br = u.b.y;
   var col = scene(s, 0.5).col;
-  col = paintLayer(s, 0.022 * br, 0.95, 0.3, 1.0, pxs, col, false);
+  col = paintLayer(s, 0.017 * br, 0.95, 0.3, 1.0, pxs, col, false);
   // Eucalyptus trunks: pale thin lines rising into the crowns.
   for (var i = 0; i < 9; i++) {
     let fi = f32(i);
@@ -255,12 +287,77 @@ struct U {
     let d = sdSeg(s, b0, b1 + vec2f(sw, 0.0));
     col = mix(col, select(C(17), C(15), hash1(fi * 3.0) > 0.5), fillA(d - 0.0016, pxs) * step(groveD(s) + 0.02, 0.1));
   }
-  col = paintLayer(s, 0.009 * br, 0.95, 0.3, 2.0, pxs, col, true);
+  col = paintLayer(s, 0.0072 * br, 0.95, 0.3, 2.0, pxs, col, true);
+  let t = u.a.x;
+  // Oaks dotted over the gold hill, each with a shadow.
+  {
+    let ow = 0.06;
+    let oi = floor(s.x / ow);
+    for (var o = -1; o <= 1; o++) {
+      let id = oi + f32(o);
+      let h = hash1(id * 2.3 + u.a.w);
+      if (h < 0.5) { continue; }
+      let ox = (id + 0.5 + (hash1(id * 5.1) - 0.5) * 0.5) * ow;
+      let top = goldTop(ox);
+      let oy = mix(top, ridgeEdge(ox), 0.25 + 0.5 * hash1(id * 7.7)) ;
+      if (oy > ridgeEdge(ox) - 0.012) { continue; }
+      let rad = 0.008 + 0.005 * h;
+      let v = s - vec2f(ox, oy);
+      let sh = length((v - vec2f(rad * 0.9, rad * 0.8)) / vec2f(1.6, 0.6)) - rad;
+      let cd = length(v) - rad * (1.0 + 0.2 * (vnoise(v / rad * 2.0 + id) - 0.5));
+      let vis = step(s.y, ridgeEdge(s.x)) * step(0.0, groveD(s)) * step(0.0, cypressD(s));
+      col = mix(col, mix(C(15), C(12), 0.45), fillA(sh, pxs) * vis * 0.7);
+      col = mix(col, C(5), fillA(cd, pxs) * vis);
+      col = mix(col, C(7), fillA(length(v + rad * 0.35) - rad * 0.4, pxs) * fillA(cd, pxs) * vis * 0.7);
+      col = mix(col, INK, strokeA(cd, pxs * 0.5, pxs) * vis * 0.8);
+    }
+  }
+  // Foreground poppies: open cups, bigger toward the bottom edge.
+  let ftS = fieldTop(s.x);
+  if (s.y > ftS + 0.03) {
+    // Rows in perspective: each row a little taller than the one behind it.
+    let rowF = log(1.0 + (s.y - ftS) / 0.1) / 0.16;
+    for (var j = 0; j <= 1; j++) {
+      let rr = floor(rowF) - f32(j);
+      let y0 = 0.1 * (exp(0.16 * rr) - 1.0);
+      let pc = 0.1 * (exp(0.16 * (rr + 1.0)) - 1.0) - y0;
+      let id = vec2f(floor(s.x / pc), rr);
+      let h = hash21(id + u.a.w + 21.0);
+      if (h < 0.42) { continue; }
+      let c = vec2f((id.x + 0.5 + (hash21(id + 1.1) - 0.5) * 0.3) * pc, ftS + y0 + pc * (0.3 + 0.3 * hash21(id + 2.2)));
+      if (scrubD(c) < 0.05) { continue; }
+      let rad = pc * (0.22 + 0.1 * h);
+      let sway = 0.25 * sin(t * 1.3 + c.x * 6.0 + h * 5.0) * u.b.x;
+      let v = rot2(s - c, -sway);
+      // Stem down to the bottom of the cell.
+      let stem = sdSeg(v, vec2f(0.0, rad * 0.4), vec2f(rad * 0.3 * sin(h * 9.0), pc * 0.9)) - rad * 0.07;
+      col = mix(col, C(5), fillA(stem, pxs));
+      col = mix(col, INK, strokeA(stem, pxs * 0.35, pxs) * 0.5);
+      // Cup: rounded below, opening upward in a scalloped rim.
+      let q2 = v / vec2f(1.0, 0.85);
+      let rim = -rad * 0.3 + rad * 0.12 * abs(sin(v.x / rad * 4.7 + h * 3.0));
+      let cup = max(length(q2) - rad, rim - v.y);
+      col = mix(col, select(C(11), C(9), h > 0.75), fillA(cup, pxs));
+      // Petal folds and a darker heart showing through the opening.
+      let fold = strokeA(v.x - rad * 0.35 * sin(h * 7.0), pxs * 0.4, pxs) + strokeA(v.x + rad * 0.45, pxs * 0.4, pxs);
+      col = mix(col, C(10), min(fold, 1.0) * fillA(cup + pxs, pxs) * 0.6);
+      col = mix(col, C(10), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.35)) - rad * 0.55, pxs) * fillA(cup, pxs) * 0.8);
+      col = mix(col, C(12), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.5)) - rad * 0.2, pxs) * fillA(cup, pxs));
+      col = mix(col, INK, strokeA(cup, pxs * 0.55, pxs) * 0.9);
+    }
+  }
+  // Birds over the ridge.
+  for (var i = 0; i < 4; i++) {
+    let fi = f32(i);
+    let bx = fract(0.2 + fi * 0.31 + t * (0.006 + 0.003 * hash1(fi)) * (1.0 + u.b.x)) * 1.8 - 0.9;
+    let by = -0.4 + 0.08 * hash1(fi * 3.0 + u.a.w) + 0.008 * sin(t * 0.6 + fi);
+    col = mix(col, INK, bird(s, vec2f(bx, by), 0.011 + 0.005 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), pxs) * 0.85);
+  }
   // Ink plate: band hairlines and the contours of every mass, off register.
   let so = s + MISREG;
   var ink = 0.0;
   let ft = fieldTop(so.x);
-  let rt = ridgeTop(so.x);
+  let rt = ridgeEdge(so.x);
   let gt = goldTop(so.x);
   let gd = groveD(so);
   let cd = cypressD(so);

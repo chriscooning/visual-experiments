@@ -141,6 +141,31 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
+fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
+  let f = fract(rot2(p, 0.785) / cell) - 0.5;
+  let r = sqrt(clamp(amt, 0.0, 1.0) / 3.14159) * cell;
+  return fillA(length(f) * cell - r, px) * step(0.01, amt);
+}
+// Printed sun or moon: rings around a disc of radius r0.
+fn rings(p: vec2f, c: vec2f, r0: f32, gap: f32, n: f32, px: f32) -> f32 {
+  let d = length(p - c) - r0;
+  let on = step(gap * 0.5, d) * step(d, gap * (n + 0.5));
+  return strokeA((fract(d / gap + 0.5) - 0.5) * gap, px * 0.55, px) * on;
+}
+// Scalloped wave crests: a row of arcs along y = y0.
+fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
+  let f = (fract(p.x / w) - 0.5) * w;
+  let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
+  return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
+}
+// Small bird: two ink arcs.
+fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
+  let q = (p - c) / s;
+  let x = abs(q.x);
+  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
+  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
+}
 
 // Fern Palms: after my palm canvas. Tall palms with scaly trunks and crowns
 // of herringbone fronds rise out of dark green bushes traced with wandering
@@ -175,6 +200,25 @@ struct U {
   return b[i];
 }
 
+const SUN = vec2f(-0.3, -0.36);
+// Flat printed clouds: a row of round bumps on a level base.
+@diagnostic(off, derivative_uniformity) fn cloudD(q: vec2f) -> f32 {
+  var d = 1e3;
+  for (var k = 0; k < 4; k++) {
+    let fk = f32(k);
+    let w = 0.1 + 0.05 * hash1(fk + u.a.w);
+    let cx = fract(0.15 + fk * 0.37 + hash1(fk * 2.0 + u.a.w) * 0.2 + u.a.x * 0.002) * 1.8 - 0.9;
+    let c = vec2f(cx, -0.5 + fk * 0.15);
+    var cd = 1e3;
+    for (var j = 0; j < 5; j++) {
+      let fj = f32(j);
+      let r = w * (0.17 + 0.13 * (1.0 - abs(fj - 2.0) * 0.5) + 0.05 * sin(fj * 1.3 + fk * 2.0));
+      cd = min(cd, length(q - c - vec2f((fj - 2.0) * w * 0.3, r * 0.15)) - r);
+    }
+    d = min(d, max(cd, q.y - c.y));
+  }
+  return d;
+}
 // Stepped sky bands, blue at the top thinning to mist.
 @diagnostic(off, derivative_uniformity) fn skyField(q: vec2f) -> f32 { return (q.y + 0.62) * 9.0 + 2.0 * vnoise(q * vec2f(2.4, 4.0) + u.a.w + vec2f(u.a.x * 0.01, 0.0)); }
 
@@ -187,6 +231,18 @@ struct U {
     return P;
   }
   // Sky: blue and teal patches, greyer and lighter lower down, running in drips.
+  if (cloudD(q) < 0.0) {
+    P.col = mix(C(3), vec3f(0.97, 0.96, 0.92), select(0.45, 0.7, r > 0.5));
+    P.ang = 0.0;
+    P.fine = 0.0;
+    return P;
+  }
+  if (length(q - SUN) < 0.048) {
+    P.col = mix(C(7), vec3f(1.0, 0.95, 0.8), select(0.2, 0.5, r > 0.5));
+    P.ang = r * 6.28;
+    P.fine = 0.0;
+    return P;
+  }
   let v = skyField(q);
   let band = i32(floor(v));
   let b3 = ((band % 3) + 3) % 3;
@@ -226,7 +282,7 @@ struct U {
   let pxs = px * k;
   let br = u.b.y;
   var col = scene(s, 0.5).col;
-  col = paintLayer(s, 0.03 * br, 0.95, 0.32, 1.0, pxs, col, false);
+  col = paintLayer(s, 0.022 * br, 0.95, 0.32, 1.0, pxs, col, false);
   // Palms, far (small) first.
   let n = i32(u.c.w);
   // Far (small) palms first.
@@ -298,10 +354,24 @@ struct U {
     // Bumpy tops of the bush masses.
     col = mix(col, C(8), strokeA(s.y - bt, pxs * 0.6, pxs) * 0.6);
   }
+  // Halftone shade deepening down into the bushes.
+  col = mix(col, C(8) * 0.8, halftone(s, 0.0075, 0.4 * smoothstep(bt + 0.06, bt + 0.45, s.y), pxs) * step(bt, s.y) * 0.8);
+  // Birds crossing the sky.
+  for (var i = 0; i < 4; i++) {
+    let fi = f32(i);
+    let bx = fract(0.3 + fi * 0.29 + t * (0.007 + 0.003 * hash1(fi)) * (1.0 + u.b.x)) * 1.8 - 0.9;
+    let by = -0.3 + 0.25 * hash1(fi * 3.0 + u.a.w) + 0.01 * sin(t * 0.6 + fi);
+    col = mix(col, INK, bird(s, vec2f(bx, by), 0.012 + 0.006 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), pxs) * 0.85);
+  }
   // Ink plate: sky hairlines above the bushes and the bush line, off register.
   let so = s + MISREG;
   var ink = 0.0;
-  ink = bandLines(skyField(so), pxs) * 0.4 * step(so.y, bushTop(so.x));
+  let cdo = cloudD(so);
+  let skyO = step(so.y, bushTop(so.x));
+  ink = bandLines(skyField(so), pxs) * 0.4 * skyO * step(0.0, cdo) * step(0.048, length(so - SUN));
+  ink = max(ink, strokeA(cdo, pxs * 0.7, pxs) * skyO);
+  ink = max(ink, strokeA(cdo + 0.008, pxs * 0.4, pxs) * skyO * 0.35);
+  ink = max(ink, (rings(so, SUN, 0.048, 0.011, 3.0, pxs) * 0.55 * step(0.0, cdo) + strokeA(length(so - SUN) - 0.048, pxs * 0.7, pxs)) * skyO);
   ink = max(ink, strokeA(so.y - bushTop(so.x), pxs * 0.9, pxs));
   col = mix(col, INK, ink);
   return vec4f(posterFrame(canvasize(col, pos.xy, u.b.z), uv, asp, px), 1.0);
