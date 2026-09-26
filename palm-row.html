@@ -45,15 +45,9 @@
 <body>
 <canvas id="canvas"></canvas>
 <div class="panel" id="panel">
-  <div class="control-group"><label>Palette</label>
-    <select id="palette">
-      <option value="original" selected>Original</option>
-      <option value="noon">Noon</option>
-      <option value="night">Night</option>
-    </select>
-  </div>
+  <div class="control-group"><label>Time <span class="val" id="timeVal">18</span></label><input type="range" id="time" min="0" max="100" value="18"></div>
+  <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Wind <span class="val" id="windVal">40</span></label><input type="range" id="wind" min="0" max="100" value="40"></div>
-  <div class="control-group"><label>Brush <span class="val" id="brushVal">45</span></label><input type="range" id="brush" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Palms <span class="val" id="palmsVal">70</span></label><input type="range" id="palms" min="0" max="100" value="70"></div>
   <div class="control-group"><label>Grain <span class="val" id="grainVal">30</span></label><input type="range" id="grain" min="0" max="100" value="30"></div>
   <div class="btn-row">
@@ -62,7 +56,7 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Swipe for a gust · Tilt for depth · H controls</div>
+<div class="hint-pill" id="hintPill">Drag Time to move through the day · Swipe for a gust · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -167,286 +161,502 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
   return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
 }
 
-// Palm Row: a line of tall palms against a coral sky that fades to mint
-// mist, over a pointillist hillside. Trunks are strings of alternating
-// dots, heads are shaggy teal and green bursts that toss in the wind, and
-// the hill is built entirely of round dabs.
+// Palm Row: after my painting, drawn crisp in the manner of Eyvind Earle.
+// Tall fan palms with segmented crowns, skirts of dead fronds and ringed
+// trunks stand in a row on a hill patterned in bands of flowers. Behind them
+// a far row of palms on a hillside of small houses, mist in the valley and
+// mountains beyond. Agaves and bougainvillea frame the foreground. The day
+// turns slowly: parrots cross in the afternoon, windows light up at dusk.
 struct U {
   a: vec4f,   // time, aspect, px, seed
-  b: vec4f,   // wind, brush, grain, gust
-  c: vec4f,   // tilt x, y, zoom, palm count
-  cols: array<vec4f, 20>,
+  b: vec4f,   // wind, gust, grain, zoom
+  c: vec4f,   // sun x, sun y, sun height, dark
+  d: vec4f,   // moon x, moon y, moon height, tilt x
+  e: vec4f,   // palm count, _, _, _
+  cols: array<vec4f, 30>,
 }
 @group(0) @binding(0) var<uniform> u: U;
 
+// 0 sky top, 1 sky mid, 2 horizon, 3 sun, 4 glow, 5 cloud lit, 6 cloud shade,
+// 7 mountains, 8 mist, 9 mist light, 10 hill lit, 11 hill shade, 12 house,
+// 13 roof, 14 tree dark, 15 near hill base, 16 dot yellow, 17 dot teal,
+// 18 dot orange, 19 frond dark, 20 frond mid, 21 frond lit, 22 skirt,
+// 23 trunk lit, 24 trunk shade, 25 agave, 26 bougainvillea, 27 ink, 28 lamp, 29 parrot
 @diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
-@diagnostic(off, derivative_uniformity) fn pick(r: f32, a: i32, n: i32) -> vec3f { return C(a + min(i32(floor(r * f32(n))), n - 1)); }
+@diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
 
-@diagnostic(off, derivative_uniformity) fn hillTop(x: f32) -> f32 {
-  return 0.2 - 0.26 * smoothstep(-0.05, -0.75, x) + 0.02 * sin(x * 9.0 + u.a.w) + 0.012 * sin(x * 23.0);
+const HZ = 0.02;
+@diagnostic(off, derivative_uniformity) fn light() -> f32 { return smoothstep(-0.04, 0.2, u.c.z); }
+@diagnostic(off, derivative_uniformity) fn lowSun() -> f32 { return 1.0 - smoothstep(0.1, 0.5, u.c.z); }
+
+@diagnostic(off, derivative_uniformity) fn mountTop(x: f32) -> f32 { return -0.06 - 0.06 * exp(-pow((x + 0.35) / 0.3, 2.0)) - 0.04 * exp(-pow((x - 0.45) / 0.25, 2.0)) + 0.01 * sin(x * 13.0 + u.a.w) + 0.004 * sin(x * 47.0); }
+@diagnostic(off, derivative_uniformity) fn midTop(x: f32) -> f32 { return 0.03 + 0.03 * sin(x * 2.6 + u.a.w) - 0.02 * exp(-pow((x - 0.2) / 0.2, 2.0)) + 0.004 * sin(x * 21.0); }
+@diagnostic(off, derivative_uniformity) fn nearTop(x: f32) -> f32 { return 0.22 - 0.2 * smoothstep(0.05, -0.85, x) + 0.018 * sin(x * 6.0 + u.a.w) + 0.006 * sin(x * 17.0); }
+
+@diagnostic(off, derivative_uniformity) fn cloud(p: vec2f, k: i32) -> vec2f {
+  let fk = f32(k);
+  let L = 0.16 + 0.18 * hash1(fk + u.a.w);
+  let cy = -1.0 + fk * 0.13;
+  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0016 * (1.0 + fk * 0.2)) * 2.6 - 1.3;
+  let dx = (p.x - cx) / L;
+  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
+  let th = (0.014 + 0.01 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
+  let sc = abs(sin(dx * (6.0 + fk) + fk));
+  let top = cy - th * (1.0 + 0.8 * sc);
+  let bot = cy + th * 0.4;
+  return vec2f(max(top - p.y, p.y - bot), clamp((p.y - top) / (bot - top), 0.0, 1.0));
 }
-// Palm i: x of base, height, scale (0.6 far .. 1 near).
-@diagnostic(off, derivative_uniformity) fn palmX(i: i32) -> f32 { return -0.72 + f32(i) * 0.145 + 0.04 * (hash1(f32(i) + u.a.w) - 0.5); }
-@diagnostic(off, derivative_uniformity) fn palmScale(i: i32) -> f32 { return select(1.0, 0.72, (i + i32(u.a.w)) % 3 == 1); }
-@diagnostic(off, derivative_uniformity) fn palmBase(i: i32) -> vec2f { let x = palmX(i); return vec2f(x, hillTop(x) + 0.03); }
-@diagnostic(off, derivative_uniformity) fn palmHead(i: i32) -> vec2f {
+
+// Light rolling over the flower hill as the breeze passes.
+@diagnostic(off, derivative_uniformity) fn gustWave(q: vec2f, t: f32) -> f32 {
+  let w = 0.4 + u.b.x + u.b.y;
+  let v = q.x * 6.0 + q.y * 4.0 + t * 0.7 * w + 1.5 * fbm(q * vec2f(2.0, 4.0) + vec2f(t * 0.04, 0.0) + u.a.w);
+  return pow(0.5 + 0.5 * sin(v), 6.0) * smoothstep(0.2, 0.6, fbm(q * 1.5 - vec2f(t * 0.03, 0.0)));
+}
+
+// Palm i: base x, height, crown radius.
+@diagnostic(off, derivative_uniformity) fn palmX(i: i32) -> f32 { return -0.66 + f32(i) * 0.19 + 0.05 * (hash1(f32(i) + u.a.w) - 0.5); }
+@diagnostic(off, derivative_uniformity) fn palmBase(i: i32) -> vec2f { let x = palmX(i); return vec2f(x, nearTop(x) + 0.012); }
+@diagnostic(off, derivative_uniformity) fn palmH(i: i32) -> f32 { return 0.48 + 0.16 * hash1(f32(i) * 3.3 + u.a.w) - 0.06 * f32(i % 2); }
+@diagnostic(off, derivative_uniformity) fn palmCrown(i: i32) -> vec2f {
   let b = palmBase(i);
-  let s = palmScale(i);
-  // Never taller than the frame allows.
-  let h = min((0.5 + 0.18 * hash1(f32(i) * 3.3 + u.a.w)) * s, b.y + 0.36);
-  let sw = u.b.x * 0.018 * sin(u.a.x * 1.1 + f32(i) * 0.8) + u.b.w * 0.03;
-  return b + vec2f(0.03 * (hash1(f32(i) * 7.1) - 0.5) + sw, -h);
+  let sw = (u.b.x * 0.012 * sin(u.a.x * 0.9 + f32(i) * 1.3) + u.b.y * 0.03);
+  return b + vec2f(0.035 * (hash1(f32(i) * 7.1) - 0.5) + sw, -min(palmH(i), b.y + 0.42));
 }
-@diagnostic(off, derivative_uniformity) fn headD(i: i32, q: vec2f) -> f32 {
-  let c = palmHead(i);
-  let s = palmScale(i);
-  let v = q - c;
+
+// Fan palm crown: segmented leaves radiating out to spiky tips, drooping
+// below, a dark heart, and a skirt of dead fronds under it.
+@diagnostic(off, derivative_uniformity) fn crown(v: vec2f, R: f32, sd: f32, px: f32) -> vec4f {
+  let lt = light();
+  let r = length(v);
   let a = atan2(v.y, v.x);
-  // A shaggy, uneven clump: slow lumps plus ragged frond tips.
-  let lump = 0.28 * (vnoise(vec2f(a * 1.6 + f32(i) * 5.0, u.a.x * 0.4)) - 0.5);
-  let rag = 0.14 * (vnoise(vec2f(a * 9.0 + f32(i) * 3.0, u.a.x * 0.8)) - 0.5) * (0.6 + 0.6 * u.b.x);
-  let R = 0.105 * s * (1.0 + lump + rag);
-  // Fronds droop: the head hangs lower on its underside.
-  return length(v / vec2f(1.15, select(0.85, 1.3, v.y > 0.0))) - R;
+  let N = 21.0;
+  let seg = a * N / 6.2832 + sd;
+  let fs = fract(seg);
+  let tip = 1.0 - abs(fs - 0.5) * 2.0;
+  // Lower leaves hang longer; each leaf has its own length and a split tip.
+  let hs = hash1(floor(seg) * 1.37 + sd);
+  let down = smoothstep(-0.2, 0.9, v.y / max(r, 1e-4));
+  let droop = 1.0 + 0.32 * down + 0.22 * (hs - 0.5);
+  let split = 1.0 - 0.18 * smoothstep(0.35, 0.0, abs(fs - 0.5)) * step(0.4, hs);
+  let rr = R * droop * (0.58 + 0.42 * pow(tip, 0.7)) * split;
+  let d = (r - rr) * 0.8;
+  // Skirt: a tapering thatch of dead fronds hanging under the crown.
+  let sy = v.y - R * 0.3;
+  let sl = R * (1.25 + 0.2 * sin(sd * 3.0));
+  let sw = R * 0.42 * (1.0 - 0.45 * clamp(sy / sl, 0.0, 1.0));
+  let skirtD = max(abs(v.x) - sw, max(-sy, sy - sl - R * 0.06 * sin(v.x / R * 30.0 + sd)));
+  var col = C(22);
+  let sun = sign(u.c.x - v.x * 0.0 - 0.0);
+  col = mix(col, mix(C(22), C(23), 0.5), step(0.0, v.x * sign(u.c.x + 1e-4)) * lt * 0.6);
+  col = mix(col, C(24), strokeA(fract(v.x / (R * 0.09) + 0.3 * sin(v.y / R * 5.0)) - 0.5, 0.1, 0.12) * 0.6);
+  var alpha = fillA(skirtD, px);
+  col = mix(col, C(27), strokeA(skirtD, px * 0.5, px) * alpha);
+  if (d < px * 2.0) {
+    let odd = (i32(floor(seg)) % 2) == 0;
+    var fc = select(C(19), C(20), odd);
+    let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
+    fc = mix(fc, C(21), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.45, 0.9, r / rr), 2.0) * lt);
+    fc = mix(fc, C(19), smoothstep(0.3, 0.8, v.y / R) * 0.6);
+    // Leaf ribs and the pleats either side.
+    fc = mix(fc, C(19), strokeA((fs - 0.5) * r * 6.2832 / N, px * 0.45, px) * smoothstep(0.15, 0.4, r / R));
+    fc = mix(fc, mix(fc, C(21), 0.5), strokeA((fract(seg * 3.0) - 0.5) * r * 6.2832 / (N * 3.0), px * 0.3, px) * 0.5 * lt);
+    fc = mix(fc, C(19) * 0.7, smoothstep(0.22 * R, 0.1 * R, r));
+    fc = mix(fc, C(27), strokeA(d, px * 0.5, px));
+    col = mix(col, fc, fillA(d, px));
+    alpha = max(alpha, fillA(d, px));
+  }
+  return vec4f(col, alpha);
 }
 
-const SUN = vec2f(0.3, -0.43);
-// A far ridge in the mist behind the hill.
-@diagnostic(off, derivative_uniformity) fn farHill(x: f32) -> f32 { return 0.04 + 0.05 * sin(x * 2.6 + u.a.w * 1.7) + 0.02 * sin(x * 7.3 + 1.0) + 0.006 * sin(x * 31.0); }
-// Stepped sky: coral bands at the top giving way to mint mist.
-@diagnostic(off, derivative_uniformity) fn skyField(q: vec2f) -> f32 { return (q.y + 0.56) * 5.6 + 1.6 * vnoise(q * vec2f(2.2, 4.5) + u.a.w + vec2f(u.a.x * 0.01, 0.0)); }
-@diagnostic(off, derivative_uniformity) fn ramp(v: f32, r: f32, a: i32, n: i32) -> vec3f {
-  let b = clamp(i32(floor(v)) + select(0, 1, r > 0.94), 0, n - 1);
-  return C(a + b);
-}
-
-@diagnostic(off, derivative_uniformity) fn scene(q: vec2f, r: f32) -> Paint {
-  var P: Paint;
-  let n = i32(u.c.w);
-  // Nearest palms win: draw order far (small) first, so check near last.
-  var hit = -1;
-  for (var i = 0; i < 12; i++) {
-    if (i >= n) { break; }
-    if (headD(i, q) < 0.0 && (hit < 0 || palmScale(i) >= palmScale(hit))) { hit = i; }
-  }
-  if (hit >= 0) {
-    let c = palmHead(hit);
-    var col = select(pick(r * 1.05, 6, 4), C(10), r > 0.95);
-    // Far palms sink into the mist.
-    col = mix(col, C(4), (1.0 - palmScale(hit)) * 1.3);
-    P.col = col;
-    P.ang = atan2(q.y - c.y, q.x - c.x);
-    P.fine = 1.0;
-    return P;
-  }
-  if (q.y > hillTop(q.x)) {
-    // Swirls of colour run through the dots.
-    let n1 = vnoise(q * 7.0 + u.a.w);
-    // Mostly yellow, teal and dark green, with the odd orange dot.
-    var hc = select(select(C(13), C(14), r < 0.55), C(16), r < 0.25);
-    if (r > 0.8) { hc = select(C(17), C(15), r > 0.92); }
-    P.col = mix(hc, C(16), smoothstep(0.55, 0.8, n1) * 0.6);
-    P.ang = r * 6.28;
-    P.fine = 2.0;
-    return P;
-  }
-  if (q.y > farHill(q.x)) {
-    P.col = mix(mix(C(4), C(6), 0.28), C(3), select(0.0, 0.3, r > 0.6));
-    P.ang = 0.05 + (r - 0.5) * 0.3;
-    P.fine = 0.0;
-    return P;
-  }
-  if (length(q - SUN) < 0.05) {
-    P.col = mix(C(0), vec3f(1.0, 0.96, 0.86), select(0.45, 0.7, r > 0.5));
-    P.ang = r * 6.28;
-    P.fine = 0.0;
-    return P;
-  }
-  P.col = ramp(skyField(q), r, 0, 6);
-  P.ang = 1.1 + (r - 0.5) * 0.9;
-  P.fine = 0.0;
-  return P;
+@diagnostic(off, derivative_uniformity) fn trunk(p: vec2f, b: vec2f, c: vec2f, s: f32, px: f32) -> vec4f {
+  let L = length(c - b);
+  let dir = (c - b) / L;
+  let nrm = vec2f(-dir.y, dir.x);
+  let rel = p - b;
+  let along = dot(rel, dir);
+  if (along < -0.01 || along > L) { return vec4f(0.0); }
+  let tt = clamp(along / L, 0.0, 1.0);
+  let bow = sin(tt * 3.14159) * 0.018 * s;
+  let across = dot(rel, nrm) - bow;
+  let w = (0.0085 - 0.0035 * tt) * s;
+  let d = abs(across) - w;
+  if (d > px * 2.0) { return vec4f(0.0); }
+  let lt = light();
+  let side = across / w * sign(u.c.x - p.x + 1e-4) * sign(nrm.x + 1e-4);
+  var col = mix(C(24), C(23), post(smoothstep(-0.2, 0.7, side) * lt, 2.0));
+  // Rings, bowed a little, closer together near the top.
+  let ring = fract(along / (0.007 * s) + abs(across / w) * 0.25);
+  col = mix(col, C(24) * 0.8, step(0.72, ring));
+  col = mix(col, C(27), strokeA(d, px * 0.45, px));
+  return vec4f(col, fillA(d, px));
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let asp = u.a.y; let px = u.a.z; let k = u.c.z;
-  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
-  let s = p * k + u.c.xy * 0.01;
-  let pxs = px * k;
-  let br = u.b.y;
-  var col = scene(s, 0.5).col;
-  col = paintLayer(s, 0.02 * br, 0.95, 0.32, 1.0, pxs, col, false);
-  // Trunks: strings of dots, yellow and brown, bending with the head.
-  let n = i32(u.c.w);
-  for (var i = 0; i < 12; i++) {
-    if (i >= n) { break; }
-    let b0 = palmBase(i);
-    let h0 = palmHead(i);
-    let sc = palmScale(i);
-    let v = h0 - b0;
-    let L = length(v);
-    let dir = v / L;
-    let nrm = vec2f(-dir.y, dir.x);
-    let rel = s - b0;
-    let along = dot(rel, dir);
-    if (along > -0.01 && along < L - 0.03 * sc) {
-      let tt = along / L;
-      let bow = sin(tt * 3.14159) * 0.02 * sc;
-      let across = dot(rel, nrm) - bow;
-      let step = 0.011 * sc;
-      let k0 = round(along / step);
-      let dd = length(vec2f(along - k0 * step, across)) - 0.0048 * sc;
-      var tc = select(C(12), C(11), (i32(k0) % 2) == 0);
-      tc = mix(tc, C(4), (1.0 - sc) * 1.2);
-      col = mix(col, mix(C(4), C(12), 0.5 + 0.5 * sc), fillA(abs(across) - 0.0042 * sc, pxs) * 0.5);
-      col = mix(col, tc, fillA(dd, pxs));
+  let t = u.a.x; let asp = u.a.y; let k = u.b.w;
+  let p0 = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
+  let px = u.a.z * k;
+  let tilt = u.d.w;
+  let dark = u.c.w;
+  let lt = light();
+  let sun = u.c.xy;
+  let moon = u.d.xy;
+  let wind = u.b.x + u.b.y;
+  let pFar = p0 + vec2f(tilt * 0.006, 0.0);
+  let pMid = p0 + vec2f(tilt * 0.014, 0.0);
+  let p = p0 + vec2f(tilt * 0.024, 0.0);
+
+  // ---- Sky.
+  let g = clamp((p0.y - HZ) / -1.0, 0.0, 1.0);
+  var col = mix(C(2), C(1), post(smoothstep(0.0, 0.3, g), 5.0));
+  col = mix(col, C(0), post(smoothstep(0.28, 0.9, g), 5.0));
+  let ds = length(p0 - sun);
+  col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+  {
+    let sg = p0 / 0.035;
+    let sid = floor(sg);
+    let sh = hash21(sid + 5.3);
+    if (sh > 0.72) {
+      let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+      let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
+      let sa = atan2(sv.y, sv.x);
+      let sdd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+      col = mix(col, C(28), fillA(sdd, px) * dark);
     }
   }
-  col = paintLayer(s, 0.0082 * br, 0.95, 0.3, 2.0, pxs, col, true);
-  let t = u.a.x;
-  // Flowers on the hill, larger toward the foreground, with inked centres.
-  let hts = hillTop(s.x);
-  if (s.y > hts + 0.02) {
-    let depth = clamp((s.y - hts) / 0.3, 0.0, 1.0);
-    let fcell = 0.034;
-    let fid = floor(vec2f(s.x, s.y) / fcell);
-    let fh = hash21(fid + u.a.w + 3.0);
-    if (fh > 0.45) {
-      let fc = (fid + 0.5 + (vec2f(hash21(fid + 1.3), hash21(fid + 2.9)) - 0.5) * 0.45) * fcell;
-      let v = s - fc;
-      let rad = fcell * (0.16 + 0.1 * fh) * (0.7 + 0.6 * depth);
-      let pa = atan2(v.y, v.x) + fh * 9.0 + 0.3 * sin(t * 0.8 + fh * 20.0) * u.b.x;
-      let petal = length(v) - rad * (0.72 + 0.32 * cos(pa * select(5.0, 6.0, fh > 0.75)));
-      let pc = select(select(C(13), C(15), fh > 0.7), C(5), fh > 0.9);
-      col = mix(col, pc, fillA(petal, pxs));
-      col = mix(col, INK, strokeA(petal, pxs * 0.45, pxs) * 0.7);
-      col = mix(col, select(C(16), C(12), fh > 0.7), fillA(length(v) - rad * 0.28, pxs));
+  col = mix(col, C(3), fillA(ds - 0.045, px));
+  col = mix(col, C(4), strokeA(ds - 0.058, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
+  let dm = length(p0 - moon);
+  let mc = mix(C(28), vec3f(0.95, 0.94, 0.88), 0.6);
+  col = mix(col, mix(col, C(28), 0.25), post(exp(-dm * 8.0) * dark, 4.0));
+  col = mix(col, mc, fillA(dm - 0.032, px));
+  col = mix(col, mc * 0.82, fillA(length(p0 - moon - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(p0 - moon - vec2f(-0.008, 0.01)) - 0.006, px));
+  for (var i = 0; i < 9; i++) {
+    let cl = cloud(p0, i);
+    if (cl.x < px * 2.0) {
+      let under = mix(1.0 - cl.y, cl.y, lowSun());
+      var cc = mix(C(6), C(5), post(under, 3.0));
+      cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
+      cc = mix(cc, C(6) * 0.9, strokeA(fract(p0.x / 0.012 + cl.y * 2.0) - 0.5, 0.05, 0.08) * 0.25);
+      col = mix(col, cc, fillA(cl.x, px));
+      col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
     }
   }
-  // Birds over the mist.
-  for (var i = 0; i < 5; i++) {
+  // Parrots crossing in a loose flock by day.
+  for (var i = 0; i < 7; i++) {
     let fi = f32(i);
-    let bx = fract(0.1 + fi * 0.23 + t * (0.006 + 0.003 * hash1(fi)) * (1.0 + u.b.x)) * 1.8 - 0.9;
-    let by = -0.36 + 0.3 * hash1(fi * 3.0 + u.a.w) + 0.01 * sin(t * 0.6 + fi);
-    col = mix(col, INK, bird(s, vec2f(bx, by), 0.016 + 0.007 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), pxs) * 0.85);
+    let fl = fract(t * 0.012 + 0.3);
+    let base = vec2f(-1.3 + fl * 2.8, -0.42 + 0.06 * sin(fl * 9.0));
+    let off = vec2f((hash1(fi) - 0.5) * 0.12, (hash1(fi * 2.3) - 0.5) * 0.06 + 0.01 * sin(t * 2.0 + fi));
+    let c = base + off;
+    let flap = sin(t * 9.0 + fi * 1.7);
+    let bd = bird(p0, c, 0.011, flap, px);
+    let body = fillA(length((p0 - c) / vec2f(1.0, 0.6)) - 0.004, px);
+    col = mix(col, C(29) * mix(0.6, 1.0, lt), max(bd, body) * (1.0 - dark));
   }
-  // Ink plate: sky hairlines, the hill line and the palm heads, off register.
-  let so = s + MISREG;
-  var ink = 0.0;
-  let ht = hillTop(so.x);
-  ink = max(ink, bandLines(skyField(so), pxs) * 0.4 * step(so.y, ht));
-  ink = max(ink, strokeA(so.y - ht, pxs * 0.8, pxs));
-  ink = max(ink, strokeA(so.y - farHill(so.x), pxs * 0.6, pxs) * step(so.y, ht) * 0.7);
-  // Head outlines, hidden where a nearer head covers them.
-  var hd: array<f32, 12>;
-  for (var i = 0; i < 12; i++) { hd[i] = select(1e3, headD(i, so), i < n); }
-  for (var i = 0; i < 12; i++) {
-    if (i >= n) { break; }
-    var shown = 1.0;
-    for (var j = 0; j < 12; j++) {
-      if (j >= n) { break; }
-      let nearer = palmScale(j) > palmScale(i) || (palmScale(j) == palmScale(i) && j > i);
-      if (nearer) { shown = min(shown, fillA(-hd[j], pxs)); }
+
+  // ---- Far mountains, stepped into lit and shaded folds.
+  {
+    let mt = mountTop(pFar.x);
+    let s = (mountTop(pFar.x + 0.01) - mountTop(pFar.x - 0.01)) / 0.02;
+    var mcol = mix(C(7), C(2), 0.25);
+    let lit = clamp(0.5 - s * 3.0 * sign(sun.x - pFar.x + 1e-4), 0.0, 1.0);
+    mcol = mix(mix(mcol, C(7) * 0.85, 0.6), mix(mcol, C(2), 0.35), post(lit, 3.0) * lt);
+    // Gullies running down from the crest, fading into the haze below.
+    let fold = fract(pFar.x * 9.0 + 2.0 * (vnoise(vec2f(pFar.x * 6.0, u.a.w)) - 0.5) - (pFar.y - mt) * 3.0);
+    mcol = mix(mcol, C(7) * 0.9, step(0.8, fold) * 0.35 * smoothstep(0.08, 0.0, pFar.y - mt));
+    col = mix(col, mcol, fillA(mt - pFar.y, px));
+    col = mix(col, mix(C(7), C(2), 0.5), strokeA(pFar.y - mt, px * 0.5, px) * 0.6 * lt);
+  }
+  // ---- Mist in the valley: flat banks with scalloped tops, drifting.
+  for (var m = 0; m < 3; m++) {
+    let fm = f32(m);
+    let my = -0.03 + fm * 0.025;
+    let sx = pFar.x + t * 0.004 * (1.0 + fm * 0.5) + fm * 3.0;
+    let top = my - 0.012 * abs(sin(sx * 9.0 + fm)) - 0.008 * sin(sx * 3.0);
+    let md = top - pFar.y;
+    col = mix(col, mix(C(8), C(9), select(0.0, 0.6, m == 0)), fillA(md, px) * (0.75 + 0.08 * fm));
+    col = mix(col, C(9), strokeA(md, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
+  }
+
+  // ---- Middle hill with houses, round trees and a far row of palms.
+  {
+    let mt = midTop(pMid.x);
+    if (pMid.y > mt - px * 2.0) {
+      let dy = pMid.y - mt;
+      let s = (midTop(pMid.x + 0.01) - midTop(pMid.x - 0.01)) / 0.02;
+      let lit = clamp(0.5 - s * 4.0 * sign(sun.x - pMid.x + 1e-4) - dy * 4.0, 0.0, 1.0);
+      var hc = mix(C(11), C(10), post(lit * lt + (1.0 - lt) * 0.2, 3.0));
+      hc = mix(hc, C(8), 0.18);
+      let comb = fract((dy + 0.004 * sin(pMid.x * 30.0)) / 0.006);
+      hc = mix(hc, C(11), step(0.8, comb) * 0.4);
+      // Houses: white walls, terracotta roofs, windows lit after dark.
+      let hw = 0.05;
+      let hi = floor(pMid.x / hw);
+      for (var r = 0; r < 3; r++) {
+        let id = vec2f(hi, f32(r));
+        let h = hash21(id + u.a.w + 9.0);
+        if (h > 0.45) {
+          let cx = (hi + 0.5 + (hash21(id + 1.1) - 0.5) * 0.4) * hw;
+          let cy = midTop(cx) + 0.014 + f32(r) * 0.026;
+          let sc = 0.8 + f32(r) * 0.25;
+          let v = (pMid - vec2f(cx, cy)) / sc;
+          let wall = sdBox(v, vec2f(0.009, 0.006));
+          let roof = sdTri(v, vec2f(-0.011, -0.006), vec2f(0.011, -0.006), vec2f(0.003 * sign(h - 0.7), -0.012));
+          let face = select(0.75, 1.0, v.x * sign(sun.x - pMid.x + 1e-4) > 0.0);
+          hc = mix(hc, C(12) * mix(1.0, face, lt), fillA(wall * sc, px));
+          hc = mix(hc, C(13) * mix(1.0, face, lt), fillA(roof * sc, px));
+          let win = sdBox(v - vec2f(0.003 * (hash21(id + 4.0) - 0.5) * 2.0, 0.001), vec2f(0.0022, 0.002));
+          let on = step(0.35, hash21(id + floor(t * 0.05)));
+          hc = mix(hc, mix(C(27) * 0.6, C(28), dark * on), fillA(win * sc, px));
+          hc = mix(hc, C(27), strokeA(min(wall, roof) * sc, px * 0.35, px) * 0.6);
+        }
+        // Round trees between the houses.
+        let th = hash21(id + u.a.w + 20.0);
+        if (th > 0.55) {
+          let cx = (hi + 0.15 + 0.2 * th) * hw;
+          let cy = midTop(cx) + 0.01 + f32(r) * 0.026;
+          let rr = 0.006 + 0.004 * th + f32(r) * 0.002;
+          let v = pMid - vec2f(cx, cy - rr);
+          let td = length(v) - rr;
+          hc = mix(hc, mix(C(14), C(21), post(smoothstep(0.0, -rr, v.y + v.x * 0.5 * sign(sun.x - pMid.x)) * lt * 0.5, 2.0)), fillA(td, px));
+        }
+      }
+      col = mix(col, hc, fillA(mt - pMid.y, px));
+      col = mix(col, C(27), strokeA(pMid.y - mt, px * 0.5, px) * 0.4);
     }
-    ink = max(ink, strokeA(hd[i], pxs * 0.8, pxs) * (0.35 + 0.65 * palmScale(i)) * shown);
-    // Frond ribs fanning from the crown.
-    if (hd[i] < 0.0 && shown > 0.0) {
-      let v = so - palmHead(i);
-      let rr = length(v);
-      let R = 0.105 * palmScale(i);
-      let a = atan2(v.y, v.x) + f32(i) * 0.7 + rr / R * 0.5;
-      let rib = abs(fract(a * 13.0 / 6.2832) - 0.5) * 6.2832 / 13.0 * rr;
-      let ra = strokeA(rib, pxs * 0.45, pxs) * smoothstep(0.12 * R, 0.4 * R, rr) * fillA(hd[i] + 0.006, pxs) * shown;
-      col = mix(col, C(10), ra * (0.3 + 0.5 * palmScale(i)));
+    // Far palms along the crest.
+    let fw = 0.075;
+    let fi = floor(pMid.x / fw);
+    for (var o = -1; o <= 1; o++) {
+      let id = fi + f32(o);
+      let h = hash1(id * 1.9 + u.a.w);
+      if (h < 0.35) { continue; }
+      let bx = (id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * fw;
+      let b = vec2f(bx, midTop(bx) + 0.004);
+      let H = 0.1 + 0.07 * h;
+      let c = b + vec2f(0.008 * sin(t * 0.8 + id) * u.b.x, -H);
+      let td = sdSeg(pMid, b, c) - 0.0014;
+      let v = pMid - c;
+      let a = atan2(v.y, v.x);
+      let hr = 0.016 * (0.75 + 0.25 * pow(abs(sin(a * 5.0 + id)), 0.5)) * select(1.0, 1.2, v.y > 0.0);
+      let hd = length(v) - hr;
+      let fc = mix(mix(C(19), C(8), 0.45), mix(C(20), C(8), 0.35), step(0.0, -v.y));
+      col = mix(col, mix(C(24), C(8), 0.45), fillA(td, px));
+      col = mix(col, fc, fillA(hd, px));
     }
   }
-  // Sun rings where the sky shows.
-  var open = step(so.y, farHill(so.x));
-  for (var i = 0; i < 12; i++) { open = min(open, fillA(-hd[i], pxs)); }
-  ink = max(ink, (rings(so, SUN, 0.05, 0.011, 3.0, pxs) * 0.55 + strokeA(length(so - SUN) - 0.05, pxs * 0.7, pxs)) * open);
-  col = mix(col, INK, ink);
-  return vec4f(posterFrame(canvasize(col, pos.xy, u.b.z), uv, asp, px), 1.0);
-}
 
-// Brush painter. Each page defines scene(q, r) -> Paint: the colour a dab
-// at q should carry (r picks among the region's colours), the direction the
-// stroke runs, and whether the region gets a second, finer pass (1 strokes,
-// 2 round dots). paintLayer lays one dab per grid cell, each sampling the
-// scene at its own centre, so the image is rebuilt from marks.
-struct Paint { col: vec3f, ang: f32, fine: f32 }
-
-@diagnostic(off, derivative_uniformity) fn paintLayer(p: vec2f, cell: f32, len: f32, wid: f32, sl: f32, px: f32, base: vec3f, fineOnly: bool) -> vec3f {
-  let g = p / cell;
-  let id0 = floor(g);
-  var col = base;
-  var best = -1.0;
-  for (var j = -1; j <= 1; j++) {
-    for (var i = -1; i <= 1; i++) {
-      let id = id0 + vec2f(f32(i), f32(j));
-      let h = hash21(id + sl);
-      let c = (id + 0.5 + (vec2f(h, hash21(id + sl + 3.7)) - 0.5) * 0.8) * cell;
-      let s = scene(c, hash21(id + sl + 7.3));
-      if (fineOnly && s.fine < 0.5) { continue; }
-      var L = len * cell * (0.7 + 0.5 * hash21(id + sl + 5.3));
-      var Wd = wid * cell * (0.75 + 0.5 * h);
-      if (s.fine > 1.5) { L = select(0.55, 0.42, fineOnly) * cell * (0.8 + 0.4 * h); Wd = L * 0.85; }
-      let a = s.ang + (hash21(id + sl + 9.1) - 0.5) * 0.6;
-      let q = rot2(p - c, -a);
-      // Tapered stroke: narrows toward both ends, and paint lies a little thin.
-      let tx = clamp(abs(q.x) / L, 0.0, 1.0);
-      let We = Wd * (1.0 - 0.55 * tx * tx);
-      let d = (length(q / vec2f(L, We)) - 1.0) * We;
-      let cov = fillA(d, px * 1.1);
-      if (cov > 0.0 && h > best) {
-        // Flat, silkscreen-like dabs: little tonal jitter, a faint darker rim.
-        let dc = s.col * (0.96 + 0.08 * hash21(id + sl + 1.1));
-        col = mix(col, dc, cov);
-        col = mix(col, dc * 0.78, strokeA(d, px * 0.45, px) * cov * 0.5);
-        best = h;
+  // ---- Near hill, patterned in bands of flowers.
+  let nt = nearTop(p.x);
+  if (p.y > nt - px * 2.0) {
+    let dy = p.y - nt;
+    let rowV = dy / 0.032 + 0.3 * sin(p.x * 7.0 + u.a.w) + 0.12 * sin(p.x * 19.0);
+    let band = floor(rowV);
+    let bi = i32(band);
+    let cs = 0.0075 * (1.0 + max(band, 0.0) * 0.18);
+    var hc = select(C(15), mix(C(15), C(17), 0.5), bi % 2 == 0);
+    hc = mix(hc, mix(C(15), C(10), 0.4), smoothstep(0.02, 0.0, dy) * lt);
+    let gw = gustWave(p, t) * (0.3 + 0.7 * lt);
+    hc = mix(hc, mix(C(17), C(21), 0.5), gw * 0.35);
+    let g = vec2f(p.x / cs, (p.y - nt) / cs);
+    let row = floor(g.y);
+    let gx = g.x + 0.5 * (row - 2.0 * floor(row * 0.5));
+    let cid = vec2f(floor(gx), row);
+    let f = vec2f(fract(gx), fract(g.y)) - 0.5;
+    let hh = hash21(cid + band * 7.0);
+    let kind = bi % 3;
+    var dcol = select(select(C(16), C(18), hh > 0.7), C(17), hh < 0.25);
+    if (kind == 1) { dcol = select(C(16), C(21), hh > 0.6); }
+    if (kind == 2) { dcol = select(C(18), C(16), hh > 0.5); }
+    let rad = select(0.32, 0.22, kind == 2) * (0.8 + 0.4 * hh);
+    var dd = length(f) - rad;
+    if (kind == 1) { dd = sdSeg(f, vec2f(-0.3, 0.15), vec2f(0.3, -0.15)) - 0.1; }
+    let ok = step(0.18, hh) * smoothstep(0.02, 0.2, fract(rowV)) * smoothstep(0.98, 0.8, fract(rowV));
+    hc = mix(hc, mix(dcol, dcol * 0.6, 1.0 - lt * 0.7), fillA(dd * cs, px) * ok);
+    hc = mix(hc, C(27), strokeA(fract(rowV) * 0.032, px * 0.4, px) * 0.35);
+    // Bushes on the band edges.
+    let bw = 0.06 + dy * 0.2;
+    let bxi = floor(p.x / bw);
+    for (var o = 0; o <= 1; o++) {
+      let bb = band - f32(o);
+      let id = vec2f(bxi, bb);
+      let h = hash21(id + u.a.w + 30.0);
+      if (h > 0.74) {
+        let cx = (bxi + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * bw;
+        let r = 0.01 + dy * 0.035 + 0.005 * h;
+        let cy = nt + (bb + 1.0 - 0.3 * sin(cx * 7.0 + u.a.w)) * 0.032;
+        let v = p - vec2f(cx, cy);
+        let sd = max(length(v / vec2f(1.1, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.6);
+        var bc = C(14);
+        bc = mix(bc, mix(C(14), C(21), 0.55), post(smoothstep(0.0, -r, v.y + v.x * 0.6 * sign(sun.x - p.x + 1e-4)) * lt, 2.0) * step(v.y, -r * 0.2));
+        let dots = step(0.7, hash21(floor(v / 0.0045) + id));
+        bc = mix(bc, C(26), dots * step(0.8, h) * fillA(length(fract(v / 0.0045) - 0.5) * 0.0045 - 0.0012, px));
+        hc = mix(hc, bc, fillA(sd, px));
+        hc = mix(hc, C(27), strokeA(sd, px * 0.45, px) * 0.7);
       }
     }
+    col = mix(col, hc, fillA(nt - p.y, px));
+    col = mix(col, C(27), strokeA(p.y - nt, px * 0.6, px) * 0.8);
   }
-  return col;
-}
-// Print finish, after Kiyoshi Awazu's silkscreens.
-// Canvas: a faint weave on top of the paper grain.
-@diagnostic(off, derivative_uniformity) fn canvasize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
-  let w = 0.975 + 0.025 * sin(pos.x * 1.7) * sin(pos.y * 1.7);
-  return paperize(col * w, pos, grain);
+
+  // ---- The palms: trunks, then skirts and crowns, back to front.
+  let n = i32(u.e.x);
+  for (var i = 0; i < 9; i++) {
+    if (i >= n) { break; }
+    let b = palmBase(i);
+    let c = palmCrown(i);
+    let tr = trunk(p, b, c + vec2f(0.0, 0.01), 1.0, px);
+    col = mix(col, tr.rgb, tr.a);
+    let R = 0.085 + 0.02 * hash1(f32(i) * 5.3 + u.a.w);
+    let v = rot2(p - c, 0.1 * sin(t * 1.1 + f32(i)) * u.b.x);
+    let cr = crown(v, R, f32(i) * 1.7 + u.a.w, px);
+    col = mix(col, cr.rgb, cr.a);
+  }
+
+  // ---- Foreground: agaves and bougainvillea framing the corners.
+  let bottom = 0.5 * k;
+  let pf = p0 + vec2f(tilt * 0.04, 0.0);
+  for (var j = 0; j < 2; j++) {
+    let fj = f32(j);
+    let side = select(-1.0, 1.0, j == 1);
+    let cc = vec2f(side * (0.5 * asp * k - 0.08), bottom + 0.02);
+    let v = pf - cc;
+    // Agave: a rosette of thick pointed leaves.
+    var ad = 1e3;
+    var lit = 0.0;
+    for (var l = 0; l < 9; l++) {
+      let fl = f32(l);
+      let ang = -3.14159 * (0.08 + 0.84 * fl / 8.0) + 0.05 * sin(t * 0.6 + fl) * u.b.x;
+      let len = 0.16 + 0.07 * sin(fl * 2.1 + fj);
+      let dir = vec2f(cos(ang), sin(ang));
+      let tipP = dir * len;
+      let w = 0.022 * (1.0 - clamp(dot(v, dir) / len, 0.0, 1.0));
+      let ld = sdSeg(v, vec2f(0.0), tipP) - w;
+      if (ld < ad) { ad = ld; lit = dot(vec2f(-dir.y, dir.x), v - dir * dot(v, dir)); }
+    }
+    var ac = mix(C(25) * 0.7, C(25), post(step(0.0, lit * side) * lt + 0.3, 2.0));
+    ac = mix(ac, mix(C(25), C(10), 0.4), strokeA(ad + 0.004, px * 0.4, px) * 0.8);
+    col = mix(col, mix(ac, ac * 0.4, dark * 0.5), fillA(ad, px));
+    col = mix(col, C(27), strokeA(ad, px * 0.6, px));
+    // Bougainvillea beside it: magenta bracts over dark leaves.
+    let bc = vec2f(side * (0.5 * asp * k - 0.28), bottom - 0.01);
+    let bv = pf - bc;
+    let bd = length(bv / vec2f(1.6, 1.0)) - 0.07 - 0.012 * sin(atan2(bv.y, bv.x) * 9.0 + fj);
+    if (bd < px * 2.0) {
+      let cell = floor(bv / 0.011);
+      let fcl = fract(bv / 0.011) - 0.5;
+      let hb = hash21(cell + fj * 3.0);
+      var fc = C(14);
+      let br = length(fcl + (vec2f(hash21(cell + 1.0), hash21(cell + 2.0)) - 0.5) * 0.3) - 0.36;
+      fc = mix(fc, mix(C(26), C(26) * 0.7, step(0.6, hb)), fillA(br * 0.011, px) * step(0.3, hb));
+      col = mix(col, mix(fc, fc * 0.45, dark * 0.5), fillA(bd, px));
+      col = mix(col, C(27), strokeA(bd, px * 0.6, px));
+    }
+  }
+  return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 `;
 
 const NAME = 'palm-row';
-// sky coral x3, mist x3, heads (dark teal, teal, green, yellow-green), navy, trunk yellow, trunk brown, hill x5, _, _
-const PALETTES = {
-  original: ['#f28a78', '#f5a594', '#f7c4b0', '#dff0e6', '#bfe3dc', '#f4f0e0', '#1f5a6a', '#2f7a7a', '#4f8a4a', '#9ab84a', '#1a3a4a', '#e8c040', '#8a5a2a', '#e8c040', '#1f6a6a', '#d88a3a', '#2a4a3a', '#8aa04a', '#000000', '#000000'],
-  noon:     ['#7fc0e8', '#a8d8f0', '#d8eef8', '#f4f8ec', '#e0f0f0', '#fbf6e4', '#1f5a4a', '#2f7a5a', '#5a9a3a', '#b8c84a', '#1a3a2a', '#f0d050', '#9a6a3a', '#f0d050', '#2a7a5a', '#e0983a', '#2a4a2a', '#a0b04a', '#000000', '#000000'],
-  night:    ['#2a2a5a', '#3a3a7a', '#5a4a8a', '#6a7aa8', '#8a9ac0', '#b8c0d8', '#12283a', '#1f3a4a', '#2a4a3a', '#6a7a3a', '#0a1420', '#e8c860', '#5a3a2a', '#e8c860', '#1f3a5a', '#b87a3a', '#1a2a3a', '#5a6a4a', '#000000', '#000000'],
+
+// Time of day. tau runs 0..1 round the clock: afternoon at 0, sunset near
+// 0.3, night through the middle, dawn at 0.8. Each piece gives sky colours
+// per key and a land palette that is graded by the light of the moment.
+const DAY_KEYS = [
+  [0.00, 'afternoon', [1, 1, 1], 1.0],
+  [0.18, 'golden hour', [1.08, 0.94, 0.76], 1.12],
+  [0.28, 'sunset', [0.98, 0.7, 0.6], 1.05],
+  [0.35, 'blue hour', [0.46, 0.5, 0.76], 0.72],
+  [0.43, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.73, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.81, 'dawn', [0.86, 0.72, 0.8], 0.85],
+  [0.9, 'morning', [1.02, 0.98, 0.94], 0.95],
+  [1.0, 'afternoon', [1, 1, 1], 1.0],
+];
+const SKY_ORDER = ['afternoon', 'golden hour', 'sunset', 'blue hour', 'night', 'night', 'dawn', 'morning', 'afternoon'];
+function dayKey(tau) {
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && tau >= DAY_KEYS[i + 1][0]) i++;
+  const a = DAY_KEYS[i], b = DAY_KEYS[i + 1];
+  let f = (tau - a[0]) / (b[0] - a[0]);
+  f = f * f * (3 - 2 * f);
+  return { i, f, name: f < 0.5 ? a[1] : b[1] };
+}
+const lerp3 = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+// SKIES: name -> list of hex; LAND: list of hex; KEEP: land indexes left ungraded.
+function dayCols(tau, SKIES, LAND, KEEP) {
+  const k = dayKey(tau);
+  const A = DAY_KEYS[k.i], B = DAY_KEYS[k.i + 1];
+  const sa = SKIES[SKY_ORDER[k.i]], sb = SKIES[SKY_ORDER[k.i + 1]];
+  const out = sa.map((h, j) => [...lerp3(hex(h), hex(sb[j]), k.f), 1]);
+  const m = lerp3(A[2], B[2], k.f), sat = A[3] + (B[3] - A[3]) * k.f;
+  LAND.forEach((h, j) => {
+    const c = hex(h);
+    if (KEEP.includes(j)) { out.push([...c, 1]); return; }
+    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    out.push([...c.map((v, q) => Math.max(0, Math.min(1, (l + (v - l) * sat) * m[q]))), 1]);
+  });
+  return out;
+}
+// Sun and moon: position on screen, height above the horizon (-1..1).
+function celestial(tau, hz) {
+  const df = ((tau - 0.8) % 1 + 1) % 1;
+  let elev, sx, sy, mx = 0, my = 2, mElev = -1;
+  if (df < 0.51) { const f = df / 0.51; elev = Math.sin(Math.PI * f); sx = -0.55 + 0.9 * f; }
+  else { const f = (df - 0.51) / 0.49; elev = -Math.sin(Math.PI * f); sx = 0.35; mElev = Math.sin(Math.PI * f); mx = 0.5 - 0.95 * f; my = hz - mElev * 0.46 + 0.04; }
+  sy = hz - elev * 0.55 + 0.02;
+  return { sx, sy, elev, mx, my, mElev };
+}
+
+// sky top, sky mid, horizon, sun, glow, cloud lit, cloud shade, mountains, mist, mist light
+const SKIES = {
+  'afternoon':   ['#7fb6dc', '#b8d6e4', '#f4e2cc', '#fff6dc', '#fff0c8', '#fff8f0', '#c4c8d4', '#a8b8c8', '#dff0e6', '#f4faf4'],
+  'golden hour': ['#f28a78', '#f5a594', '#f7c4b0', '#fff0c0', '#ffd8a0', '#fff0e0', '#d8a0a0', '#c9a6b0', '#dff0e6', '#fff4ea'],
+  'sunset':      ['#6a5a9a', '#e8788a', '#ffa070', '#ffe0a0', '#ff9060', '#ffc0a0', '#9a6080', '#9a7a9a', '#e8c0c0', '#ffd8c8'],
+  'blue hour':   ['#1e2a5c', '#4a4a86', '#b886a8', '#f0c0a8', '#a07aa8', '#9486b4', '#4a4674', '#4a4a78', '#8a8ab0', '#a8a8c8'],
+  'night':       ['#070a1e', '#101838', '#1f2a50', '#f4f0dc', '#34406a', '#333e5c', '#141a30', '#161e3a', '#2a3458', '#3a4670'],
+  'dawn':        ['#6a78b0', '#d0a0c0', '#ffd4b8', '#fff0d0', '#ffc0a8', '#ffe6dc', '#a88cac', '#a894b0', '#e8e0e8', '#fff2f0'],
+  'morning':     ['#8cc0e4', '#c4dcea', '#f6ead8', '#fff8e4', '#fff4d8', '#fffaf4', '#c8ccd8', '#aebccc', '#e4f2ea', '#f8fcf8'],
 };
+// hill lit, hill shade, house, roof, tree dark, near hill base, dot yellow, dot teal, dot orange,
+// frond dark, frond mid, frond lit, skirt, trunk lit, trunk shade, agave, bougainvillea, ink, lamp, parrot
+const LAND = ['#d8c88a', '#9aa070', '#f4efe4', '#d0704a', '#2a4a3a', '#1f5a5a', '#e8c040', '#2a8a86', '#e08a3a',
+  '#1f4a4a', '#2f7a6a', '#a8c45a', '#8a6a3a', '#d0a874', '#7a5a3a', '#6a9a98', '#d83a8a', '#141a1c', '#ffd98a', '#5ac04a'];
+const KEEP = [17, 18];
 
 const p = {};
+let tau = 0.12 + Math.random() * 0.1;
+let timeHooked = false;
 function readControls() {
-  p.pal = colsOf($('palette').value);
   p.wind = +$('wind').value / 100 * 1.5;
-  p.brush = 0.6 + +$('brush').value / 100 * 0.9;
-  p.palms = 5 + Math.round(+$('palms').value / 100 * 6);
+  p.speed = +$('speed').value / 100;
+  p.palms = 5 + Math.round(+$('palms').value / 100 * 4);
   p.grain = +$('grain').value / 100 * 0.1;
-  for (const id of ['wind', 'brush', 'palms', 'grain']) $(id + 'Val').textContent = $(id).value;
+  for (const id of ['wind', 'speed', 'palms', 'grain']) $(id + 'Val').textContent = $(id).value;
+  if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
 }
-let gust = 0, gustGoal = 0;
+let gust = 0, gustGoal = 0, shown = -1;
 function generate() {}
 function uniforms() {
-  const zoom = Math.max(1, 0.9 / aspect);
+  const zoom = Math.max(1, 1.3 / aspect);
+  const s = celestial(tau, 0.02);
+  const dark = 1 - Math.min(1, Math.max(0, (s.elev + 0.25) / 0.3));
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
-    b: [p.wind, p.brush, p.grain, gust],
-    c: [tl.active ? tl.x : 0, tl.active ? tl.y - 0.5 : 0, zoom, p.palms],
-    cols: p.pal,
+    b: [p.wind, gust, p.grain, zoom],
+    c: [s.sx, s.sy, s.elev, dark],
+    d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
+    e: [p.palms, 0, 0, 0],
+    cols: dayCols(tau, SKIES, LAND, KEEP),
   };
 }
 function step(dt) {
+  tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
   gustGoal *= Math.exp(-dt * 1.2);
   gust += (gustGoal - gust) * (1 - Math.exp(-dt * 5));
+  const v = Math.round(tau * 100);
+  if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(tau).name; }
 }
 let lastX = 0;
 function onDown(q) { lastX = q[0]; }

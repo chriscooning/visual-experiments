@@ -45,15 +45,9 @@
 <body>
 <canvas id="canvas"></canvas>
 <div class="panel" id="panel">
-  <div class="control-group"><label>Palette</label>
-    <select id="palette">
-      <option value="original" selected>Original</option>
-      <option value="dusk">Dusk</option>
-      <option value="winter">Winter</option>
-    </select>
-  </div>
+  <div class="control-group"><label>Time <span class="val" id="timeVal">15</span></label><input type="range" id="time" min="0" max="100" value="15"></div>
+  <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Wind <span class="val" id="windVal">45</span></label><input type="range" id="wind" min="0" max="100" value="45"></div>
-  <div class="control-group"><label>Brush <span class="val" id="brushVal">45</span></label><input type="range" id="brush" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Grain <span class="val" id="grainVal">30</span></label><input type="range" id="grain" min="0" max="100" value="30"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -61,7 +55,7 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Swipe left for a gust · Tilt for depth · H controls</div>
+<div class="hint-pill" id="hintPill">Drag Time to move through the day · Swipe for a gust · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -166,323 +160,567 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
   return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
 }
 
-// Windswept: wind-bent cypresses on a dune over the sea, painted in brush
-// dabs. Trunks rise from the right and lean left into flat, jagged canopies;
-// grass streaks up the left slope in the wind; a pale dune, two orange rocks
-// and a turquoise, mottled sky.
+// Windswept: a Monterey cypress bent by the wind on a Big Sur bluff, drawn
+// crisp in the manner of Eyvind Earle. Shelves of foliage with lit rims and
+// patterned undersides, a striated cliff dropping to surf and sea stacks,
+// headlands fading into haze with a lighthouse on the point, a combed grass
+// bank with a fence and flowers in front. The day turns slowly: the sun
+// crosses and sets into the sea, then the moon, stars and the lighthouse.
 struct U {
   a: vec4f,   // time, aspect, px, seed
-  b: vec4f,   // wind, brush, grain, gust
-  c: vec4f,   // tilt x, y, zoom, _
-  cols: array<vec4f, 20>,
+  b: vec4f,   // wind, gust, grain, zoom
+  c: vec4f,   // sun x, sun y, sun height, dark
+  d: vec4f,   // moon x, moon y, moon height, tilt x
+  cols: array<vec4f, 26>,
 }
 @group(0) @binding(0) var<uniform> u: U;
 
-const HZ = 0.03;
-const SUN = vec2f(-0.34, -0.33);
+// 0 sky top, 1 sky mid, 2 horizon, 3 sun, 4 glow, 5 cloud lit, 6 cloud shade,
+// 7 sea far, 8 sea near, 9 sea line, 10 headland far, 11 headland near,
+// 12 cliff lit, 13 cliff shade, 14 grass lit, 15 grass mid, 16 grass shade,
+// 17 cypress dark, 18 cypress mid, 19 cypress lit, 20 trunk, 21 poppy,
+// 22 ice plant, 23 foam, 24 ink, 25 lamp
 @diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
-@diagnostic(off, derivative_uniformity) fn pick(r: f32, a: i32, n: i32) -> vec3f { return C(a + min(i32(floor(r * f32(n))), n - 1)); }
+@diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
 
-@diagnostic(off, derivative_uniformity) fn groundTop(x: f32) -> f32 { return 0.058 + 0.01 * sin(x * 6.0 + u.a.w) - 0.07 * smoothstep(0.42, 0.8, x); }
+const HZ = -0.02;
+const CLIFF = 0.24;
+const SEA_BASE = 0.3;
 
-// Tree i: base, top of trunk, canopy half-size.
-@diagnostic(off, derivative_uniformity) fn treeBase(i: i32) -> vec2f {
-  var b = array<vec2f, 4>(vec2f(0.52, 0.055), vec2f(0.34, 0.075), vec2f(0.03, 0.085), vec2f(-0.2, 0.07));
-  return b[i];
+@diagnostic(off, derivative_uniformity) fn light() -> f32 { return smoothstep(-0.04, 0.2, u.c.z); }
+@diagnostic(off, derivative_uniformity) fn lowSun() -> f32 { return 1.0 - smoothstep(0.1, 0.5, u.c.z); }
+
+@diagnostic(off, derivative_uniformity) fn bluffTop(x: f32) -> f32 { return 0.1 - 0.035 * smoothstep(-0.9, 0.2, x) + 0.01 * sin(x * 7.0 + u.a.w) + 0.003 * sin(x * 37.0); }
+@diagnostic(off, derivative_uniformity) fn cliffX(y: f32) -> f32 {
+  let k = max(y - bluffTop(CLIFF), 0.0);
+  return CLIFF + k * 0.6 + 0.012 * sin(y * 70.0 + u.a.w) + 0.007 * sin(y * 23.0 + 1.0);
 }
-@diagnostic(off, derivative_uniformity) fn sway(i: i32) -> f32 { return -u.b.x * 0.012 * (1.0 + sin(u.a.x * 1.3 + f32(i) * 1.7)) - u.b.w * 0.03; }
-@diagnostic(off, derivative_uniformity) fn treeTop(i: i32) -> vec2f {
-  var tp = array<vec2f, 4>(vec2f(0.3, -0.17), vec2f(0.1, -0.18), vec2f(-0.14, -0.07), vec2f(-0.29, -0.055));
-  return tp[i] + vec2f(sway(i), 0.0);
+@diagnostic(off, derivative_uniformity) fn headFar(x: f32) -> f32 { return HZ + 0.004 - 0.07 * smoothstep(0.2, 0.52, x) + 0.008 * sin(x * 11.0 + u.a.w) - 0.02 * smoothstep(0.7, 1.1, x); }
+@diagnostic(off, derivative_uniformity) fn headNear(x: f32) -> f32 { return HZ + 0.03 - 0.15 * smoothstep(0.5, 0.9, x) + 0.012 * sin(x * 9.0 + u.a.w * 2.0) + 0.004 * sin(x * 41.0); }
+@diagnostic(off, derivative_uniformity) fn fgTop(x: f32) -> f32 { return 0.3 + 0.1 * smoothstep(-0.3, 0.9, x) + 0.012 * sin(x * 5.0 + u.a.w); }
+
+// Clouds: long bands with scalloped tops, lit from below when the sun is low.
+@diagnostic(off, derivative_uniformity) fn cloud(p: vec2f, k: i32) -> vec2f {
+  let fk = f32(k);
+  let L = 0.18 + 0.2 * hash1(fk + u.a.w);
+  let cy = -0.95 + fk * 0.125;
+  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0018 * (1.0 + fk * 0.3)) * 2.4 - 1.2;
+  let dx = (p.x - cx) / L;
+  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
+  let th = (0.016 + 0.012 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
+  let sc = abs(sin(dx * (7.0 + fk) + fk));
+  let top = cy - th * (1.0 + 0.8 * sc);
+  let bot = cy + th * 0.45;
+  let d = max(top - p.y, p.y - bot);
+  return vec2f(d, clamp((p.y - top) / (bot - top), 0.0, 1.0));
 }
-@diagnostic(off, derivative_uniformity) fn canopySize(i: i32) -> vec2f {
-  var s = array<vec2f, 4>(vec2f(0.17, 0.055), vec2f(0.2, 0.065), vec2f(0.13, 0.05), vec2f(0.1, 0.042));
-  return s[i];
+
+// Wind made visible: a stream function whose contours run mostly level,
+// rippled by slow noise, so streaks flow leftward off the sea.
+@diagnostic(off, derivative_uniformity) fn windField(q: vec2f, t: f32) -> f32 {
+  let w = 1.0 + u.b.x + u.b.y;
+  return q.y * 5.0 + 0.55 * fbm(vec2f(q.x * 1.3 + t * 0.05 * w, q.y * 3.0) + u.a.w) + 0.12 * sin(q.x * 3.0 + t * 0.25 * w);
 }
-@diagnostic(off, derivative_uniformity) fn canopy(i: i32, q0: vec2f) -> f32 {
-  let s = canopySize(i);
-  let q = q0 - treeTop(i) - vec2f(-s.x * 0.15, -s.y * 0.35);
-  // Longer trailing edge downwind, a spiky upper edge, lumpy everywhere.
-  let w = select(s.x, s.x * 1.25, q.x < 0.0);
-  var d = (length(q / vec2f(w, s.y)) - 1.0) * s.y;
-  d -= s.y * 0.7 * pow(max(0.0, sin(q.x / s.x * 8.0 + f32(i) * 2.3 + u.a.w)), 4.0) * step(q.y, 0.0);
-  d += s.y * 0.45 * (vnoise(q * 30.0 + f32(i) * 7.0) - 0.5);
+@diagnostic(off, derivative_uniformity) fn windStreaks(q: vec2f, t: f32, px: f32) -> f32 {
+  let e = 0.003;
+  let f0 = windField(q, t);
+  let gx = (windField(q + vec2f(e, 0.0), t) - f0) / e;
+  let gy = (windField(q + vec2f(0.0, e), t) - f0) / e;
+  let gl = max(length(vec2f(gx, gy)), 1e-3);
+  let N = 9.0;
+  let lines = f0 * N;
+  let lid = floor(lines + 0.5);
+  let dist = abs(lines - lid) / (N * gl);
+  let tng = vec2f(-gy, gx) / gl;
+  let along = dot(q, tng);
+  let L = 0.08 + 0.1 * hash1(lid * 1.7);
+  let ph = along / L - t * (0.35 + 0.5 * (u.b.x + u.b.y)) * (0.7 + 0.6 * hash1(lid * 2.9));
+  let fr = fract(ph);
+  let on = step(0.62, hash1(lid * 3.7 + floor(ph) * 1.31));
+  let head = smoothstep(0.0, 0.8, fr) * smoothstep(1.0, 0.88, fr);
+  let w = 0.0006 + 0.001 * head;
+  return fillA(dist - w, px) * head * on * smoothstep(1.5, 4.0, 1.0 / (N * gl * px));
+}
+// Light running over grass as gusts pass: bands that roll across and fade.
+@diagnostic(off, derivative_uniformity) fn gustWave(q: vec2f, t: f32) -> f32 {
+  let w = 0.4 + u.b.x + u.b.y;
+  let v = q.x * 7.0 + q.y * 3.0 + t * 0.9 * w + 1.5 * fbm(q * vec2f(2.0, 4.0) + vec2f(t * 0.05, 0.0) + u.a.w);
+  return pow(0.5 + 0.5 * sin(v), 6.0) * smoothstep(0.2, 0.6, fbm(q * 1.5 - vec2f(t * 0.03, 0.0)));
+}
+
+// A cypress shelf: a flattened lens with a scalloped top and flat underside.
+@diagnostic(off, derivative_uniformity) fn pad(q: vec2f, w: f32) -> f32 {
+  let h = w * 0.3;
+  var d = (length(q / vec2f(w, h)) - 1.0) * h;
+  d = max(d, q.y - h * 0.4);
+  d -= h * 0.22 * pow(abs(sin(q.x / w * 5.5)), 0.6) * step(q.y, 0.0);
   return d;
 }
 
-// Banding fields: whole numbers are band edges, like Awazu's stepped skies.
-@diagnostic(off, derivative_uniformity) fn bx0(q: vec2f) -> f32 { return -0.12 + 0.03 * sin(q.y * 20.0); }
-@diagnostic(off, derivative_uniformity) fn skyField(q: vec2f) -> f32 { return (q.y + 0.6) * 10.0 + 2.2 * vnoise(q * vec2f(2.5, 5.0) + u.a.w + vec2f(u.a.x * 0.01, 0.0)); }
-@diagnostic(off, derivative_uniformity) fn duneField(q: vec2f) -> f32 { return (q.y - groundTop(q.x)) * 26.0 + 1.4 * vnoise(q * vec2f(4.0, 9.0) + u.a.w); }
-@diagnostic(off, derivative_uniformity) fn bandCol(v: f32, r: f32, a: i32, n: i32) -> vec3f {
-  let b = i32(floor(v)) + select(0, 1, r > 0.93);
-  return C(a + ((b % n) + n) % n);
-}
-
-@diagnostic(off, derivative_uniformity) fn scene(q: vec2f, r: f32) -> Paint {
-  var P: Paint;
-  for (var i = 0; i < 4; i++) {
-    if (canopy(i, q) < 0.0) {
-      P.col = select(pick(r * 1.1, 8, 3), C(11), r > 0.91);
-      P.ang = -0.3 + (r - 0.5) * 1.4;
-      P.fine = 1.0;
-      return P;
+// Tree: base b, scale s. Returns colour and coverage.
+@diagnostic(off, derivative_uniformity) fn cypress(p: vec2f, b: vec2f, s: f32, sd: f32) -> vec4f {
+  let q = (p - b) / s;
+  let wind = u.b.x + u.b.y;
+  let t = u.a.x;
+  let px = u.a.z / s;
+  // Trunk: a thick, twisting limb leaning downwind.
+  let j0 = vec2f(0.0, 0.0);
+  let j1 = vec2f(-0.035, -0.07);
+  let j2 = vec2f(-0.06, -0.13);
+  let j3 = vec2f(-0.13, -0.19);
+  var trunk = sdSeg(q, j0, j1) - 0.013;
+  trunk = min(trunk, sdSeg(q, j1, j2) - 0.01);
+  trunk = min(trunk, sdSeg(q, j2, j3) - 0.007);
+  trunk = min(trunk, sdSeg(q, j2, vec2f(0.05, -0.19)) - 0.005);
+  trunk = min(trunk, sdSeg(q, j1, vec2f(0.07, -0.11)) - 0.004);
+  // Shelves, back to front.
+  var pc = array<vec3f, 7>(
+    vec3f(-0.3, -0.25, 0.14), vec3f(-0.1, -0.29, 0.12), vec3f(0.06, -0.21, 0.09),
+    vec3f(-0.4, -0.17, 0.1), vec3f(-0.19, -0.17, 0.13), vec3f(0.02, -0.13, 0.08), vec3f(-0.3, -0.1, 0.07));
+  var col = C(20);
+  var a = 0.0;
+  // Branches to each shelf.
+  for (var i = 0; i < 7; i++) {
+    let c = pc[i].xy + vec2f(0.0, pc[i].z * 0.08);
+    let src = select(j2, j3, c.x < -0.15);
+    trunk = min(trunk, sdSeg(q, src, c) - 0.0035);
+  }
+  let lt = light();
+  // Bark: lit on the side facing the sun.
+  let bark = mix(C(20), mix(C(20), C(12), 0.5), lt * step(0.0, (q.x + 0.06 * q.y) * sign(u.c.x - p.x)));
+  col = bark;
+  a = fillA(trunk, px);
+  let barkLine = strokeA(fract((q.y * 1.3 + q.x) / 0.012) - 0.5, 0.08, 0.1) * 0.35;
+  col = mix(col, C(24), barkLine * a);
+  for (var i = 0; i < 7; i++) {
+    let fi = f32(i);
+    let sw = wind * 0.006 * sin(t * 1.1 + fi * 1.7 + sd) * (0.5 - pc[i].y * 2.0);
+    let c = pc[i].xy + vec2f(sw, 0.0);
+    let w = pc[i].z;
+    let h = w * 0.3;
+    let v = q - c;
+    let d = pad(v, w);
+    if (d < px * 2.0) {
+      // Depth across the shelf: dark underside, mid body, lit rim on top.
+      let yy = clamp((v.y + h) / (h * 1.4), 0.0, 1.0);
+      var fc = mix(C(18), C(17), post(smoothstep(0.35, 0.95, yy), 2.0));
+      let rim = smoothstep(0.0, -0.012, d + 0.0) * (1.0 - smoothstep(0.0, 0.3, yy));
+      fc = mix(fc, C(19), post(rim, 2.0) * (0.4 + 0.6 * lt));
+      // Foliage pattern: rows of small scallops.
+      let g = v / 0.0105;
+      let row = floor(g.y);
+      let gx = g.x + 0.5 * (row - 2.0 * floor(row * 0.5)) + fi * 0.37;
+      let arc = length(vec2f(fract(gx) - 0.5, fract(g.y) - 0.15)) - 0.45;
+      let pat = strokeA(arc * 0.0105, 0.0006, px) * step(fract(g.y), 0.62);
+      fc = mix(fc, select(C(18), C(19), yy < 0.35 && lt > 0.3), pat * 0.7);
+      fc = mix(fc, C(24), strokeA(d, 0.0008, px) * 0.8);
+      col = mix(col, fc, fillA(d, px));
+      a = max(a, fillA(d, px));
     }
   }
-  if (q.y < HZ) {
-    // A low sun, printed flat and ringed.
-    if (length(q - SUN) < 0.052) {
-      P.col = mix(C(11), vec3f(1.0, 0.97, 0.9), select(0.3, 0.55, r > 0.5));
-      P.ang = r * 6.28;
-      P.fine = 0.0;
-      return P;
-    }
-    let n = vnoise(q * vec2f(5.0, 8.0) + u.a.w + vec2f(u.a.x * 0.01, 0.0));
-    P.col = bandCol(skyField(q), r, 0, 4);
-    P.ang = -0.35 + (n - 0.5) * 1.2;
-    P.fine = 0.0;
-    return P;
-  }
-  let gt = groundTop(q.x);
-  if (q.y < gt) {
-    P.col = select(C(4), mix(C(4), C(1), 0.4), r > 0.6);
-    P.ang = 0.0;
-    P.fine = 0.0;
-    return P;
-  }
-  // Rocks.
-  var rp = array<vec2f, 2>(vec2f(0.1, 0.34), vec2f(0.26, 0.4));
-  for (var k = 0; k < 2; k++) {
-    let d = length((q - rp[k]) / vec2f(1.0, 0.55)) - 0.045 - 0.012 * vnoise(q * 40.0);
-    if (d < 0.0) {
-      P.col = select(pick(r, 13, 2), C(15), q.y > rp[k].y + 0.008);
-      P.ang = -0.5;
-      P.fine = 1.0;
-      return P;
-    }
-  }
-  // Grass on the left slope and along the bottom; dune elsewhere.
-  let bx = -0.12 + (q.y - gt) * 1.2 + 0.03 * sin(q.y * 20.0);
-  let bottom = 0.43 + 0.03 * sin(q.x * 6.0 + u.a.w);
-  let bush = q.x > 0.58 && q.y < gt + 0.06;
-  if (q.x < bx || q.y > bottom || bush) {
-    P.col = select(pick(r * 1.1, 16, 4), C(13), r > 0.93);
-    if (bush) { P.col = select(pick(r, 8, 3), C(13), r > 0.7); }
-    P.ang = -1.25 + 0.25 * sin(u.a.x * 1.4 + q.x * 5.0) * u.b.x - u.b.w * 0.3;
-    P.fine = 1.0;
-    return P;
-  }
-  P.col = bandCol(duneField(q), r, 5, 3);
-  P.ang = -0.15 + (r - 0.5) * 0.6;
-  P.fine = 0.0;
-  return P;
+  return vec4f(col, a);
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let asp = u.a.y; let px = u.a.z; let k = u.c.z;
-  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
-  let s = p * k + u.c.xy * 0.01;
-  let pxs = px * k;
-  let br = u.b.y;
-  var col = scene(s, 0.5).col;
-  col = paintLayer(s, 0.022 * br, 0.95, 0.3, 1.0, pxs, col, false);
-  // Trunks: thin, kinked lines from base to canopy.
-  for (var i = 0; i < 4; i++) {
-    let b0 = treeBase(i);
-    let t0 = treeTop(i);
-    let mid = mix(b0, t0, 0.55) + vec2f(0.03, 0.01) + vec2f(sway(i) * 0.4, 0.0);
-    let d = min(sdSeg(s, b0, mid), sdSeg(s, mid, t0));
-    let w = 0.0028 + 0.0018 * clamp((s.y - t0.y) / (b0.y - t0.y), 0.0, 1.0);
-    col = mix(col, C(12), fillA(d - w, pxs));
-    // A branch or two splitting off near the top.
-    let br1 = sdSeg(s, mix(mid, t0, 0.5), mix(mid, t0, 0.5) + vec2f(-0.05, -0.025));
-    col = mix(col, C(12), fillA(br1 - 0.0016, pxs));
-  }
-  col = paintLayer(s, 0.0088 * br, 0.95, 0.3, 2.0, pxs, col, true);
-  let t = u.a.x;
-  let gt0 = groundTop(s.x);
-  let bx1 = -0.12 + (s.y - gt0) * 1.2 + 0.03 * sin(s.y * 20.0);
-  let bot1 = 0.43 + 0.03 * sin(s.x * 6.0 + u.a.w);
-  let inGrass = s.y > gt0 && (s.x < bx1 || s.y > bot1);
-  // Limbs: dark branches spreading through each canopy from the trunk top.
-  for (var i = 0; i < 4; i++) {
-    let cd = canopy(i, s);
-    if (cd < 0.0) {
-      let t0 = treeTop(i);
-      let sz = canopySize(i);
-      var lm = 1e3;
-      for (var j = 0; j < 5; j++) {
-        let fj = f32(j);
-        let e = t0 + vec2f(sz.x * (-1.35 + fj * 0.55), -sz.y * (0.35 + 0.45 * hash1(fj + f32(i) * 3.0)));
-        let m = mix(t0, e, 0.5) + vec2f(0.0, -sz.y * 0.25);
-        lm = min(lm, min(sdSeg(s, t0, m), sdSeg(s, m, e)));
-      }
-      col = mix(col, mix(C(12), C(2), 0.35), fillA(lm - 0.0012, pxs) * smoothstep(0.0, -0.01, cd) * 0.85);
+  let t = u.a.x; let asp = u.a.y; let k = u.b.w;
+  let p0 = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
+  let px = u.a.z * k;
+  let tilt = u.d.w;
+  let dark = u.c.w;
+  let lt = light();
+  let sun = u.c.xy;
+  let moon = u.d.xy;
+  let wind = u.b.x + u.b.y;
+  // Layers slide a little with tilt for depth.
+  let pFar = p0 + vec2f(tilt * 0.006, 0.0);
+  let pMid = p0 + vec2f(tilt * 0.014, 0.0);
+  let p = p0 + vec2f(tilt * 0.024, 0.0);
+  var col: vec3f;
+
+  // ---- Sky: stepped bands, glow, sun or moon, stars, clouds.
+  if (p0.y < HZ) {
+    let g = clamp((p0.y - HZ) / -0.9, 0.0, 1.0);
+    col = mix(C(2), C(1), post(smoothstep(0.0, 0.35, g), 5.0));
+    col = mix(col, C(0), post(smoothstep(0.3, 1.0, g), 5.0));
+    let ds = length(p0 - sun);
+    col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+    // Stars.
+    let sg = p0 / 0.035;
+    let sid = floor(sg);
+    let sh = hash21(sid + 3.3);
+    if (sh > 0.72) {
+      let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+      let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
+      let sa = atan2(sv.y, sv.x);
+      let sd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+      col = mix(col, C(25), fillA(sd, px) * dark * smoothstep(HZ - 0.02, HZ - 0.1, p0.y));
     }
-  }
-  // Grass blades and a scatter of wildflowers on the slope.
-  if (inGrass) {
-    let lean = -1.25 + 0.25 * sin(t * 1.4 + s.x * 5.0) * u.b.x - u.b.w * 0.3;
-    let gc = 0.011;
-    let gid0 = floor(s / gc);
-    var blade = 0.0;
-    var bc = C(18);
-    for (var j = -1; j <= 1; j++) {
-      for (var i = -1; i <= 1; i++) {
-        let id = gid0 + vec2f(f32(i), f32(j));
-        let h = hash21(id + 4.2);
-        let b0 = (id + vec2f(h, hash21(id + 8.1))) * gc;
-        let L = gc * (1.4 + 1.2 * hash21(id + 2.7));
-        let a = lean + (h - 0.5) * 0.5;
-        let tip = b0 + vec2f(cos(a), sin(a)) * L;
-        let d = sdSeg(s, b0, tip) - 0.0009 * (1.0 - clamp(dot(s - b0, tip - b0) / (L * L), 0.0, 1.0));
-        let cov = fillA(d, pxs);
-        if (cov > blade) { blade = cov; bc = select(select(C(18), C(17), h > 0.4), C(19), h > 0.8); }
+    // Sun disc with rings of stepped glow.
+    col = mix(col, C(3), fillA(ds - 0.045, px));
+    col = mix(col, C(4), strokeA(ds - 0.058, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
+    // Moon with a few maria.
+    let dm = length(p0 - moon);
+    let mc = mix(C(25), vec3f(0.95, 0.94, 0.88), 0.6);
+    col = mix(col, mix(col, C(25), 0.25), post(exp(-dm * 8.0) * dark, 4.0));
+    col = mix(col, mc, fillA(dm - 0.034, px));
+    col = mix(col, mc * 0.82, fillA(length(p0 - moon - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(p0 - moon - vec2f(-0.008, 0.01)) - 0.006, px));
+    for (var i = 0; i < 8; i++) {
+      let cl = cloud(p0, i);
+      if (cl.x < px * 2.0) {
+        let under = mix(1.0 - cl.y, cl.y, lowSun());
+        var cc = mix(C(6), C(5), post(under, 3.0));
+        cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
+        cc = mix(cc, C(6) * 0.9, strokeA(fract(p0.x / 0.012 + cl.y * 2.0) - 0.5, 0.05, 0.08) * 0.25);
+        col = mix(col, cc, fillA(cl.x, px));
+        col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
       }
     }
-    col = mix(col, bc, blade * 0.85);
-    let fcell = 0.034;
-    let fid = floor(s / fcell);
-    let fh = hash21(fid + u.a.w + 11.0);
-    if (fh > 0.62) {
-      let fc = (fid + 0.5 + (vec2f(hash21(fid + 1.3), hash21(fid + 2.9)) - 0.5) * 0.5) * fcell;
-      let v = s - fc;
-      let rad = 0.0065 + 0.003 * fh;
-      let pa = atan2(v.y, v.x) + fh * 6.0;
-      let petal = length(v) - rad * (0.75 + 0.35 * cos(pa * 5.0));
-      col = mix(col, select(C(11), C(13), fh > 0.8), fillA(petal, pxs));
-      col = mix(col, INK, strokeA(petal, pxs * 0.45, pxs) * 0.6);
-      col = mix(col, C(18), fillA(length(v) - rad * 0.3, pxs));
+    // The wind's streaks, fainter at night.
+    col = mix(col, mix(C(5), C(9), 0.3), windStreaks(p0, t, px) * (0.25 + 0.3 * min(wind, 1.0)) * (1.0 - 0.6 * dark));
+    // Gulls by day.
+    for (var i = 0; i < 4; i++) {
+      let fi = f32(i);
+      let bx = fract(0.2 + fi * 0.27 - t * (0.006 + 0.003 * hash1(fi)) * (1.0 + wind)) * 2.0 - 1.0;
+      let by = -0.28 - 0.14 * hash1(fi * 3.0 + u.a.w) + 0.01 * sin(t * 0.7 + fi);
+      col = mix(col, C(24), bird(p0, vec2f(bx, by), 0.014 + 0.006 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), px) * (1.0 - dark) * 0.85);
     }
+  } else {
+    // ---- Sea: perspective rows of wave dashes and a glitter path.
+    let d = p0.y - HZ;
+    col = mix(C(7), C(8), post(smoothstep(0.0, 0.35, d), 4.0));
+    let rowF = log(d + 0.004) * 30.0;
+    let row = floor(rowF);
+    let rowH = (d + 0.004) / 30.0;
+    let dashL = 0.012 + d * 0.3;
+    let xx = pMid.x / dashL + hash1(row) * 17.0 + t * 0.04 * (0.5 + hash1(row * 3.0));
+    let on = step(0.5, hash21(vec2f(floor(xx), row)));
+    let line = strokeA((fract(rowF) - 0.5) * rowH, max(px * 0.35, rowH * 0.1), px) * on * smoothstep(0.05, 0.25, fract(xx)) * smoothstep(0.95, 0.75, fract(xx));
+    col = mix(col, C(9), line * 0.55);
+    // Glitter under the sun or the moon.
+    let src = select(sun, moon, u.c.z < 0.0);
+    let srcUp = select(smoothstep(0.0, 0.1, u.c.z), smoothstep(0.0, 0.1, u.d.z) * 0.8, u.c.z < 0.0);
+    let pw = 0.01 + d * 0.3;
+    let path = exp(-pow((p0.x - src.x) / pw, 2.0)) * srcUp;
+    col = mix(col, select(C(3), C(25), u.c.z < 0.0), line * path);
+    col = mix(col, C(9), strokeA(d, px * 0.5, px) * 0.7);
   }
-  // Rocks: an ink edge and hatched shadow.
-  var rp = array<vec2f, 2>(vec2f(0.1, 0.34), vec2f(0.26, 0.4));
-  for (var k2 = 0; k2 < 2; k2++) {
-    let d = length((s - rp[k2]) / vec2f(1.0, 0.55)) - 0.045 - 0.012 * vnoise(s * 40.0);
-    let hatch = strokeA((fract((s.x - s.y) / 0.0055) - 0.5) * 0.0055, pxs * 0.35, pxs);
-    col = mix(col, C(12), hatch * fillA(d, pxs) * smoothstep(rp[k2].y - 0.005, rp[k2].y + 0.02, s.y) * 0.6);
-    col = mix(col, INK, strokeA(d, pxs * 0.7, pxs));
-  }
-  // Gulls riding the wind.
-  for (var i = 0; i < 4; i++) {
-    let fi = f32(i);
-    let bx = fract(0.2 + fi * 0.27 - t * (0.008 + 0.004 * hash1(fi)) * (1.0 + u.b.x)) * 1.4 - 0.7;
-    let by = -0.3 - 0.12 * hash1(fi * 3.0 + u.a.w) + 0.01 * sin(t * 0.7 + fi);
-    col = mix(col, INK, bird(s, vec2f(bx, by), 0.016 + 0.007 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), pxs) * 0.85);
-  }
-  // Ink plate: outlines and band hairlines, a hair off register.
-  let so = s + MISREG;
-  var ink = 0.0;
-  let gt = groundTop(so.x);
-  ink = max(ink, bandLines(skyField(so), pxs) * 0.45 * step(so.y, HZ));
-  let duneL = bandLines(duneField(so), pxs);
-  if (so.y > gt) {
-    let bx = -0.12 + (so.y - gt) * 1.2 + 0.03 * sin(so.y * 20.0);
-    let bottom = 0.43 + 0.03 * sin(so.x * 6.0 + u.a.w);
-    let dune = max(bx - so.x, so.y - bottom);
-    ink = max(ink, duneL * 0.35 * step(dune, 0.0));
-    ink = max(ink, strokeA(so.x - bx, pxs * 0.8, pxs));
-    ink = max(ink, strokeA(so.y - bottom, pxs * 0.8, pxs) * step(bx, so.x));
-  }
-  ink = max(ink, strokeA(so.y - HZ, pxs * 0.7, pxs));
-  // Sun rings, the sea's wave crests and a halftone screen over the dune.
-  ink = max(ink, rings(so, SUN, 0.052, 0.012, 3.0, pxs) * 0.6 * step(so.y, HZ));
-  ink = max(ink, strokeA(length(so - SUN) - 0.052, pxs * 0.7, pxs));
-  let row = floor((so.y - HZ) / 0.009);
-  ink = max(ink, scallop(so + vec2f(row * 0.005 + u.a.x * 0.004, 0.0), HZ + row * 0.009, 0.009, pxs) * 0.45 * step(HZ, so.y) * step(so.y, gt - 0.002));
+
+  // ---- Far headland with the lighthouse, and the nearer one.
   {
-    let bxs = -0.12 + (s.y - groundTop(s.x)) * 1.2 + 0.03 * sin(s.y * 20.0);
-    let bts = 0.43 + 0.03 * sin(s.x * 6.0 + u.a.w);
-    let inDune = step(groundTop(s.x), s.y) * step(bxs, s.x) * step(s.y, bts) * step(s.x, 0.58);
-    let db = floor(duneField(s));
-    let amt = select(0.08, 0.28, (i32(db) % 2) == 1) * smoothstep(0.0, 0.2, s.y - groundTop(s.x));
-    col = mix(col, C(7) * 0.9, halftone(s, 0.0065, amt, pxs) * inDune);
-  }
-  ink = max(ink, strokeA(so.y - gt, pxs * 0.8, pxs) * step(bx0(so), so.x));
-  for (var i = 0; i < 4; i++) { ink = max(ink, strokeA(canopy(i, so), pxs * 0.9, pxs)); }
-  col = mix(col, INK, ink);
-  return vec4f(posterFrame(canvasize(col, pos.xy, u.b.z), uv, asp, px), 1.0);
-}
-
-// Brush painter. Each page defines scene(q, r) -> Paint: the colour a dab
-// at q should carry (r picks among the region's colours), the direction the
-// stroke runs, and whether the region gets a second, finer pass (1 strokes,
-// 2 round dots). paintLayer lays one dab per grid cell, each sampling the
-// scene at its own centre, so the image is rebuilt from marks.
-struct Paint { col: vec3f, ang: f32, fine: f32 }
-
-@diagnostic(off, derivative_uniformity) fn paintLayer(p: vec2f, cell: f32, len: f32, wid: f32, sl: f32, px: f32, base: vec3f, fineOnly: bool) -> vec3f {
-  let g = p / cell;
-  let id0 = floor(g);
-  var col = base;
-  var best = -1.0;
-  for (var j = -1; j <= 1; j++) {
-    for (var i = -1; i <= 1; i++) {
-      let id = id0 + vec2f(f32(i), f32(j));
-      let h = hash21(id + sl);
-      let c = (id + 0.5 + (vec2f(h, hash21(id + sl + 3.7)) - 0.5) * 0.8) * cell;
-      let s = scene(c, hash21(id + sl + 7.3));
-      if (fineOnly && s.fine < 0.5) { continue; }
-      var L = len * cell * (0.7 + 0.5 * hash21(id + sl + 5.3));
-      var Wd = wid * cell * (0.75 + 0.5 * h);
-      if (s.fine > 1.5) { L = select(0.55, 0.42, fineOnly) * cell * (0.8 + 0.4 * h); Wd = L * 0.85; }
-      let a = s.ang + (hash21(id + sl + 9.1) - 0.5) * 0.6;
-      let q = rot2(p - c, -a);
-      // Tapered stroke: narrows toward both ends, and paint lies a little thin.
-      let tx = clamp(abs(q.x) / L, 0.0, 1.0);
-      let We = Wd * (1.0 - 0.55 * tx * tx);
-      let d = (length(q / vec2f(L, We)) - 1.0) * We;
-      let cov = fillA(d, px * 1.1);
-      if (cov > 0.0 && h > best) {
-        // Flat, silkscreen-like dabs: little tonal jitter, a faint darker rim.
-        let dc = s.col * (0.96 + 0.08 * hash21(id + sl + 1.1));
-        col = mix(col, dc, cov);
-        col = mix(col, dc * 0.78, strokeA(d, px * 0.45, px) * cov * 0.5);
-        best = h;
-      }
+    let ht = headFar(pFar.x);
+    if (pFar.y > ht - px * 2.0 && pFar.y < HZ + 0.006) {
+      var hc = mix(C(10), C(2), 0.35);
+      let fold = fract(pFar.x * 14.0 + (pFar.y - ht) * 20.0);
+      hc = mix(hc, mix(C(10), C(11), 0.4), step(0.62, fold) * 0.5 * lt);
+      col = mix(col, hc, fillA(ht - pFar.y, px) * fillA(pFar.y - HZ - 0.006, px));
+    }
+    let lx = 0.3;
+    let ly = headFar(lx);
+    let lv = pFar - vec2f(lx, ly);
+    let tower = sdBox(lv - vec2f(0.0, -0.011), vec2f(0.0028 - lv.y * -0.04, 0.011));
+    let cap = sdBox(lv - vec2f(0.0, -0.025), vec2f(0.0035, 0.003));
+    col = mix(col, mix(vec3f(0.96, 0.95, 0.9), C(2), 0.25) * mix(0.35, 1.0, lt + 0.2), fillA(tower, px));
+    col = mix(col, C(24), fillA(cap, px));
+    // The lamp turns; its beam sweeps out across the water after dark.
+    let ang = t * 0.9;
+    let lamp = vec2f(lx, ly - 0.022) - pFar + p0;
+    let rel = p0 - lamp;
+    let side = sign(sin(ang));
+    let along = rel.x * side;
+    let bw = 0.003 + max(along, 0.0) * 0.07;
+    let beam = exp(-pow(rel.y / bw, 2.0)) * exp(-max(along, 0.0) * 2.2) * step(0.0, along) * pow(abs(sin(ang)), 3.0);
+    let flash = pow(max(cos(ang), 0.0), 24.0);
+    col += C(25) * (beam * 0.5 + fillA(length(rel) - 0.004 - flash * 0.006, px) * (0.4 + flash)) * dark;
+    let hn = headNear(pFar.x * 0.5 + pMid.x * 0.5);
+    let pn = pFar * 0.5 + pMid * 0.5;
+    if (pn.y > hn - px * 2.0 && pn.y < HZ + 0.03) {
+      let s = (headNear(pn.x + 0.01) - headNear(pn.x - 0.01)) / 0.02;
+      var hc = mix(C(11), C(2), 0.18);
+      let lit2 = clamp(0.5 + s * 3.0 * sign(sun.x - pn.x), 0.0, 1.0);
+      hc = mix(mix(hc, C(10), 0.3), mix(hc, C(12), 0.35), post(lit2, 3.0) * lt);
+      let fold = fract(pn.x * 22.0 + (pn.y - hn) * 14.0 + 0.3 * sin(pn.x * 60.0));
+      hc = mix(hc, hc * 0.82, step(0.7, fold));
+      col = mix(col, hc, fillA(hn - pn.y, px) * fillA(pn.y - HZ - 0.03, px));
+      col = mix(col, C(23), strokeA(pn.y - HZ - 0.03, px * 0.8, px) * step(hn, pn.y) * (0.5 + 0.5 * sin(pn.x * 90.0 + t * 1.5)));
     }
   }
-  return col;
-}
-// Print finish, after Kiyoshi Awazu's silkscreens.
-// Canvas: a faint weave on top of the paper grain.
-@diagnostic(off, derivative_uniformity) fn canvasize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
-  let w = 0.975 + 0.025 * sin(pos.x * 1.7) * sin(pos.y * 1.7);
-  return paperize(col * w, pos, grain);
+
+  // ---- Sea stacks with surf round their feet.
+  {
+    var st = array<vec3f, 3>(vec3f(0.4, 0.27, 0.035), vec3f(0.52, 0.2, 0.022), vec3f(0.6, 0.235, 0.028));
+    for (var i = 0; i < 3; i++) {
+      let fi = f32(i);
+      let v = pMid - st[i].xy;
+      let r = st[i].z;
+      let sd = max(length(v / vec2f(0.85, 1.4)) - r * (1.0 + 0.15 * sin(atan2(v.y, v.x) * 5.0 + fi)), v.y);
+      let shade = select(C(13), mix(C(13), C(12), 0.6), (v.x * sign(sun.x - pMid.x + 1e-4)) > -r * 0.1);
+      col = mix(col, mix(C(13), shade, lt), fillA(sd, px));
+      col = mix(col, C(24), strokeA(sd, px * 0.5, px) * 0.6);
+      let surge = 0.5 + 0.5 * sin(t * 1.2 + fi * 2.0);
+      let foam = strokeA(length(v / vec2f(1.0, 0.3)) - r * (1.1 + 0.25 * surge), px * 0.8 + 0.001 * surge, px) * step(0.0, v.y);
+      col = mix(col, C(23), foam * 0.8);
+    }
+  }
+
+  // ---- Bluff and cliff.
+  let bt = bluffTop(p.x);
+  let cxAt = cliffX(min(p.y, SEA_BASE));
+  let inBluff = p.y > bt && p.x < cxAt && p.y < SEA_BASE + 0.08;
+  // Surf working along the foot of the cliff.
+  {
+    let dx = p.x - cliffX(min(p.y, SEA_BASE));
+    let surge = 0.5 + 0.5 * sin(t * 1.1 - p.y * 30.0);
+    let foam = smoothstep(0.03 + 0.02 * surge, 0.0, dx) * step(0.0, dx) * smoothstep(0.12, 0.2, p.y);
+    let lace = step(0.5, fract(dx / 0.006 - t * 0.3 + 0.3 * sin(p.y * 80.0)));
+    col = mix(col, C(23), foam * mix(0.35, 0.9, lace) * step(HZ, p.y));
+  }
+  if (inBluff) {
+    let rockAt = bt + 0.016 + 1.3 * max(0.0, CLIFF - 0.05 - p.x);
+    if (p.y > rockAt) {
+      // Striated rock, lit on the seaward face when the sun is out west.
+      let v = (p.y - p.x * 0.3) / 0.011 + 0.4 * sin(p.x * 30.0 + u.a.w);
+      let band = floor(v);
+      let face = step(0.0, sun.x - p.x) * lt;
+      var rc = mix(C(13), C(12), post(face * (0.55 + 0.35 * hash1(band)), 3.0));
+      rc = mix(rc, rc * 0.86, step(0.5, hash1(band * 1.7)));
+      rc = mix(rc, C(13) * 0.7, strokeA(fract(v) * 0.011, px * 0.45, px) * 0.9);
+      let crack = strokeA(fract(p.x / 0.018 + hash1(band) * 3.0) - 0.5, 0.03, 0.06);
+      rc = mix(rc, C(13) * 0.8, crack * 0.12 * step(0.6, hash1(band * 2.3 + floor(p.x / 0.018))));
+      col = mix(col, rc, fillA(bt - p.y, px));
+    } else {
+      // Grass in contour bands that step down the bluff, combed along each band.
+      let dy = p.y - bt;
+      let rowV = dy / 0.026 + 0.35 * sin(p.x * 9.0 + u.a.w) + 0.15 * sin(p.x * 23.0);
+      let band = floor(rowV);
+      let fv = fract(rowV);
+      var gc = select(C(15), mix(C(15), C(14), 0.55 + 0.45 * lt), (i32(band) % 2) == 0);
+      gc = mix(gc, C(14), smoothstep(0.012, 0.0, dy) * lt * 0.8);
+      gc = mix(gc, mix(C(14), C(5), 0.3), gustWave(p, t) * 0.35 * (0.3 + 0.7 * lt));
+      let comb = fract(p.x / (0.0035 + dy * 0.01) + fv * 0.6 + hash1(band) * 3.0);
+      gc = mix(gc, C(16), step(0.78, comb) * 0.4 * smoothstep(0.15, 0.5, fv));
+      gc = mix(gc, C(16), strokeA(fv * 0.026, px * 0.45, px) * 0.45);
+      // A footpath winding back toward the trees.
+      let pw = 0.003 + dy * 0.09;
+      let pxp = -0.2 + 0.1 * sin(dy * 16.0 + u.a.w) + dy * 0.4;
+      let pd = abs(p.x - pxp) - pw;
+      let sand = mix(mix(C(12), vec3f(0.96, 0.9, 0.78), 0.55), C(13), (1.0 - lt) * 0.6);
+      gc = mix(gc, sand, fillA(pd, px));
+      gc = mix(gc, C(16), strokeA(pd, px * 0.4, px) * 0.6);
+      // Coyote brush: round clumps sitting on the band edges.
+      let cw = 0.045 + dy * 0.2;
+      for (var o = 0; o <= 1; o++) {
+        let bb = band - f32(o);
+        let ci = floor(p.x / cw);
+        let id = vec2f(ci, bb);
+        let h = hash21(id + u.a.w + 4.0);
+        let cx = (ci + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * cw;
+        if (h > 0.55 && abs(cx - (-0.2 + 0.1 * sin(dy * 16.0 + u.a.w) + dy * 0.4)) > 0.03) {
+          let r = 0.008 + dy * 0.05 + 0.006 * h;
+          let cyv = bt + (bb + 1.0 - 0.35 * sin(cx * 9.0 + u.a.w)) * 0.026;
+          let v = p - vec2f(cx, cyv);
+          let sd = max(length(v / vec2f(1.3, 1.0)) - r * (1.0 + 0.12 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.2);
+          var bc = mix(C(16), C(18), 0.4);
+          bc = mix(bc, mix(C(15), C(19), 0.5), post(smoothstep(0.0, -r, v.y + r * 0.2) * lt, 2.0) * step(v.y, -r * 0.35));
+          gc = mix(gc, bc, fillA(sd, px));
+          gc = mix(gc, C(24), strokeA(sd, px * 0.45, px) * 0.7);
+        }
+      }
+      col = mix(col, gc, fillA(bt - p.y, px));
+    }
+  }
+  col = mix(col, C(24), strokeA(p.y - bt, px * 0.6, px) * step(p.x, cxAt) * 0.7);
+  col = mix(col, C(24), strokeA(p.x - cxAt, px * 0.6, px) * step(bt, p.y) * step(p.y, SEA_BASE + 0.08) * 0.6);
+
+  // ---- Cypresses: two behind, the big one in front.
+  let c1 = cypress(p, vec2f(-0.56, bluffTop(-0.56) + 0.004), 0.55, 2.0);
+  col = mix(col, c1.rgb, c1.a);
+  let c2 = cypress(p, vec2f(0.14, bluffTop(0.14) + 0.004), 0.42, 5.0);
+  col = mix(col, c2.rgb, c2.a);
+  let c0 = cypress(p, vec2f(-0.08, bluffTop(-0.08) + 0.006), 1.0, 0.0);
+  col = mix(col, c0.rgb, c0.a);
+
+  // ---- Foreground bank: combed grass, ice plant, poppies and a fence.
+  let pf = p0 + vec2f(tilt * 0.04, 0.0);
+  let ft = fgTop(pf.x);
+  if (pf.y > ft - px * 2.0) {
+    let dd = pf.y - ft;
+    let sway = wind * 0.006 * sin(t * 1.5 + pf.x * 8.0) * smoothstep(0.0, 0.1, dd);
+    var gc = mix(C(14), C(15), post(smoothstep(0.0, 0.25, dd) + (1.0 - lt) * 0.5, 3.0));
+    let comb = fract((pf.x + sway) / (0.0035 + dd * 0.012) + 0.25 * sin(pf.y * 60.0));
+    gc = mix(gc, C(16), step(0.72, comb) * 0.55);
+    gc = mix(gc, mix(C(14), C(5), 0.3), gustWave(pf, t) * 0.3 * (0.3 + 0.7 * lt));
+    // Contour steps across the bank.
+    let cband = fract((dd + 0.01 * sin(pf.x * 9.0 + u.a.w)) / 0.045);
+    gc = mix(gc, C(16), strokeA(cband - 0.5, 0.02, 0.04) * 0.3);
+    // Ice plant mats along the lip: magenta with fine radial lines.
+    let ice = fbm(vec2f(pf.x * 7.0, dd * 18.0) + u.a.w) - 0.6 + dd * 3.0;
+    if (ice < 0.0 && dd < 0.08) {
+      var ic = mix(C(22), mix(C(22), C(16), 0.4), step(0.5, fract(pf.x / 0.004)));
+      col = mix(col, ic, 0.0);
+      gc = mix(gc, ic, fillA(ice * 0.03, px));
+    }
+    col = mix(col, gc, fillA(ft - pf.y, px));
+    col = mix(col, C(24), strokeA(pf.y - ft, px * 0.7, px) * 0.8);
+    // Poppies: open cups, bigger lower down.
+    let fc = 0.03 + dd * 0.12;
+    let row = floor(log(dd + 0.02) * 12.0);
+    let rh = (dd + 0.02) / 12.0;
+    let id = vec2f(floor(pf.x / (rh * 1.6)), row);
+    let h = hash21(id + u.a.w);
+    if (h > 0.3 && dd > 0.02) {
+      let c = vec2f((id.x + 0.5 + (hash21(id + 1.3) - 0.5) * 0.5) * rh * 1.6, ft + (exp((row + 0.5) / 12.0) - 0.02));
+      let r = rh * 0.42;
+      // Bend from the foot of the stem, with gusts rippling across the bank.
+      let ang = ((0.15 + 0.1 * h) * sin(t * 1.4 + c.x * 5.0 + h * 4.0) + 0.15 * sin(t * 0.6 - c.x * 3.0)) * wind;
+      let foot = c + vec2f(0.0, r * 2.5);
+      let v = rot2(pf - foot, ang) + (foot - c);
+      let cup = max(length(v / vec2f(1.0, 0.85)) - r, -r * 0.25 + r * 0.14 * abs(sin(v.x / r * 4.7 + h * 3.0)) - v.y);
+      let stem = sdSeg(v, vec2f(0.0, r * 0.4), vec2f(0.0, r * 2.5)) - r * 0.08;
+      col = mix(col, C(16), fillA(stem, px));
+      col = mix(col, mix(C(21), C(4), select(0.0, 0.3, h > 0.85)), fillA(cup, px));
+      col = mix(col, C(21) * 0.75, fillA(length((v + vec2f(0.0, r * 0.25)) / vec2f(1.0, 0.35)) - r * 0.5, px) * fillA(cup, px));
+      col = mix(col, C(24), strokeA(cup, px * 0.5, px) * 0.8);
+    }
+    // Fence: weathered posts and two sagging wires along the lip.
+    let spacing = 0.075;
+    let fx = pf.x / spacing;
+    let fi = round(fx);
+    let postX = fi * spacing;
+    let py0 = fgTop(postX) + 0.018;
+    let lean = 0.1 * (hash1(fi + u.a.w) - 0.5);
+    let pv = pf - vec2f(postX, py0);
+    let postD = sdSeg(pv, vec2f(0.0), vec2f(lean * 0.05, -0.05)) - 0.0028;
+    let inRun = step(-1.2, pf.x) * step(pf.x, 0.55);
+    col = mix(col, mix(C(20), C(12), 0.3 * lt), fillA(postD, px) * inRun);
+    col = mix(col, C(24), strokeA(postD, px * 0.4, px) * inRun * 0.8);
+    let fr = fract(fx + 0.5) - 0.5;
+    let sag = 0.006 * (1.0 - 4.0 * fr * fr);
+    let wy = fgTop(pf.x) + 0.018;
+    let wires = max(strokeA(pf.y - (wy - 0.038 + sag), px * 0.35, px), strokeA(pf.y - (wy - 0.022 + sag), px * 0.35, px));
+    col = mix(col, C(24), wires * inRun * 0.7);
+  }
+  // Dark grass silhouettes along the bottom edge, bending in the wind.
+  {
+    let bottom = 0.5 * k;
+    let gcW = 0.012;
+    let gi = floor(p0.x / gcW);
+    for (var j = -1; j <= 1; j++) {
+      let id = gi + f32(j);
+      let h = hash1(id * 1.3 + u.a.w);
+      let base = vec2f((id + 0.5) * gcW, bottom + 0.01);
+      let ht = 0.05 + 0.1 * h;
+      let bend = (0.02 + 0.02 * h + wind * 0.01 * sin(t * 1.6 + id * 0.7)) ;
+      let v = p0 - base;
+      let s = clamp(-v.y / ht, 0.0, 1.0);
+      let cx = -bend * s * s;
+      let w = 0.0025 * (1.0 - s);
+      let d = abs(v.x - cx) - w;
+      col = mix(col, mix(C(16), C(24), 0.6), fillA(d, px) * step(-ht, v.y) * step(v.y, 0.0));
+    }
+  }
+  return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 `;
 
 const NAME = 'windswept';
-// sky x4, sea, dune x3, canopy x4 (navy, teal, slate, olive), coral, trunk, rock orange, rock light, rock shade, grass x4
-const PALETTES = {
-  original: ['#3fb3d6', '#79d0e3', '#bfe9ef', '#2a9cc4', '#2b8e9e', '#d9ecdf', '#eef6ef', '#bcd8cf', '#1f3d58', '#2f5a6a', '#4b6a7c', '#e8a08a', '#58564f', '#e0874f', '#f2b48a', '#6f7f6a', '#4f9a5a', '#8ec46a', '#c9d88a', '#2f8a7a'],
-  dusk:     ['#e88a7a', '#f2b09a', '#f7d2b8', '#c96a78', '#6a5a8a', '#f2d8c8', '#fbeadd', '#d8b8b0', '#1f2a48', '#3a3a62', '#5a4a70', '#ffb28a', '#3a2e38', '#e0704f', '#f5a67a', '#6a4a5a', '#6a8a5a', '#a8b86a', '#e0c88a', '#4a6a5a'],
-  winter:   ['#9fb8c8', '#c8d8e0', '#e8eef0', '#7f9eb4', '#5a7a8a', '#e8ecea', '#f6f8f6', '#c8d0cc', '#1e2a36', '#34485a', '#56687a', '#e0b0a0', '#3c3c3a', '#c8805a', '#e8b89a', '#6a6e68', '#6a8a70', '#98b08a', '#c8c8a0', '#4a6a64'],
+
+// Time of day. tau runs 0..1 round the clock: afternoon at 0, sunset near
+// 0.3, night through the middle, dawn at 0.8. Each piece gives sky colours
+// per key and a land palette that is graded by the light of the moment.
+const DAY_KEYS = [
+  [0.00, 'afternoon', [1, 1, 1], 1.0],
+  [0.18, 'golden hour', [1.08, 0.94, 0.76], 1.12],
+  [0.28, 'sunset', [0.98, 0.7, 0.6], 1.05],
+  [0.35, 'blue hour', [0.46, 0.5, 0.76], 0.72],
+  [0.43, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.73, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.81, 'dawn', [0.86, 0.72, 0.8], 0.85],
+  [0.9, 'morning', [1.02, 0.98, 0.94], 0.95],
+  [1.0, 'afternoon', [1, 1, 1], 1.0],
+];
+const SKY_ORDER = ['afternoon', 'golden hour', 'sunset', 'blue hour', 'night', 'night', 'dawn', 'morning', 'afternoon'];
+function dayKey(tau) {
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && tau >= DAY_KEYS[i + 1][0]) i++;
+  const a = DAY_KEYS[i], b = DAY_KEYS[i + 1];
+  let f = (tau - a[0]) / (b[0] - a[0]);
+  f = f * f * (3 - 2 * f);
+  return { i, f, name: f < 0.5 ? a[1] : b[1] };
+}
+const lerp3 = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+// SKIES: name -> list of hex; LAND: list of hex; KEEP: land indexes left ungraded.
+function dayCols(tau, SKIES, LAND, KEEP) {
+  const k = dayKey(tau);
+  const A = DAY_KEYS[k.i], B = DAY_KEYS[k.i + 1];
+  const sa = SKIES[SKY_ORDER[k.i]], sb = SKIES[SKY_ORDER[k.i + 1]];
+  const out = sa.map((h, j) => [...lerp3(hex(h), hex(sb[j]), k.f), 1]);
+  const m = lerp3(A[2], B[2], k.f), sat = A[3] + (B[3] - A[3]) * k.f;
+  LAND.forEach((h, j) => {
+    const c = hex(h);
+    if (KEEP.includes(j)) { out.push([...c, 1]); return; }
+    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    out.push([...c.map((v, q) => Math.max(0, Math.min(1, (l + (v - l) * sat) * m[q]))), 1]);
+  });
+  return out;
+}
+// Sun and moon: position on screen, height above the horizon (-1..1).
+function celestial(tau, hz) {
+  const df = ((tau - 0.8) % 1 + 1) % 1;
+  let elev, sx, sy, mx = 0, my = 2, mElev = -1;
+  if (df < 0.51) { const f = df / 0.51; elev = Math.sin(Math.PI * f); sx = -0.55 + 0.9 * f; }
+  else { const f = (df - 0.51) / 0.49; elev = -Math.sin(Math.PI * f); sx = 0.35; mElev = Math.sin(Math.PI * f); mx = 0.5 - 0.95 * f; my = hz - mElev * 0.46 + 0.04; }
+  sy = hz - elev * 0.55 + 0.02;
+  return { sx, sy, elev, mx, my, mElev };
+}
+
+// Sky and sea for each time of day:
+// sky top, sky mid, horizon, sun, glow, cloud lit, cloud shade, sea far, sea near, sea line
+const SKIES = {
+  'afternoon':   ['#2f9fcf', '#6cc6e2', '#c2eaf0', '#fff6d8', '#fff2c0', '#f6f8f4', '#a9cbd6', '#2a86a8', '#1f6f8e', '#d8f2f4'],
+  'golden hour': ['#3b8fc4', '#9cc8d8', '#f4dca4', '#fff0b0', '#ffd070', '#fff0d0', '#c7a6a0', '#2f7a96', '#22607a', '#ffe0a0'],
+  'sunset':      ['#3a5d9c', '#d9869a', '#ffb070', '#ffe2a0', '#ff9a50', '#ffc49a', '#8a5a7a', '#3a5a82', '#2a4668', '#ffc080'],
+  'blue hour':   ['#1c2b5a', '#4a4f8a', '#c48aa0', '#f0c0a0', '#b07aa0', '#9a86b0', '#4a4870', '#26365e', '#1c2a4c', '#9a8ab8'],
+  'night':       ['#060a1c', '#0d1734', '#1b2c52', '#f4f0dc', '#34446e', '#35415f', '#131a30', '#0d1830', '#091326', '#8fa2cc'],
+  'dawn':        ['#4a6aa8', '#c49ac0', '#ffd0b0', '#fff0d0', '#ffb8a0', '#ffe4d8', '#a08aa8', '#4a6a96', '#36507a', '#ffd8c8'],
+  'morning':     ['#3aa0d4', '#86cfe6', '#dcf0f0', '#fff8e0', '#fff4d0', '#f8faf6', '#b4ccd8', '#2c88aa', '#206e8c', '#e0f4f4'],
 };
+// headland far, headland near, cliff lit, cliff shade, grass lit, grass mid, grass shade,
+// cypress dark, cypress mid, cypress lit, trunk, poppy, ice plant, foam, ink, lamp
+const LAND = ['#8fb2bc', '#5f8e88', '#e6b88c', '#9a6a58', '#bcd86c', '#6aa84a', '#2f7a5a',
+  '#14303c', '#2a4f5a', '#79a06e', '#4a3a34', '#f07a2a', '#e46aa4', '#f6fbfb', '#121820', '#ffd98a'];
+const KEEP = [14, 15];
 
 const p = {};
+let tau = 0.1 + Math.random() * 0.12;
 function readControls() {
-  p.pal = colsOf($('palette').value);
   p.wind = +$('wind').value / 100 * 1.5;
-  p.brush = 0.6 + +$('brush').value / 100 * 0.9;
+  p.speed = +$('speed').value / 100;
   p.grain = +$('grain').value / 100 * 0.1;
-  for (const id of ['wind', 'brush', 'grain']) $(id + 'Val').textContent = $(id).value;
+  for (const id of ['wind', 'speed', 'grain']) $(id + 'Val').textContent = $(id).value;
+  if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
 }
-let gust = 0, gustGoal = 0;
+let timeHooked = false;
+let gust = 0, gustGoal = 0, shown = -1;
 function generate() {}
 function uniforms() {
-  // Keep the whole composition on narrow screens.
-  const zoom = Math.max(1, 1.05 / aspect);
+  const zoom = Math.max(1, 1.2 / aspect);
+  const s = celestial(tau, -0.02);
+  const dark = 1 - Math.min(1, Math.max(0, (s.elev + 0.25) / 0.3));
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
-    b: [p.wind, p.brush, p.grain, gust],
-    c: [tl.active ? tl.x : 0, tl.active ? tl.y - 0.5 : 0, zoom, 0],
-    cols: p.pal,
+    b: [p.wind, gust, p.grain, zoom],
+    c: [s.sx, s.sy, s.elev, dark],
+    d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
+    cols: dayCols(tau, SKIES, LAND, KEEP),
   };
 }
 function step(dt) {
+  // A full day in about three minutes at the default speed.
+  tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
   gustGoal *= Math.exp(-dt * 1.2);
   gust += (gustGoal - gust) * (1 - Math.exp(-dt * 5));
+  const v = Math.round(tau * 100);
+  if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(tau).name; }
 }
 let lastX = 0;
 function onDown(q) { lastX = q[0]; }
