@@ -10,6 +10,9 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 Animated versions of my own paintings. A brush layer rebuilds each scene from hundreds of painted marks laid along the scene's own stroke directions, with a second pass of fine strokes and pointillist dots.
 
+- **Poppy Hill**: a poppy hillside with dark scrub, a eucalyptus grove, a cypress windbreak, a violet ridge and a golden hill
+- **Fern Palms**: palms with herringbone fronds and scaly trunks over bushes traced in dotted lines, dripping blue-teal sky
+- **Spore Tide**: from a painted surfboard; hatched mushrooms on red, stems swaying into a dripping ink mass over a sea of dashes
 - **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, dark brush with spirals of yellow dots
 - **Palm Row**: palms with dotted trunks and shaggy heads against a coral-to-mint sky, over a pointillist hillside
 - **Windswept**: wind-bent cypresses on a dune above a turquoise sea

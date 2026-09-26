@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Spore Tide — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="board" selected>Board</option>
+      <option value="tide">Tide</option>
+      <option value="mono">Mono</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Sway <span class="val" id="swayVal">50</span></label><input type="range" id="sway" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Speckle <span class="val" id="speckleVal">60</span></label><input type="range" id="speckle" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Mushrooms <span class="val" id="countVal">60</span></label><input type="range" id="count" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Grain <span class="val" id="grainVal">30</span></label><input type="range" id="grain" min="0" max="100" value="30"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to pull the stems · Generate for a new patch · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+const SHADER = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var a = 0.5; var s = 0.0;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, 9.2); a *= 0.5; }
+  return s / 0.9375;
+}
+// Coverage of a shape from its signed distance (negative inside), one pixel wide.
+fn fillA(d: f32, px: f32) -> f32 { return clamp(0.5 - d / px, 0.0, 1.0); }
+// Coverage of an outline of half-width w along the shape's edge.
+fn strokeA(d: f32, w: f32, px: f32) -> f32 { return clamp(0.5 - (abs(d) - w) / px, 0.0, 1.0); }
+fn sdBox(p: vec2f, b: vec2f) -> f32 { let d = abs(p) - b; return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0); }
+fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+fn sdTri(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f) -> f32 {
+  let e0 = p1 - p0; let e1 = p2 - p1; let e2 = p0 - p2;
+  let v0 = p - p0; let v1 = p - p1; let v2 = p - p2;
+  let pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  let pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  let pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  let s = sign(e0.x * e2.y - e0.y * e2.x);
+  let d = min(min(vec2f(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+                  vec2f(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+                  vec2f(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+  return -sqrt(d.x) * sign(d.y);
+}
+fn rot2(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * p.x - s * p.y, s * p.x + c * p.y); }
+// Paper: a little fibre and grain, and ink that prints slightly unevenly.
+fn paperize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
+  let fibre = 0.965 + 0.035 * vnoise(pos * vec2f(0.02, 0.09));
+  let speck = hash21(floor(pos / 1.5)) - 0.5;
+  return col * fibre * (1.0 + speck * grain * 0.6) + (hash21(pos) - 0.5) * grain * 0.25;
+}
+// Registration mark: a ring with a cross through it.
+fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
+  let q = p - c;
+  let ring = strokeA(length(q) - r, px * 0.6, px);
+  let cross = max(strokeA(sdSeg(q, vec2f(-r * 1.7, 0.0), vec2f(r * 1.7, 0.0)), px * 0.5, px),
+                  strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
+  return max(ring, cross);
+}
+
+// Spore Tide: after my painted surfboard. Mushrooms with hatched orange caps
+// and dark gilled undersides rest on a red ground; their long dotted stems
+// sway up into a black ink mass that drips and splashes into the cream
+// above, over a sea of short lavender, blue and purple dashes speckled with
+// white dots.
+struct U {
+  a: vec4f,   // time, aspect, px, seed
+  b: vec4f,   // sway, speckle, grain, count
+  c: vec4f,   // touch x, y, strength, zoom
+  cols: array<vec4f, 12>,
+  m: array<vec4f, 12>,    // cap x, cap y, size, tilt
+  n: array<vec4f, 12>,    // top x, top y, phase, face (0 top, 1 gills)
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+@diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+
+@diagnostic(off, derivative_uniformity) fn inkTop(x: f32) -> f32 {
+  return -0.2 - 0.12 * exp(-pow((x - 0.15) / 0.25, 2.0)) - 0.08 * exp(-pow((x + 0.45) / 0.2, 2.0))
+       + 0.03 * sin(x * 13.0 + u.a.w) + 0.025 * (fbm(vec2f(x * 9.0, u.a.w)) - 0.5);
+}
+@diagnostic(off, derivative_uniformity) fn seaTop(x: f32) -> f32 { return 0.02 + 0.05 * sin(x * 2.2 + u.a.w) + 0.02 * sin(x * 7.0); }
+@diagnostic(off, derivative_uniformity) fn redTop(x: f32) -> f32 { return 0.14 + 0.06 * sin(x * 1.7 + u.a.w * 1.3) - 0.04 * x; }
+
+@diagnostic(off, derivative_uniformity) fn stemPoint(i: i32, s: f32) -> vec2f {
+  let m = u.m[i]; let n = u.n[i];
+  let t = u.a.x;
+  // Stem leaves the cap at its crown.
+  let base = m.xy + rot2(vec2f(0.0, -0.068 * m.z), m.w);
+  var top = n.xy;
+  // Sway, and lean toward the finger.
+  top.x += u.b.x * 0.03 * sin(t * 0.7 + n.z);
+  top += (u.c.xy - top) * u.c.z * 0.25;
+  let mid = mix(base, top, 0.5) + vec2f(0.06 * sin(n.z * 3.0 + t * 0.4) * u.b.x, 0.0);
+  let a = mix(base, mid, s); let b = mix(mid, top, s);
+  return mix(a, b, s);
+}
+
+@diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let t = u.a.x; let asp = u.a.y; let k = u.c.w;
+  let px = u.a.z * k;
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
+  var col = C(0);   // cream
+
+  // Sea of short dashes.
+  let st = seaTop(p.x);
+  if (p.y > inkTop(p.x) - 0.05) {
+    let g = vec2f(p.x / 0.016 + floor(p.y / 0.006) * 0.37 + t * 0.05, p.y / 0.006);
+    let id = floor(g);
+    let h = hash21(id + u.a.w);
+    var dc = C(3);
+    if (h < 0.35) { dc = C(4); } else if (h < 0.55) { dc = C(5); } else if (h < 0.62) { dc = C(6); } else if (h < 0.66) { dc = C(1); }
+    let f = fract(g) - 0.5;
+    let dash = fillA(sdBox(vec2f(f.x * 0.016, f.y * 0.006), vec2f(0.0065 * (0.6 + 0.4 * h), 0.0017)), px);
+    let sea = mix(C(3), dc, dash);
+    col = mix(col, sea, step(inkTop(p.x) - 0.04, p.y));
+  }
+  // Ink mass: jagged top, drips rising into the cream, splashes above.
+  let it = inkTop(p.x);
+  let inkBottom = st + 0.03 * sin(p.x * 5.0 + 1.0);
+  var ink = fillA(it - p.y, px) * fillA(p.y - inkBottom, px);
+  // Drips: thin tendrils rising from the ink with a bead on top.
+  for (var j = 0; j < 14; j++) {
+    let fj = f32(j);
+    let dx = -0.78 + fj * 0.12 + 0.05 * (hash1(fj + u.a.w) - 0.5);
+    let len = 0.05 + 0.2 * pow(hash1(fj * 3.1 + u.a.w), 1.5);
+    let grow = 0.85 + 0.15 * sin(t * 0.5 + fj);
+    let b0 = vec2f(dx, inkTop(dx) + 0.01);
+    let b1 = b0 + vec2f(0.02 * sin(fj * 2.0), -len * grow);
+    ink = max(ink, fillA(sdSeg(p, b0, b1) - 0.0022 * (1.0 + 0.5 * hash1(fj)), px));
+    let bead = length((p - b1) / vec2f(1.0, 1.4)) - 0.008 * (0.8 + 0.6 * hash1(fj * 7.0));
+    ink = max(ink, fillA(bead, px));
+    // A pink splash beside a few of them.
+    if (hash1(fj * 5.3 + u.a.w) > 0.55) {
+      let sp = b1 + vec2f(0.025, 0.02);
+      col = mix(col, C(11), fillA(length((p - sp) / vec2f(1.0, 1.6)) - 0.012, px));
+    }
+  }
+  col = mix(col, C(2), ink);
+  // Speckle over the ink and upper sea: white, yellow and blue dots.
+  let sg = p / 0.009;
+  let sid = floor(sg);
+  let sh = hash21(sid + u.a.w * 1.7);
+  let dens = u.b.y * (0.55 * ink + 0.25 * smoothstep(inkBottom + 0.08, inkBottom, p.y) * step(inkBottom, p.y));
+  if (sh < dens) {
+    let f = fract(sg) - 0.5 - (vec2f(hash21(sid + 3.1), hash21(sid + 5.7)) - 0.5) * 0.5;
+    let tw = 0.7 + 0.3 * sin(t * 2.0 + sh * 40.0);
+    let dd = (length(f) - 0.18 * (0.6 + tw * 0.5)) * 0.009;
+    let dcol = select(select(C(6), C(8), sh < dens * 0.25), C(3), sh > dens * 0.8);
+    col = mix(col, dcol, fillA(dd, px));
+  }
+  // Red ground.
+  let rt = redTop(p.x);
+  col = mix(col, C(7), fillA(rt - p.y, px));
+
+  // Mushrooms: stems first, then caps.
+  let n = i32(u.b.w);
+  for (var i = 0; i < 12; i++) {
+    if (i >= n) { break; }
+    var dmin = 1e3;
+    var sAt = 0.0;
+    var prev = stemPoint(i, 0.0);
+    for (var k2 = 1; k2 <= 10; k2++) {
+      let s = f32(k2) / 10.0;
+      let cur = stemPoint(i, s);
+      let d = sdSeg(p, prev, cur);
+      if (d < dmin) { dmin = d; sAt = s; }
+      prev = cur;
+    }
+    let sz = u.m[i].z;
+    let w = sz * (0.0085 - 0.003 * sAt);
+    if (dmin < w + px * 2.0) {
+      var sc = C(6);
+      // Dotted outline and a pale sheen down the middle.
+      let edge = smoothstep(w * 0.55, w, dmin);
+      let dotsAlong = step(0.45, fract(sAt * 120.0));
+      sc = mix(sc, C(2), edge * dotsAlong);
+      sc = mix(sc, C(3), smoothstep(w * 0.3, 0.0, dmin) * 0.35);
+      col = mix(col, sc, fillA(dmin - w, px));
+      col = mix(col, C(2), strokeA(dmin - w, px * 0.5, px));
+    }
+  }
+  for (var i = 0; i < 12; i++) {
+    if (i >= n) { break; }
+    let m = u.m[i];
+    let bob = 0.004 * sin(t * 0.9 + u.n[i].z);
+    let q = rot2(p - m.xy - vec2f(0.0, bob), -m.w);
+    let R = m.z * 0.1;
+    let face = u.n[i].w;
+    // Cap: a broad dome; underside flat with a rim.
+    let dome = max(length(q / vec2f(1.0, 0.75)) - R, q.y - R * 0.12);
+    var d = dome;
+    var cc = C(9);
+    if (face > 0.5) {
+      // Gill view: the cap tipped up to show a dark red underside with
+      // radial gill lines and a yellow rim.
+      let gillD = length(q / vec2f(1.0, 0.36)) - R;
+      d = min(dome, gillD);
+      let gd = length(q / vec2f(1.0, 0.36));
+      let isGill = gillD < 0.0 && q.y > -R * 0.02;
+      if (isGill) {
+        cc = C(10);
+        let ga = atan2(q.y / 0.45, q.x);
+        cc = mix(cc, C(2), strokeA((fract(ga * 5.0) - 0.5) / 5.0 * gd, px * 0.5, px) * 0.7);
+        cc = mix(cc, C(8), strokeA(gd - R * 0.92, px * 0.8, px));
+        cc = mix(cc, C(1), fillA(length(fract(vec2f(atan2(q.y, q.x) * 6.0, 0.5)) - 0.5) * R * 0.1 - R * 0.02, px) * step(R * 0.88, gd) * 0.0);
+      }
+      if (!isGill) {
+        cc = C(9);
+        cc = mix(cc, C(8), strokeA((fract((q.x + q.y * 0.4) / (R * 0.12)) - 0.5) * R * 0.12, px * 0.6, px));
+      }
+    } else {
+      // Top view: orange with yellow hatching and black spots.
+      cc = mix(cc, C(8), strokeA((fract((q.x * 0.8 + q.y) / (R * 0.11) + u.n[i].z) - 0.5) * R * 0.11, px * 0.6, px));
+      for (var j = 0; j < 5; j++) {
+        let fj = f32(j);
+        let sp = vec2f((hash1(fj + f32(i) * 7.0) - 0.5) * 1.3, -0.1 - 0.45 * hash1(fj * 3.0 + f32(i))) * R;
+        cc = mix(cc, C(2), fillA(length(q - sp) - R * (0.07 + 0.06 * hash1(fj * 5.0 + f32(i))), px));
+      }
+    }
+    col = mix(col, cc, fillA(d, px));
+    col = mix(col, C(2), strokeA(d, px * 0.9, px));
+  }
+  return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
+}
+`;
+
+const NAME = 'spore-tide';
+// cream, white, ink, sea lavender, blue, purple, stem white, red ground, yellow, orange cap, gill red, splash pink
+const PALETTES = {
+  board:  ['#efe8d4', '#f7f5ee', '#0c0a0c', '#9aaee0', '#2f4ab8', '#6a58b8', '#eeeae0', '#e0321f', '#f2c63a', '#e8782a', '#6a1a14', '#f2586a'],
+  tide:   ['#e8f0ec', '#ffffff', '#0a1418', '#7ec8d0', '#1f6a8a', '#3a4a8a', '#eef4f0', '#1f8a7a', '#f2d04a', '#f08a3a', '#3a1a2a', '#ff7a8a'],
+  mono:   ['#ece8e0', '#ffffff', '#0e0e0e', '#b8b8bc', '#5a5a64', '#7a7a84', '#f2f2ee', '#2a2a2e', '#d8d8d0', '#9a9a96', '#3a3a3a', '#c8c8c8'],
+};
+
+const p = {};
+function readControls() {
+  p.pal = colsOf($('palette').value);
+  p.sway = +$('sway').value / 100 * 1.6;
+  p.speckle = +$('speckle').value / 100;
+  p.count = 5 + Math.round(+$('count').value / 100 * 7);
+  p.grain = +$('grain').value / 100 * 0.1;
+  for (const id of ['sway', 'speckle', 'count', 'grain']) $(id + 'Val').textContent = $(id).value;
+  if (shrooms.length) layout();
+}
+let shrooms = [], touch = [0, 0, 0];
+function layout() {
+  let s = seedN;
+  const R = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+  shrooms = [];
+  for (let i = 0; i < p.count; i++) {
+    const x = -0.72 + (i + 0.5) / p.count * 1.44 + (R() - 0.5) * 0.1;
+    const y = 0.22 + R() * 0.24;
+    const size = 0.5 + R() * 0.5 + (y - 0.22) * 1.6;
+    shrooms.push({ m: [x, y, size, (R() - 0.5) * 0.9], n: [x + (R() - 0.5) * 0.35, -0.16 - R() * 0.12, R() * 6.28, R() < 0.45 ? 1 : 0] });
+  }
+  // Nearer (lower, bigger) caps draw last.
+  shrooms.sort((a, b) => a.m[1] - b.m[1]);
+}
+let seedN = 1;
+function generate() { seedN = 1 + Math.floor(Math.random() * 1e6); layout(); }
+function uniforms() {
+  const zoom = Math.max(1, 0.62 / aspect);
+  const m = [], n = [];
+  for (let i = 0; i < 12; i++) { const s = shrooms[i]; m.push(s ? s.m : [0, 0, 0, 0]); n.push(s ? s.n : [0, 0, 0, 0]); }
+  return {
+    a: [t, aspect, 1 / Math.max(1, H), seed],
+    b: [p.sway, p.speckle, p.grain, shrooms.length],
+    c: [touch[0] * zoom, touch[1] * zoom, touch[2], zoom],
+    cols: p.pal, m, n,
+  };
+}
+function step(dt) { touch[2] += ((dragging ? 1 : 0) - touch[2]) * (1 - Math.exp(-dt * 4)); }
+function onDown(q) { touch[0] = q[0]; touch[1] = q[1]; }
+function onMove(q) { touch[0] = q[0]; touch[1] = q[1]; }
+function onUp() {}
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const colsOf = (name) => PALETTES[name].map((h) => [...hex(h), 1]);
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const clk = clock(gpu);
+const tl = tilt();
+let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
+let seed = Math.random() * 100;
+
+function toP(e) {
+  const r = canvas.getBoundingClientRect();
+  return [((e.clientX - r.left) / r.width - 0.5) * aspect, (e.clientY - r.top) / r.height - 0.5];
+}
+let dragging = false, pointer = [0, 0];
+canvas.addEventListener('pointerdown', (e) => { dragging = true; pointer = toP(e); canvas.setPointerCapture(e.pointerId); onDown(pointer); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) { pointer = toP(e); onMove(pointer); } });
+const release = () => { if (dragging) { dragging = false; onUp(); } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+readControls();
+generate();
+const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
+
+function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
+let fpsCount = 0, fpsAt = performance.now();
+let loop = null, playing = false;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  t += dt;
+  step(dt);
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const el of document.querySelectorAll('#panel input[type=range]')) el.addEventListener('input', readControls);
+for (const el of document.querySelectorAll('#panel select')) el.addEventListener('change', readControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => { seed = Math.random() * 100; generate(); if (!playing) frame(gpu, render); });
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = NAME + '-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+// The viewer may already have pressed Play while WebGPU was starting up.
+if (!playing) togglePlay();
+</script>
+</body>
+</html>
