@@ -6,6 +6,30 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
+**Light & Liquid · WebGPU** (newest first)
+
+These need a browser with WebGPU. Where a phone has a motion sensor, `lib/tilt.js` feeds its tilt in (iOS asks permission on the first tap).
+
+- **Ink in Water**
+  - Stable fluids: advection, vorticity confinement, 20-pass pressure solve
+  - Ink absorbs light (or glows), sinks with gravity; tilt changes which way is down
+  - Drag to stir ink in, drips fall on their own
+
+- **Liquid Chrome**
+  - Ray-marched smooth-union metaballs mirroring a procedural studio
+  - Drag to pull the metal, tilt to turn the studio
+  - Chrome, gold, oil slick, obsidian, candy
+
+- **Caustics Pool**
+  - Height-field ripple sim plus analytic swells
+  - Caustics from the surface's curvature: 1 / det(I − depth·Hessian)
+  - Tap or drag for ripples, rain, tilt to slosh
+
+- **Light Rays**
+  - Three-pass god rays: occlusion mask, radial blur, composite
+  - Domain-warped fbm clouds, drag to move the light
+  - Prism palette splits the rays by channel
+
 **Noise & Fractals**
 
 - **Radial Perlin Noise**
@@ -61,30 +85,6 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
   - Lloyd's algorithm
   - Cells, edges, points modes
   - Click add seeds, drag push
-
-**Light & Liquid · WebGPU**
-
-These need a browser with WebGPU. Where a phone has a motion sensor, `lib/tilt.js` feeds its tilt in (iOS asks permission on the first tap).
-
-- **Light Rays**
-  - Three-pass god rays: occlusion mask, radial blur, composite
-  - Domain-warped fbm clouds, drag to move the light
-  - Prism palette splits the rays by channel
-
-- **Caustics Pool**
-  - Height-field ripple sim plus analytic swells
-  - Caustics from the surface's curvature: 1 / det(I − depth·Hessian)
-  - Tap or drag for ripples, rain, tilt to slosh
-
-- **Liquid Chrome**
-  - Ray-marched smooth-union metaballs mirroring a procedural studio
-  - Drag to pull the metal, tilt to turn the studio
-  - Chrome, gold, oil slick, obsidian, candy
-
-- **Ink in Water**
-  - Stable fluids: advection, vorticity confinement, 20-pass pressure solve
-  - Ink absorbs light (or glows), sinks with gravity; tilt changes which way is down
-  - Drag to stir ink in, drips fall on their own
 
 **Data & AI**
 
