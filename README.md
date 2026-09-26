@@ -6,6 +6,33 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
+**Wire & Signal · WebGPU** (newest first)
+
+- **Ridgelines**
+  - Stacked, self-occluding pulsar lines drawn front to back per pixel
+  - Touch raises a peak, tilt tips the stack
+  - Pulsar, ink, neon, dusk, signal blue
+
+- **Contour Map**
+  - Domain-warped terrain with constant-width contours and index lines
+  - Hillshade, hypsometric tint, lakes and shoreline
+  - Drag to raise or dig, tilt moves the sun
+
+- **Chromatic Lens**
+  - Glass lens with twelve-wavelength dispersion over printed scenes
+  - Poster, Swiss grid, halftone, barcode, night type
+  - Drag the lens, tilt bends the light
+
+- **Radar**
+  - Spider chart: three series morphing across 5–12 axes, with labels
+  - Radar scope: sweep, afterglow, tracked contacts and sonar ping
+  - Tap for new data or a ping
+
+- **Wire Terrain**
+  - Ray-marched height field drawn as an anti-aliased wireframe grid
+  - Banded sun, bloom, scanlines, chromatic aberration
+  - Drag to steer and climb, tilt to bank
+
 **Light & Liquid · WebGPU** (newest first)
 
 These need a browser with WebGPU. Where a phone has a motion sensor, `lib/tilt.js` feeds its tilt in (iOS asks permission on the first tap).

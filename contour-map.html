@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Contour Map — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Map</label>
+    <select id="palette">
+      <option value="survey" selected>Survey</option>
+      <option value="hypso">Hypsometric</option>
+      <option value="night">Night Vision</option>
+      <option value="blueprint">Blueprint</option>
+      <option value="ink">Ink</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Touch</label>
+    <select id="tool">
+      <option value="raise" selected>Raise</option>
+      <option value="dig">Dig</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Interval <span class="val" id="levelsVal">50</span></label><input type="range" id="levels" min="10" max="100" value="50"></div>
+  <div class="control-group"><label>Relief <span class="val" id="reliefVal">55</span></label><input type="range" id="relief" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Scale <span class="val" id="scaleVal">45</span></label><input type="range" id="scale" min="10" max="100" value="45"></div>
+  <div class="control-group"><label>Drift <span class="val" id="driftVal">30</span></label><input type="range" id="drift" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Sea Level <span class="val" id="seaVal">30</span></label><input type="range" id="sea" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Settle <span class="val" id="healVal">20</span></label><input type="range" id="heal" min="0" max="100" value="20"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to raise land · Tilt to move the sun · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADERS
+// Height is slowly drifting, domain-warped noise plus whatever you've
+// sculpted (kept in its own small texture). Contour lines are drawn where
+// height crosses each interval; their width is measured against how fast
+// height changes across the pixel, so every line is the same crisp width
+// on gentle slopes and steep cliffs alike. Every fifth is a heavier index
+// line. Hillshading, elevation tint and a shoreline finish the map.
+// ═══════════════════════════════════════
+const SCULPT = /* wgsl */ `
+struct B { pos: vec2f, radius: f32, amount: f32, aspect: f32, keep: f32 }
+@group(0) @binding(0) var<uniform> b: B;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let h = textureSampleLevel(src, samp, uv, 0.0).r * b.keep;
+  let d = (uv - b.pos) * vec2f(b.aspect, 1.0);
+  let g = exp(-dot(d, d) / (b.radius * b.radius));
+  // Capped so a long press builds a hill, not a spike.
+  return vec4f(clamp(h + g * b.amount, -1.2, 1.2), 0.0, 0.0, 1.0);
+}
+`;
+
+const MAP = /* wgsl */ `
+struct U {
+  paper: vec3f, time: f32,
+  line: vec3f, relief: f32,
+  low: vec3f, levels: f32,
+  high: vec3f, scale: f32,
+  water: vec3f, sea: f32,
+  sun: vec2f, aspect: f32, seed: f32,
+  hypso: f32, glow: f32, shade: f32, grid: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var sculpt: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+// Four octaves falling off fast: broad landforms with a little texture,
+// which is what keeps contour lines flowing instead of wiggling.
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var a = 0.5; var s = 0.0;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, 9.2); a *= 0.42; }
+  return s / 0.87;
+}
+fn height(uv: vec2f) -> f32 {
+  let p = vec2f(uv.x * u.aspect, uv.y) * u.scale + vec2f(u.seed, u.seed * 0.61);
+  let t = u.time;
+  let w = vec2f(fbm(p + vec2f(0.0, t * 0.03)), fbm(p + vec2f(5.2, 1.3) - vec2f(t * 0.025, 0.0)));
+  let n = fbm(p + 1.6 * w);
+  return (n - 0.35) * 1.6 + textureSampleLevel(sculpt, samp, uv, 0.0).r;
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let h = height(uv);
+  // Hillshade from the height's slope.
+  let e = 1.5 / 900.0;
+  let hx = height(uv + vec2f(e, 0.0)) - h;
+  let hy = height(uv + vec2f(0.0, e)) - h;
+  let n = normalize(vec3f(-hx / (e * u.aspect), -hy / e, 1.0 / max(u.relief, 0.02)));
+  let light = normalize(vec3f(u.sun, 0.75));
+  let shade = clamp(dot(n, light), 0.0, 1.0);
+
+  let seaH = u.sea;
+  let land = smoothstep(seaH - 0.004, seaH + 0.004, h);
+  // Base colour: paper, or an elevation ramp for the hypsometric map.
+  let tH = clamp((h - seaH) / 1.1, 0.0, 1.0);
+  var col = mix(u.paper, mix(u.low, u.high, pow(tH, 0.8)), u.hypso);
+  col = mix(u.water * (0.75 + 0.25 * smoothstep(seaH - 0.35, seaH, h)), col, land);
+  col *= mix(1.0, 0.55 + 0.6 * shade, u.shade * land);
+
+  // Contours: one crisp line per interval, a heavier index line every fifth.
+  let f = h * u.levels;
+  let fw = max(fwidth(f), 1e-4);
+  let dl = abs(fract(f - 0.5) - 0.5) / fw;
+  let fi = f / 5.0;
+  let di = abs(fract(fi - 0.5) - 0.5) / max(fwidth(fi), 1e-4);
+  let minor = 1.0 - smoothstep(0.35, 1.25, dl);
+  let index = 1.0 - smoothstep(0.9, 1.8, di);
+  // Where lines crowd together (cliffs), let them merge into tone instead of noise.
+  let crowd = smoothstep(0.35, 0.7, fw);
+  let lines = max(minor * 0.55 * (1.0 - crowd), index) * land + max(minor * 0.25, index * 0.45) * (1.0 - land) * 0.7;
+  col = mix(col, u.line, clamp(lines, 0.0, 1.0));
+  col += u.line * u.glow * exp(-dl * 0.9) * 0.25 * land;
+  // Shoreline.
+  let sf = (h - seaH) / max(fwidth(h), 1e-5);
+  col = mix(col, u.line, (1.0 - smoothstep(0.6, 1.8, abs(sf))) * 0.9);
+  // Faint survey grid.
+  let gp = vec2f(uv.x * u.aspect, uv.y) * 8.0;
+  let gd = abs(fract(gp - 0.5) - 0.5) / fwidth(gp);
+  col = mix(col, u.line, (1.0 - smoothstep(0.3, 1.2, min(gd.x, gd.y))) * u.grid);
+  // Paper fibre and vignette.
+  let grain = hash21(floor(pos.xy)) - 0.5;
+  col += grain * 0.03;
+  let v = length((uv - 0.5) * vec2f(u.aspect, 1.0));
+  col *= 1.0 - 0.28 * smoothstep(0.45, 1.2, v);
+  return vec4f(col, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// MAPS
+// ═══════════════════════════════════════
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const PALETTES = {
+  survey:    { paper: '#f1ebdc', line: '#8a5a2b', low: '#f1ebdc', high: '#f1ebdc', water: '#bcd6dd', hypso: 0, glow: 0, shade: 0.55, grid: 0.12 },
+  hypso:     { paper: '#e9e4d6', line: '#3b2f22', low: '#7fa36b', high: '#f0e2c0', water: '#6f9fc0', hypso: 1, glow: 0, shade: 0.85, grid: 0.06 },
+  night:     { paper: '#020a04', line: '#52ff8f', low: '#020a04', high: '#020a04', water: '#01150a', hypso: 0, glow: 1, shade: 0.35, grid: 0.18 },
+  blueprint: { paper: '#0f3b73', line: '#dce9ff', low: '#0f3b73', high: '#0f3b73', water: '#0b2e5a', hypso: 0, glow: 0.3, shade: 0.3, grid: 0.2 },
+  ink:       { paper: '#f7f5f0', line: '#141414', low: '#f7f5f0', high: '#f7f5f0', water: '#e6e4de', hypso: 0, glow: 0, shade: 0.0, grid: 0.0 },
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const IDS = ['levels', 'relief', 'scale', 'drift', 'sea', 'heal'];
+
+const p = {};
+function readControls() {
+  p.levels = 5 + +$('levels').value / 100 * 25;
+  p.relief = 0.03 + +$('relief').value / 100 * 0.35;
+  p.scale = 0.6 + +$('scale').value / 100 * 2.6;
+  p.drift = +$('drift').value / 100;
+  p.sea = -0.35 + +$('sea').value / 100 * 0.8;
+  p.keep = 1 - +$('heal').value / 100 * 0.01;
+  p.tool = $('tool').value;
+  p.pal = PALETTES[$('palette').value];
+  for (const id of IDS) $(id + 'Val').textContent = $(id).value;
+  $('hintPill').textContent = (p.tool === 'raise' ? 'Drag to raise land' : 'Drag to dig') + ' · Tilt to move the sun · H controls';
+}
+readControls();
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+const sculptSize = () => [Math.max(8, Math.round(256 * surf.size[0] / Math.max(1, surf.size[1]))), 256];
+let sA = target(gpu, { size: sculptSize(), format: 'rgba16float' });
+let sB = target(gpu, { size: sculptSize(), format: 'rgba16float' });
+let seed = Math.random() * 100, t = 0, aspect = 1;
+
+const uni = () => {
+  const c = p.pal;
+  return { paper: hex(c.paper), line: hex(c.line), low: hex(c.low), high: hex(c.high), water: hex(c.water),
+    hypso: c.hypso, glow: c.glow, shade: c.shade, grid: c.grid, relief: p.relief, levels: p.levels, scale: p.scale, sea: p.sea, seed };
+};
+const brush = effect(gpu, SCULPT, { set: { b: { pos: [0.5, 0.5], radius: 0.08, amount: 0, aspect: 1, keep: 1 }, src: sA, samp: linear } });
+const map = effect(gpu, MAP, { set: { u: { ...uni(), time: 0, sun: [-0.6, -0.6], aspect: 1 }, sculpt: sA, samp: linear } });
+
+let needClear = true;
+surf.onResize(({ width, height }) => {
+  aspect = width / height;
+  sA.resize(sculptSize()); sB.resize(sculptSize());
+  brush.set({ b: { aspect } });
+  map.set({ u: { aspect } });
+  needClear = true;
+});
+
+function applyControls() {
+  readControls();
+  map.set({ u: uni() });
+  document.body.style.background = p.pal.paper;
+}
+
+// ═══════════════════════════════════════
+// SCULPTING
+// ═══════════════════════════════════════
+let dragging = false, at = [0.5, 0.5];
+function toUV(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+}
+canvas.addEventListener('pointerdown', (e) => { dragging = true; at = toUV(e); canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) at = toUV(e); });
+const release = () => { dragging = false; };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+const clk = clock(gpu);
+const tl = tilt();
+let fpsCount = 0, fpsAt = performance.now();
+let sunA = -2.4;
+
+function simulate(f, dt) {
+  if (needClear) {
+    needClear = false;
+    f.pass({ target: sA, clear: [0, 0, 0, 1] }, () => {});
+    f.pass({ target: sB, clear: [0, 0, 0, 1] }, () => {});
+  }
+  // One brush pass a frame also applies the slow settling.
+  const amount = dragging ? (p.tool === 'raise' ? 1 : -1) * dt * 0.45 : 0;
+  brush.set({ b: { pos: at, radius: 0.11, amount, keep: p.keep }, src: sA });
+  f.pass(sB, brush);
+  [sA, sB] = [sB, sA];
+  map.set({ sculpt: sA });
+}
+
+function step(dt) {
+  t += dt * (0.1 + p.drift * 1.2);
+  sunA += dt * 0.05;
+  const sun = tl.active ? [tl.x * 1.2, tl.y * 1.2 - 0.6] : [Math.cos(sunA) * 0.85, Math.sin(sunA) * 0.85];
+  map.set({ u: { time: t, sun } });
+}
+
+function render(f) { f.pass(surf, map); }
+
+let loop = null, playing = false;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  step(dt);
+  simulate(f, dt);
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of IDS) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('tool').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => {
+  seed = Math.random() * 100;
+  needClear = true;
+  applyControls();
+  if (!playing) frame(gpu, (f) => { simulate(f, 0); render(f); });
+});
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'contour-map-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+togglePlay();
+</script>
+</body>
+</html>
