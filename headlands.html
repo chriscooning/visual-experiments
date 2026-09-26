@@ -128,12 +128,59 @@ fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
                   strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
   return max(ring, cross);
 }
+const INK = vec3f(0.07, 0.06, 0.08);
+const PAPER = vec3f(0.94, 0.91, 0.84);
+// Hairlines where a banding field crosses each whole number.
+fn bandLines(v: f32, px: f32) -> f32 {
+  let fw = max(fwidth(v), 1e-5);
+  let d = min(fract(v), 1.0 - fract(v)) / fw;
+  return (1.0 - smoothstep(0.35, 1.25, d)) * (1.0 - smoothstep(0.25, 0.5, fw));
+}
+// Paper margin with a keyline and registration marks at the edge midpoints.
+fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
+  let m = 0.024;
+  let d = sdBox(p, vec2f(asp * 0.5 - m, 0.5 - m));
+  var c = mix(PAPER, col, fillA(d, px));
+  c = mix(c, INK, strokeA(d, px * 0.9, px));
+  let r = m * 0.28;
+  var mk = max(regMark(p, vec2f(0.0, -0.5 + m * 0.5), r, px), regMark(p, vec2f(0.0, 0.5 - m * 0.5), r, px));
+  mk = max(mk, max(regMark(p, vec2f(-asp * 0.5 + m * 0.5, 0.0), r, px), regMark(p, vec2f(asp * 0.5 - m * 0.5, 0.0), r, px)));
+  return mix(c, INK, mk * step(0.0, d) * 0.8);
+}
+// The ink plate prints a hair off register from the colour.
+const MISREG = vec2f(0.0016, -0.0011);
+// Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
+fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
+  let f = fract(rot2(p, 0.785) / cell) - 0.5;
+  let r = sqrt(clamp(amt, 0.0, 1.0) / 3.14159) * cell;
+  return fillA(length(f) * cell - r, px) * step(0.01, amt);
+}
+// Printed sun or moon: rings around a disc of radius r0.
+fn rings(p: vec2f, c: vec2f, r0: f32, gap: f32, n: f32, px: f32) -> f32 {
+  let d = length(p - c) - r0;
+  let on = step(gap * 0.5, d) * step(d, gap * (n + 0.5));
+  return strokeA((fract(d / gap + 0.5) - 0.5) * gap, px * 0.55, px) * on;
+}
+// Scalloped wave crests: a row of arcs along y = y0.
+fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
+  let f = (fract(p.x / w) - 0.5) * w;
+  let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
+  return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
+}
+// Small bird: two ink arcs.
+fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
+  let q = (p - c) / s;
+  let x = abs(q.x);
+  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
+  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
+}
 
 // Headlands: the Big Sur coast after Eyvind Earle. Ridges recede in flat,
 // graduated colour with gullies combed into their slopes and fog pooling at
 // their feet; a banded sky of stratus; a sea whose ripples crowd toward the
-// horizon and glitter under the sun. In front: a dark headland with a cabin
-// and windswept cypresses, a concrete arch bridge on a far ridge, pelicans
+// horizon and glitter under the sun. In front: a dark headland with
+// windswept cypresses, a concrete arch bridge on a far ridge, pelicans
 // and a couple of boats.
 struct U {
   a: vec4f,   // time, aspect, px, seed
@@ -371,16 +418,6 @@ const HY = 0.06;   // horizon
     hc = mix(hc, C(12), clump * smoothstep(0.12, 0.0, p.y - ht) * 0.6);
     col = mix(col, hc, fillA(ht - p.y, px));
     col = mix(col, C(13), strokeA(p.y - ht, px * 0.6, px) * 0.4);
-    // Cabin with a lit window.
-    let Xc = -0.9;
-    let cb = vec2f((Xc - tilt.x * 0.06) * 0.5 * asp, headTop(Xc) + 0.002);
-    let q = p - cb;
-    let body = sdBox(q - vec2f(0.0, -0.012), vec2f(0.016, 0.012));
-    let roof = sdTri(q, vec2f(-0.022, -0.022), vec2f(0.022, -0.022), vec2f(0.0, -0.045));
-    let chim = sdBox(q - vec2f(-0.009, -0.038), vec2f(0.003, 0.008));
-    col = mix(col, C(11), fillA(min(min(body, roof), chim), px));
-    col = mix(col, C(13), strokeA(roof, px * 0.6, px) * step(q.x, 0.0) * 0.6);
-    col = mix(col, C(2), fillA(sdBox(q - vec2f(0.005, -0.013), vec2f(0.004, 0.004)), px));
   }
   // Cypresses along the crest.
   for (var j = 0; j < 6; j++) {

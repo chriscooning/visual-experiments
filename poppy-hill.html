@@ -317,20 +317,26 @@ struct U {
   if (s.y > ftS + 0.03) {
     // Rows in perspective: each row a little taller than the one behind it.
     let rowF = log(1.0 + (s.y - ftS) / 0.1) / 0.16;
+    // Two staggered layers of rows, so the field is thick with flowers.
+    for (var L = 0; L <= 1; L++) {
     for (var j = 0; j <= 1; j++) {
-      let rr = floor(rowF) - f32(j);
+      let rr = floor(rowF - f32(L) * 0.5) - f32(j) + f32(L) * 0.5;
       let y0 = 0.1 * (exp(0.16 * rr) - 1.0);
       let pc = 0.1 * (exp(0.16 * (rr + 1.0)) - 1.0) - y0;
-      let id = vec2f(floor(s.x / pc), rr);
+      let xo = f32(L) * 0.5;
+      let id = vec2f(floor(s.x / pc + xo), rr * 2.0 + f32(L));
       let h = hash21(id + u.a.w + 21.0);
-      if (h < 0.42) { continue; }
-      let c = vec2f((id.x + 0.5 + (hash21(id + 1.1) - 0.5) * 0.3) * pc, ftS + y0 + pc * (0.3 + 0.3 * hash21(id + 2.2)));
-      if (scrubD(c) < 0.05) { continue; }
-      let rad = pc * (0.22 + 0.1 * h);
-      let sway = 0.25 * sin(t * 1.3 + c.x * 6.0 + h * 5.0) * u.b.x;
-      let v = rot2(s - c, -sway);
-      // Stem down to the bottom of the cell.
-      let stem = sdSeg(v, vec2f(0.0, rad * 0.4), vec2f(rad * 0.3 * sin(h * 9.0), pc * 0.9)) - rad * 0.07;
+      if (h < 0.12) { continue; }
+      let c = vec2f((id.x - xo + 0.5 + (hash21(id + 1.1) - 0.5) * 0.3) * pc, ftS + y0 + pc * (0.2 + 0.4 * hash21(id + 2.2)));
+      if (scrubD(c) < 0.0) { continue; }
+      let rad = pc * (0.2 + 0.1 * h);
+      // Each flower bends from the foot of its stem; gusts ripple across the field.
+      let sway = ((0.14 + 0.1 * h) * sin(t * 1.3 + c.x * 4.0 + h * 5.0) + 0.12 * sin(t * 0.5 - c.x * 2.5)) * u.b.x;
+      let foot = c + vec2f(0.0, pc * 0.95);
+      let v = rot2(s - foot, -sway) + (foot - c);
+      // Stem: a slight curve down to its foot.
+      let mid = vec2f(rad * 0.25 * sin(h * 9.0), pc * 0.5);
+      let stem = min(sdSeg(v, vec2f(0.0, rad * 0.4), mid), sdSeg(v, mid, vec2f(0.0, pc * 0.95))) - rad * 0.07;
       col = mix(col, C(5), fillA(stem, pxs));
       col = mix(col, INK, strokeA(stem, pxs * 0.35, pxs) * 0.5);
       // Cup: rounded below, opening upward in a scalloped rim.
@@ -344,6 +350,7 @@ struct U {
       col = mix(col, C(10), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.35)) - rad * 0.55, pxs) * fillA(cup, pxs) * 0.8);
       col = mix(col, C(12), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.5)) - rad * 0.2, pxs) * fillA(cup, pxs));
       col = mix(col, INK, strokeA(cup, pxs * 0.55, pxs) * 0.9);
+    }
     }
   }
   // Birds over the ridge.

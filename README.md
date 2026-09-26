@@ -13,9 +13,9 @@ Animated versions of my own paintings. A brush layer rebuilds each scene from hu
 - **Poppy Hill**: a poppy hillside with dark scrub, a eucalyptus grove, a cypress windbreak, a violet ridge and a golden hill
 - **Fern Palms**: palms with herringbone fronds and scaly trunks over bushes traced in dotted lines, dripping blue-teal sky
 - **Spore Tide**: from a painted surfboard; hatched mushrooms on red, stems swaying into a dripping ink mass over a sea of dashes
-- **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, dark brush with spirals of yellow dots
-- **Palm Row**: palms with dotted trunks and shaggy heads against a coral-to-mint sky, over a pointillist hillside
-- **Windswept**: wind-bent cypresses on a dune above a turquoise sea
+- **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, luminous currents flowing through the dark brush
+- **Palm Row**: fan palms on a flower-patterned hill over hillside houses, valley mist and mountains; a slow day-to-night cycle
+- **Windswept**: a wind-bent cypress on a Big Sur bluff with cliff, surf, lighthouse and visible wind; a slow day-to-night cycle
 
 **Big Sur · WebGPU** (newest first)
 
@@ -33,7 +33,7 @@ The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees dra
 - **Headlands**
   - Receding ridges with combed gullies and drifting fog
   - Arch bridge, Highway 1, sea stacks, boats, pelicans
-  - Cabin and windswept cypresses on the near headland
+  - Windswept cypresses on the near headland
 
 **Print & Pattern · WebGPU** (newest first)
 
