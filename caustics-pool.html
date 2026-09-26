@@ -156,6 +156,28 @@ fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, 
       c = mix(c, dc, fillA((length(f) - r) * cell, px));
     }
   }
+  // Fine grain: small clusters of tiny points scattered over the big dots,
+  // light on the lit side, dark flecks breaking up the highlights.
+  let fcell = max(cell * 0.38, px * 2.2);
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / fcell + vec2f(fl * 0.31, fl * 0.57);
+    let id = floor(g);
+    let clump = vnoise(p / (cell * 2.3) + seed + fl * 4.0);
+    let h = hash21(id + seed * 1.7 + fl * 3.3);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 4.1 + fl), hash21(id + 6.3 + fl)) - 0.5) * 0.6;
+    let r = 0.16 + 0.14 * hash21(id + 8.8);
+    let a = fillA((length(f) - r) * fcell, px);
+    if (L == 0) {
+      let on = step(h, smoothstep(0.1, 0.9, l) * smoothstep(0.3, 0.7, clump) * 0.9);
+      let k = hash21(id + 2.2);
+      let dc = select(select(hiB, hiA, k > 0.5), warm, k > 0.9);
+      c = mix(c, mix(c, dc, 0.9), a * on);
+    } else {
+      let on = step(h, (0.25 + 0.35 * l) * smoothstep(0.45, 0.8, clump));
+      c = mix(c, dark, a * on * 0.85);
+    }
+  }
   return c;
 }
 // Shadow pooled on the ground under a clump: a flat ellipse pushed away
