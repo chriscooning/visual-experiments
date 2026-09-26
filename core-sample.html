@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Cross Section — WebGPU</title>
+<title>Core Sample — WebGPU</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -47,7 +47,7 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Palette</label>
     <select id="palette">
-      <option value="awazu" selected>Awazu</option>
+      <option value="planet" selected>Planet</option>
       <option value="riso">Riso</option>
       <option value="acid">Acid</option>
       <option value="atlas">Atlas</option>
@@ -55,7 +55,7 @@
     </select>
   </div>
   <div class="control-group"><label>Layers <span class="val" id="layersVal">45</span></label><input type="range" id="layers" min="0" max="100" value="45"></div>
-  <div class="control-group"><label>Folds <span class="val" id="foldsVal">50</span></label><input type="range" id="folds" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Circuit <span class="val" id="foldsVal">50</span></label><input type="range" id="folds" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Pulse <span class="val" id="pulseVal">45</span></label><input type="range" id="pulse" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Hatching <span class="val" id="hatchVal">60</span></label><input type="range" id="hatch" min="0" max="100" value="60"></div>
   <div class="control-group"><label>Speed <span class="val" id="speedVal">30</span></label><input type="range" id="speed" min="0" max="100" value="30"></div>
@@ -66,7 +66,7 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag to press on the specimen · Tilt for depth · H controls</div>
+<div class="hint-pill" id="hintPill">Drag to press on the planet · Tilt for depth · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -112,9 +112,9 @@ fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
   return max(ring, cross);
 }
 
-// Cross Section: a head-like specimen cut open into nested flat bands of
-// colour, folded tissue at its core and a stacked spine running down into an
-// engraved sea, under a rainbow and a band of rain. The Y2K layer is a
+// Core Sample: a banded planet rising out of an engraved sea, with one
+// wedge cut away to show its layers and a circuit-board core, circled by an
+// orbit and a satellite. The Y2K layer is a
 // technical drawing laid over it: dimension lines, crosshairs, a dot grid,
 // split-circle and faceted-gem glyphs.
 struct U {
@@ -130,24 +130,40 @@ struct U {
 @diagnostic(off, derivative_uniformity) fn cyc(k: i32) -> vec3f { var c = array<i32, 6>(4, 7, 6, 5, 2, 3); return C(c[((k % 6) + 6) % 6]); }
 
 // Signed distance to the specimen, in height units.
-@diagnostic(off, derivative_uniformity) fn specimen(q: vec2f, R: f32, lt: f32, nb: f32) -> f32 {
-  let s = u.a.w;
-  let skull = length(q / vec2f(1.0, 0.94)) - R;
-  let face = length((q - vec2f(-0.52 * R, 0.4 * R)) / vec2f(1.0, 1.15)) - 0.55 * R;
-  // The neck always runs down past the waterline, whatever the screen shape.
-  let neck = sdBox(q - vec2f(0.12 * R, (0.5 * R + nb) * 0.5), vec2f(0.34 * R, (nb - 0.5 * R) * 0.5)) - 0.05 * R;
-  let k = 0.18 * R;
-  var d = skull;
-  var h = clamp(0.5 + 0.5 * (face - d) / k, 0.0, 1.0);
-  d = mix(face, d, h) - k * h * (1.0 - h);
-  h = clamp(0.5 + 0.5 * (neck - d) / k, 0.0, 1.0);
-  d = mix(neck, d, h) - k * h * (1.0 - h);
-  // Living surface: slow noise, a breath, and the finger's push.
-  d += (fbm(q / R * 1.6 + vec2f(s, lt * 0.05)) - 0.5) * 0.12 * R;
-  d -= sin(lt * 1.2) * 0.012 * R * u.b.z;
+@diagnostic(off, derivative_uniformity) fn specimen(q: vec2f, R: f32, lt: f32) -> f32 {
+  var d = length(q) - R;
+  d += (fbm(q / R * 1.6 + vec2f(u.a.w, lt * 0.05)) - 0.5) * 0.05 * R;
+  d -= sin(lt * 1.2) * 0.01 * R * u.b.z;
   let tb = q - u.c.xy;
-  d -= u.c.z * 0.25 * R * exp(-dot(tb, tb) / (0.08 * R * R));
+  d -= u.c.z * 0.2 * R * exp(-dot(tb, tb) / (0.08 * R * R));
   return d;
+}
+
+// Circuit board: traces on a grid, each cell picks its own turns and pads,
+// with pulses running along them.
+@diagnostic(off, derivative_uniformity) fn circuit(q: vec2f, px: f32, lt: f32) -> vec3f {
+  let g = q * u.b.y * 2.2;
+  let id = floor(g);
+  let f = fract(g) - 0.5;
+  let h = hash21(id + u.a.w);
+  let cellPx = px * u.b.y * 2.2;
+  var col = mix(C(6), C(1), 0.35);
+  var tr = 1e3;
+  if (h < 0.3) { tr = abs(f.y); }
+  else if (h < 0.55) { tr = abs(f.x); }
+  else if (h < 0.75) { tr = min(sdSeg(f, vec2f(-0.5, 0.0), vec2f(0.0, 0.0)), sdSeg(f, vec2f(0.0, 0.0), vec2f(0.0, 0.5))); }
+  else if (h < 0.9) { tr = min(sdSeg(f, vec2f(0.5, 0.0), vec2f(0.0, 0.0)), sdSeg(f, vec2f(0.0, 0.0), vec2f(0.0, -0.5))); }
+  let pad = length(f) - 0.16;
+  let trace = strokeA(tr, cellPx * 0.9, cellPx);
+  col = mix(col, C(3), trace);
+  if (h > 0.55 && h < 0.9) {
+    col = mix(col, C(3), fillA(pad, cellPx));
+    col = mix(col, C(1), fillA(length(f) - 0.06, cellPx));
+  }
+  // Pulses: bright dashes that travel along the grid lines.
+  let run = fract((g.x + g.y) * 0.25 - lt * 0.6 + hash1(id.x + id.y * 7.0));
+  col = mix(col, vec3f(1.0), trace * step(0.92, run));
+  return col;
 }
 
 // A small faceted gem: four flat facets inside a diamond.
@@ -189,20 +205,18 @@ struct U {
     let g = fract(p / 0.02) - 0.5;
     sh = mix(sh, ink, (1.0 - smoothstep(0.4, 1.4, length(g * 0.02) / px)) * 0.12);
 
-    let R = min(0.2, hw * 0.52);
-    let sc = vec2f(0.04 * R, -0.08 - 0.06 * clamp(1.0 - asp, 0.0, 1.0)) + tilt;   // specimen centre
-    let seaY = min(0.26, sc.y + 2.3 * R) + tilt.y * 0.5;
+    let R = min(0.22, hw * 0.6);
+    let sc = vec2f(0.0, -0.04) + tilt;             // planet centre
+    let seaY = min(0.3, sc.y + 1.25 * R) + tilt.y * 0.5;
 
-    // Rainbow behind: bands in an arc over the specimen.
-    let rc = sc + vec2f(-0.15 * R, 0.1 * R);
-    let rr = length(p - rc);
-    let arcIn = 1.45 * R; let arcW = 0.42 * R;
-    if (p.y < rc.y && rr > arcIn && rr < arcIn + arcW) {
-      let s = (rr - arcIn) / arcW * 7.0;
-      sh = cyc(i32(floor(s)) + 3);
-      sh = mix(sh, ink, strokeA(min(fract(s), 1.0 - fract(s)) / 7.0 * arcW, px * 0.4, px) * 0.7);
-    }
-    sh = mix(sh, ink, max(strokeA(rr - arcIn, px * 0.6, px), strokeA(rr - arcIn - arcW, px * 0.6, px)) * step(p.y, rc.y));
+    // Orbit, back half: drawn before the planet so the planet hides it.
+    let orbC = sc;
+    let orbA = 0.3;
+    let orbQ = rot2(p - orbC, -orbA);
+    let orbR = vec2f(1.75 * R, 0.42 * R);
+    let orbD = (length(orbQ / orbR) - 1.0) * min(orbR.x, orbR.y);
+    sh = mix(sh, ink, strokeA(orbD, px * 0.6, px) * step(orbQ.y, 0.0));
+    sh = mix(sh, ink, strokeA(orbD - 0.012, px * 0.4, px) * step(orbQ.y, 0.0) * step(0.5, fract(atan2(orbQ.y, orbQ.x) * 12.0)));
 
     // Rain: fine diagonal hatching in a band above the sea.
     let rainZone = smoothstep(seaY - 0.2, seaY - 0.12, p.y) * step(p.y, seaY);
@@ -225,58 +239,64 @@ struct U {
       }
     }
 
-    // The specimen.
+    // The planet. Its surface wears flat latitude bands; one wedge is cut
+    // away to show the layers underneath and a circuit-board core.
     let q = p - sc;
-    let d = specimen(q, R, lt, seaY + 0.15 - sc.y);
+    let d = specimen(q, R, lt);
     if (d < px) {
       let depth = -d;
       let th = u.b.x * R;
-      let wob = 0.9 * (fbm(q / R * 3.0 + vec2f(u.a.w * 2.0, lt * 0.04)) - 0.5);
-      let s = depth / th + wob;
-      let k = max(i32(floor(s)), 0);
+      let ang = atan2(q.y, q.x);
+      let cutA = -1.5708 + 0.35 * sin(lt * 0.15);          // the wedge's middle direction
+      let cut = abs(ang - cutA) < 0.78 || abs(ang - cutA - 6.2831) < 0.78;
       var tc: vec3f;
-      if (k < 6) {
-        tc = cyc(k);
-        // Engraved hatching on alternate layers.
-        if (k % 2 == 1) {
-          let hs = (q.x - q.y) / 0.005;
-          tc = mix(tc, mix(ink, tc, 0.3), strokeA((fract(hs) - 0.5) * 0.005, px * 0.4, px) * 0.5 * u.b.w);
-        }
-        tc = mix(tc, ink, strokeA(min(fract(s), 1.0 - fract(s)) * th, px * 0.6, px) * select(1.0, 0.0, k == 0 && fract(s) < 0.5));
+      if (!cut) {
+        // Surface: latitude bands curving over the sphere, drifting slowly.
+        let lat = q.y / R;
+        let s2 = lat * 4.5 + 0.35 * (q.x / R) * (q.x / R) * sign(lat) + lt * 0.05;
+        tc = cyc(i32(floor(s2)) + 1);
+        tc = mix(tc, ink, strokeA(min(fract(s2), 1.0 - fract(s2)) / 4.5 * R, px * 0.5, px) * 0.8);
+        // Terminator shading: engraved hatching on the night side.
+        let night = smoothstep(0.1, 0.6, (q.x + q.y * 0.3) / R);
+        let hs = (q.x + q.y) / 0.006;
+        tc = mix(tc, ink, strokeA((fract(hs) - 0.5) * 0.006, px * 0.45, px) * night * 0.6 * u.b.w);
       } else {
-        // Core: folded tissue, drawn as the contours of a slowly warping field.
-        let w = vec2f(fbm(q / R * 2.2 + vec2f(u.a.w, lt * 0.03)), fbm(q / R * 2.2 + vec2f(5.2, 1.3) - vec2f(lt * 0.025, 0.0)));
-        let f = fbm(q / R * u.b.y + 2.4 * w) * 16.0;
-        tc = C(3);
-        // A second organ, pink, tucked into the lower part of the core.
-        let organ = fbm(q / R * 1.3 + vec2f(3.0 + u.a.w, 1.0)) + (q.y / R) * 0.5;
-        if (organ > 0.6) { tc = mix(C(2), paper, 0.25); }
-        let fold = min(fract(f), 1.0 - fract(f)) / max(fwidth(f), 1e-4);
-        tc = mix(tc, ink, (1.0 - smoothstep(0.4, 1.3, fold)) * 0.85);
-        tc = mix(tc, ink, strokeA((s - 6.0) * th, px * 0.7, px));
+        let wob = 0.5 * (fbm(q / R * 3.0 + vec2f(u.a.w * 2.0, lt * 0.04)) - 0.5);
+        let sL = depth / th + wob;
+        let k = max(i32(floor(sL)), 0);
+        if (k < 3) {
+          tc = cyc(k + 3);
+          if (k % 2 == 1) {
+            let hs = (q.x - q.y) / 0.005;
+            tc = mix(tc, mix(ink, tc, 0.3), strokeA((fract(hs) - 0.5) * 0.005, px * 0.4, px) * 0.5 * u.b.w);
+          }
+          tc = mix(tc, ink, strokeA(min(fract(sL), 1.0 - fract(sL)) * th, px * 0.6, px) * select(1.0, 0.0, k == 0 && fract(sL) < 0.5));
+        } else {
+          tc = circuit(q / R, px / R, lt);
+          tc = mix(tc, ink, strokeA((sL - 3.0) * th, px * 0.7, px));
+        }
       }
-      // Spine: stacked segments down the neck into the sea.
-      let sx = q.x - 0.14 * R;
-      let seg = 0.11 * R;
-      if (q.y > 0.55 * R) {
-        let j = floor((q.y - 0.55 * R) / seg);
-        let ly = (q.y - 0.55 * R) - (j + 0.5) * seg;
-        let wv = 0.16 * R * (1.0 - 0.02 * j);
-        let dv = sdBox(vec2f(sx, ly), vec2f(wv, seg * 0.34)) - seg * 0.12;
-        let vc = select(C(5), C(3), i32(j) % 2 == 0);
-        tc = mix(tc, vc, fillA(dv, px));
-        tc = mix(tc, ink, strokeA(dv, px * 0.6, px));
-      }
+      // Cut faces: crisp edges where the wedge meets the surface.
+      let e1 = abs(sin(ang - (cutA - 0.78))) * length(q);
+      let e2 = abs(sin(ang - (cutA + 0.78))) * length(q);
+      let nearCut = abs(ang - cutA) < 0.9 || abs(ang - cutA - 6.2831) < 0.9;
+      tc = mix(tc, ink, max(strokeA(e1, px * 0.8, px), strokeA(e2, px * 0.8, px)) * select(0.0, 1.0, nearCut));
       sh = mix(sh, tc, fillA(d, px));
       sh = mix(sh, ink, strokeA(d, px * 0.9, px));
     }
-    // The sea's front band washes over the neck.
-    let fy = seaY + 0.1 + 0.012 * sin(p.x * 7.0 + lt * 1.1) + 0.006 * sin(p.x * 19.0 - lt);
-    let dfr = fy - p.y;
-    var fc = mix(C(6), C(4), 0.3);
-    fc = mix(fc, mix(ink, fc, 0.25), strokeA((fract((p.y - fy) / 0.007 - lt * 0.2) - 0.5) * 0.007, px * 0.45, px) * 0.55);
-    sh = mix(sh, fc, fillA(dfr, px));
-    sh = mix(sh, ink, strokeA(dfr, px * 0.7, px));
+    // Orbit, front half, and the satellite riding it.
+    sh = mix(sh, ink, strokeA(orbD, px * 0.6, px) * step(0.0, orbQ.y));
+    let sa = lt * 0.35;
+    let satQ = vec2f(cos(sa), sin(sa)) * orbR;
+    let sat = orbC + rot2(satQ, orbA);
+    let satFront = sin(sa) > 0.0;
+    let sq = rot2(p - sat, orbA + 0.4);
+    let body = sdBox(sq, vec2f(0.009, 0.009));
+    let wings = sdBox(sq, vec2f(0.03, 0.004));
+    let satD = min(body, wings);
+    let show = select(step(-d, 0.0), 1.0, satFront);
+    sh = mix(sh, select(C(3), C(4), wings < body), fillA(satD, px) * show);
+    sh = mix(sh, ink, strokeA(satD, px * 0.5, px) * show);
 
     // Technical drawing: dimension lines with end ticks beside and below.
     let dx = sc.x + 1.25 * R + 0.02;
@@ -310,10 +330,10 @@ struct U {
 }
 `;
 
-const NAME = 'cross-section';
+const NAME = 'core-sample';
 // paper, ink, then pink, yellow, blue, orange, green, purple
 const PALETTES = {
-  awazu:  ['#efe8d6', '#1b1416', '#e0508a', '#f2cf2a', '#3aa3c9', '#ee6a2a', '#5aa04a', '#7a4aa0'],
+  planet: ['#efe8d6', '#1b1416', '#e0508a', '#f2cf2a', '#3aa3c9', '#ee6a2a', '#5aa04a', '#7a4aa0'],
   riso:   ['#f3eee4', '#1c2a52', '#ff48b0', '#ffe800', '#0078bf', '#ff6c2f', '#00a95c', '#765ba7'],
   acid:   ['#e9ecef', '#0e1116', '#ff2d6f', '#c6ff00', '#00b8ff', '#ff8a00', '#00d19a', '#7a5cff'],
   atlas:  ['#ece3cf', '#221c16', '#c8553d', '#e7b54a', '#4a7fa0', '#d98a3a', '#6f8f4e', '#8a5a7a'],

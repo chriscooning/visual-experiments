@@ -8,20 +8,21 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 **Print & Pattern · WebGPU** (newest first)
 
-After Kiyoshi Awazu's 1970s posters, crossed with late-90s digital design: flat silkscreen colour and hairline ink outlines, plus registration marks, ruler ticks, dimension lines and dot grids.
+Flat silkscreen colour, fine contour bands and hairline ink outlines, crossed with a late-90s digital layer of registration marks, ruler ticks, dimension lines and dot grids. The symbols are their own: California coast, machines and AI, optics and space, and invented sigils.
 
-- **Cross Section**
-  - Nested flat-colour layers, a folded core and a stacked spine
-  - Rainbow, rain hatching and an engraved sea
-  - Drag to press on the specimen
+- **Core Sample**
+  - Banded planet with a wedge cut away: layers and a circuit-board core
+  - Orbit and satellite, engraved sea
+  - Drag to press on the planet
 
-- **Poster Collage**
-  - Generated poster of flat motifs over engraved hills
+- **Signal Coast**
+  - Generated poster: cypresses, a curling wave, a satellite dish, chips, a neural net, a cursor, a ringed planet, gauges, sigils
   - Drag any shape to rearrange, Generate for a new composition
 
-- **Wave Mask**
-  - Dense contour bands following a moving field, around a mask or sun
-  - Drag to push the waves
+- **Swell Sigil**
+  - Dense contour bands following a moving field around an emblem
+  - Machine eye, eclipse or a generated sigil
+  - Drag to push the swell
 
 **Wire & Signal · WebGPU** (newest first)
 

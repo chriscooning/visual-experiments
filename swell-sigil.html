@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Wave Mask — WebGPU</title>
+<title>Swell Sigil — WebGPU</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -47,17 +47,18 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Palette</label>
     <select id="palette">
-      <option value="noh" selected>Noh</option>
-      <option value="awazu">Awazu</option>
+      <option value="swell" selected>Swell</option>
+      <option value="poster">Poster</option>
       <option value="riso">Riso</option>
       <option value="acid">Acid</option>
       <option value="ink">Ink</option>
     </select>
   </div>
-  <div class="control-group"><label>Figure</label>
+  <div class="control-group"><label>Emblem</label>
     <select id="figure">
-      <option value="mask" selected>Mask</option>
-      <option value="sun">Sun</option>
+      <option value="eye" selected>Machine Eye</option>
+      <option value="eclipse">Eclipse</option>
+      <option value="sigil">Sigil</option>
       <option value="none">None</option>
     </select>
   </div>
@@ -72,7 +73,7 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag to push the waves · Tilt to lean them · H controls</div>
+<div class="hint-pill" id="hintPill">Drag to push the swell · Tilt to lean them · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -118,8 +119,9 @@ fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
   return max(ring, cross);
 }
 
-// Wave Mask: bands of colour that follow the contours of a slowly moving
-// field, like Awazu's NOH poster, around a mask. Inside the big crests the
+// Swell Sigil: bands of colour that follow the contours of a slowly moving
+// field, like an ocean swell, around an emblem: a machine eye, an eclipse or
+// an invented sigil. Inside the big crests the
 // bands trace the crest's own shape; the ground between is fine, straight,
 // darker lines. Every band edge is a one-pixel ink hairline, and where bands
 // crowd too tightly to draw they merge into their average tone.
@@ -201,79 +203,129 @@ struct U {
       sheet = mix(ground, crest, cov);
       sheet = mix(sheet, ink, strokeA((M - u.b.z) / max(fwidth(M), 1e-4) * px, px * 0.7, px));
 
-      // Figure.
-      let R = min(0.25, iw * 0.66);
-      let mc = vec2f(sin(t * 0.21) * 0.004, -0.03 + sin(t * 0.3) * 0.004);
+      // Emblem at the centre of the swell.
+      let R = min(0.23, iw * 0.62);
+      let mc = vec2f(sin(t * 0.21) * 0.004, -0.04 + sin(t * 0.3) * 0.004);
       let fig = u.b.w;
+      let e = q - mc;
+      let er = length(e);
+      let ea = atan2(e.y, e.x);
       if (fig > 0.5 && fig < 1.5) {
-        let mp = (q - mc) / R;
-        // Egg: broad brow, narrower chin.
-        let wx = 0.74 * (1.0 - 0.16 * clamp(mp.y, 0.0, 1.0));
-        let dm = (length(vec2f(mp.x / wx, mp.y * select(1.0, 0.93, mp.y < 0.0))) - 1.0) * R * wx;
-        var face = ink * 1.1 + vec3f(0.012);
-        // Coloured edge strokes: blue on one side, red on the other.
-        let edge = strokeA(dm + R * 0.045, px * 1.4, px) * smoothstep(0.55, 0.2, mp.y);
-        face = mix(face, select(C(4), C(2), mp.x > 0.0), edge);
-        // Hair parting.
-        let part = strokeA(sdSeg(mp, vec2f(0.12, -0.98), vec2f(0.02, -0.55)) * R, px * 0.8, px);
-        face = mix(face, C(2), part);
-        // Brows: stippled gold.
-        let bq = vec2f(abs(mp.x) - 0.36, mp.y + 0.44) / vec2f(0.24, 0.075);
-        let brow = step(length(bq), 1.0) * step(0.5 + 0.35 * length(bq), hash21(floor(pos.xy / 1.6)));
-        face = mix(face, C(3), brow);
-        // Eyes: lens shapes with coloured rims and square irises.
-        let blink = 1.0 - 0.9 * smoothstep(0.96, 1.0, sin(t * 0.7 + 1.3) * 0.5 + 0.5);
-        let e = vec2f(abs(mp.x) - 0.36, (mp.y + 0.1) / max(blink, 0.08));
-        let dEye = max(length(e - vec2f(0.0, 0.26)) - 0.31, length(e + vec2f(0.0, 0.26)) - 0.31) * R;
-        face = mix(face, ink * 0.6, fillA(dEye, px));
-        face = mix(face, select(C(6), C(5), mp.x > 0.0), strokeA(dEye, px * 1.1, px));
-        let ir = vec2f(mp.x - sign(mp.x) * 0.36 - u.d.w * 0.06, mp.y + 0.1);
-        let dIris = max(sdBox(ir, vec2f(0.035, 0.03 * blink)) * R, dEye);
-        face = mix(face, select(C(2), C(7), mp.x > 0.0), fillA(dIris, px));
-        // Nose: two small gold hooks.
-        let nq = vec2f(abs(mp.x) - 0.07, mp.y - 0.2);
-        let nose = strokeA((length(nq) - 0.06) * R, px * 1.2, px) * step(0.0, nq.y);
-        face = mix(face, C(3), nose);
-        // Lips.
-        let lq = vec2f(mp.x / 0.22, (mp.y - 0.5) / 0.075 + 0.25 * cos(mp.x * 9.0) * step(mp.y, 0.5));
-        let dLip = (length(lq) - 1.0) * R * 0.075;
-        face = mix(face, mix(C(6), C(4), 0.35), fillA(dLip, px));
-        face = mix(face, C(4), strokeA(dLip, px * 0.8, px));
-        face = mix(face, ink, strokeA((mp.y - 0.5) * R, px * 0.7, px) * fillA(dLip, px));
-        sheet = mix(sheet, face, fillA(dm, px));
-        sheet = mix(sheet, ink, strokeA(dm, px * 0.8, px));
-      } else if (fig > 1.5) {
-        // Sun: concentric rainbow rings with a slow slice running through.
-        let r = length(q - mc) / R;
-        let rings = bands(r * 16.0 - ft * 0.4, true);
-        let slice = step(0.5, fract((q.y - mc.y) / R * 3.0 + ft * 0.1)) * step(0.1, (q.y - mc.y) / R);
-        let sun = mix(rings, ground, slice);
-        let dSun = (r - 1.0) * R;
-        sheet = mix(sheet, sun, fillA(dSun, px));
-        sheet = mix(sheet, ink, strokeA(dSun, px * 0.9, px));
+        // Machine eye: an almond lid around a camera lens whose aperture
+        // blades open and close.
+        let lid = max(length(e - vec2f(0.0, 0.62 * R)) - 1.18 * R, length(e + vec2f(0.0, 0.62 * R)) - 1.18 * R);
+        var eye = mix(paper, vec3f(1.0), 0.35);
+        // Lid engraving: fine arcs following the lid.
+        eye = mix(eye, ink, strokeA((fract(lid / (R * 0.06)) - 0.5) * R * 0.06, px * 0.4, px) * 0.25);
+        let lr = 0.52 * R;
+        let dl = er - lr;
+        // Lens barrel rings.
+        let rings = bands((er / lr) * 7.0, true);
+        var lens = rings;
+        // Iris: radial fine lines.
+        if (er < lr * 0.72) {
+          lens = mix(C(4), C(7), er / lr);
+          lens = mix(lens, ink, strokeA((fract(ea / 6.2831 * 72.0) - 0.5) / 72.0 * 6.2831 * er, px * 0.35, px) * 0.6);
+        }
+        // Aperture: a heptagon that breathes and turns; outside it, blades.
+        let n = 7.0;
+        let open = lr * (0.36 + 0.16 * sin(t * 0.7));
+        let rotA = t * 0.2;
+        let seg = 6.2831 / n;
+        let an = ea - rotA;
+        let fa = an - seg * floor(an / seg + 0.5);
+        let dPoly = er * cos(fa) - open * cos(seg * 0.5);
+        if (er < lr * 0.72) {
+          var blade = mix(ink, C(4), 0.18);
+          // Blade seams run from each corner out to the rim.
+          let sd = abs(sin(fa - 0.5 * seg)) * er;
+          blade = mix(blade, C(3), strokeA(sd, px * 0.45, px) * step(0.0, dPoly) * 0.7);
+          lens = mix(lens, blade, clamp(0.5 + dPoly / px, 0.0, 1.0) * step(er, lr * 0.72));
+          // Pupil depth and two lens glints.
+          lens = mix(lens, ink * 0.7, fillA(dPoly, px));
+          lens = mix(lens, vec3f(1.0), fillA(length(e - vec2f(-0.12, -0.14) * R) - 0.045 * R, px) * 0.9);
+          lens = mix(lens, vec3f(1.0), fillA(sdBox(rot2(e - vec2f(0.1, 0.1) * R, 0.6), vec2f(0.03, 0.012) * R), px) * 0.8);
+        }
+        eye = mix(eye, lens, fillA(dl, px));
+        eye = mix(eye, ink, strokeA(dl, px * 0.8, px));
+        sheet = mix(sheet, eye, fillA(lid, px));
+        sheet = mix(sheet, ink, strokeA(lid, px * 1.0, px));
+        sheet = mix(sheet, C(2), strokeA(lid + R * 0.05, px * 0.9, px) * step(e.y, 0.0));
+        sheet = mix(sheet, C(4), strokeA(lid + R * 0.05, px * 0.9, px) * step(0.0, e.y));
+      } else if (fig > 1.5 && fig < 2.5) {
+        // Eclipse: a dark disc, a corona of banded rays, a diamond-ring glint.
+        let cr = er / R;
+        // The corona's outer edge flares into points, inked like everything else.
+        let ray = 0.22 * sin(ea * 11.0 + t * 0.3) + 0.14 * sin(ea * 23.0 - t * 0.5) + 0.12 * fbm(vec2f(ea * 3.0, t * 0.1));
+        let dCor = (cr - (1.45 + ray)) * R;
+        if (dCor < px) {
+          let s = (cr - 1.0) * 16.0;
+          sheet = mix(sheet, bands(s - ft * 0.5, true), fillA(dCor, px));
+          sheet = mix(sheet, ink, strokeA(dCor, px * 0.8, px));
+        }
+        let dd = (cr - 1.0) * R;
+        sheet = mix(sheet, ink * 0.9, fillA(dd, px));
+        sheet = mix(sheet, C(3), strokeA(dd, px * 1.3, px));
+        let ga = 0.7 + t * 0.05;
+        let gp = e - vec2f(cos(ga), sin(ga)) * R;
+        let glint = max(fillA(sdBox(rot2(gp, 0.785), vec2f(0.012, 0.012)), px), fillA(abs(gp.x) * 0.15 + abs(gp.y) - 0.012, px) * step(abs(gp.x), 0.09));
+        sheet = mix(sheet, vec3f(1.0), max(glint, fillA(abs(gp.y) * 0.15 + abs(gp.x) - 0.01, px) * step(abs(gp.y), 0.07)));
+      } else if (fig > 2.5) {
+        // Sigil: an invented emblem, rebuilt from the seed. N-fold symmetric
+        // strokes on a dark disc: arcs, spokes, dots and bars.
+        let dd = er - R * 0.8;
+        var sg = mix(ink, C(7), 0.12);
+        let sN = 3.0 + floor(hash1(u.a.w) * 5.0);
+        let sseg = 6.2831 / sN;
+        let sa = ea + t * 0.05;
+        let fa = sa - sseg * floor(sa / sseg + 0.5);
+        let lp = vec2f(cos(fa), sin(fa)) * er / R;       // folded into one wedge
+        var ink2 = 0.0;
+        for (var j = 0; j < 6; j++) {
+          let h = hash1(u.a.w * 3.1 + f32(j) * 7.7);
+          let r0 = 0.15 + 0.6 * hash1(u.a.w + f32(j) * 1.3);
+          var dj = 1e3;
+          if (h < 0.3) {
+            dj = abs(length(lp) - r0);                                    // ring
+          } else if (h < 0.55) {
+            dj = sdSeg(lp, vec2f(r0 * 0.4, 0.0), vec2f(min(r0 + 0.25, 0.75), 0.0));   // spoke
+          } else if (h < 0.75) {
+            dj = length(lp - vec2f(r0, 0.0)) - 0.035;                     // dot
+          } else {
+            let aw = 0.5 * hash1(f32(j) + u.a.w * 5.0);
+            dj = sdSeg(lp, vec2f(r0, -aw * r0), vec2f(r0, aw * r0));        // bar
+          }
+          let c = warmColor(j * 2 + i32(u.a.w));
+          let a = strokeA(dj * R, px * 1.6, px);
+          sg = mix(sg, c, a);
+        }
+        sheet = mix(sheet, sg, fillA(dd, px));
+        sheet = mix(sheet, ink, strokeA(dd, px * 0.9, px));
+        sheet = mix(sheet, C(3), strokeA(dd - R * 0.06, px * 0.7, px));
+        sheet = mix(sheet, ink, strokeA(dd - R * 0.1, px * 0.5, px));
       }
 
-      // Crests rising in front of the figure's chin.
-      let crestY = mc.y + R * 0.78 + 0.05 * sin(q.x * 5.0 + ft * 0.35 + u.a.w) + 0.07 * (fbm(vec2f(q.x * 2.2 + u.a.w, ft * 0.05)) - 0.5);
+      // Swell rising in front of the emblem.
+      let crestY = mc.y + R * 0.9 + 0.05 * sin(q.x * 5.0 + ft * 0.35 + u.a.w) + 0.07 * (fbm(vec2f(q.x * 2.2 + u.a.w, ft * 0.05)) - 0.5);
       let front = q.y - crestY;
       if (fig > 0.5) {
         let fb = bands(front * u.b.x * 3.2 + 0.4 * sin(q.x * 2.0 + ft * 0.2), true);
         sheet = mix(sheet, fb, fillA(-front, px));
         sheet = mix(sheet, ink, strokeA(front, px * 0.8, px));
       }
-
-      // Small suns above and below, the poster's punctuation.
+      // Node markers above and below: a ring, a centre dot and a dashed trace.
       if (fig > 0.5) {
-        let top = q - mc - vec2f(0.0, -R * 1.13);
-        let dTop = length(top) - R * 0.1;
-        sheet = mix(sheet, C(2), fillA(dTop, px));
-        sheet = mix(sheet, C(3), fillA(length(top) - R * 0.045, px));
-        sheet = mix(sheet, ink, strokeA(dTop, px * 0.7, px));
-        let bot = q - vec2f(mc.x, min(hh - R * 0.2, mc.y + R * 1.3));
-        let dBot = length(bot) - R * 0.11;
-        sheet = mix(sheet, C(4), fillA(dBot, px));
-        sheet = mix(sheet, ink, strokeA(length(bot) - R * 0.07, px * 0.9, px));
-        sheet = mix(sheet, ink, strokeA(dBot, px * 0.7, px));
+        let top = q - mc - vec2f(0.0, -R * 1.18);
+        let bot = q - vec2f(mc.x, min(hh - R * 0.2, mc.y + R * 1.32));
+        for (var k = 0; k < 2; k++) {
+          let v = select(top, bot, k == 1);
+          let dn = length(v) - R * 0.07;
+          sheet = mix(sheet, paper, fillA(dn, px));
+          sheet = mix(sheet, ink, strokeA(dn, px * 0.8, px));
+          sheet = mix(sheet, C(2 + k * 2), fillA(length(v) - R * 0.03, px));
+          let dash = step(0.5, fract(v.x / (R * 0.06)));
+          sheet = mix(sheet, ink, strokeA(v.y, px * 0.5, px) * dash * step(R * 0.1, abs(v.x)) * step(abs(v.x), R * 0.45));
+        }
       }
       // Inner keyline, the digital half: a double hairline with corner ticks.
       let dIn = sdBox(p, vec2f(iw, hh));
@@ -299,11 +351,11 @@ struct U {
 }
 `;
 
-const NAME = 'wave-mask';
+const NAME = 'swell-sigil';
 // paper, ink, then red, yellow, blue, orange, green, purple
 const PALETTES = {
-  noh:    ['#e7dcc4', '#0c0a10', '#e2412f', '#f2c14e', '#3553a8', '#f07a3a', '#2f8a6e', '#c43a7a'],
-  awazu:  ['#efe4cc', '#1b1416', '#d6336c', '#f4c21b', '#35a9cf', '#ee5d2a', '#3b9b4f', '#6a3d9a'],
+  swell:  ['#e7dcc4', '#0c0a10', '#e2412f', '#f2c14e', '#3553a8', '#f07a3a', '#2f8a6e', '#c43a7a'],
+  poster: ['#efe4cc', '#1b1416', '#d6336c', '#f4c21b', '#35a9cf', '#ee5d2a', '#3b9b4f', '#6a3d9a'],
   riso:   ['#f3eee4', '#1c2a52', '#ff48b0', '#ffe800', '#0078bf', '#ff6c2f', '#00a95c', '#765ba7'],
   acid:   ['#e9ecef', '#0e1116', '#ff2d6f', '#c6ff00', '#00b8ff', '#ff8a00', '#00d19a', '#7a5cff'],
   ink:    ['#ece6d8', '#121212', '#c8322a', '#d9d2c2', '#3a3a3a', '#8a8a8a', '#5a5a5a', '#b3aa98'],
@@ -312,7 +364,7 @@ const PALETTES = {
 const p = {};
 function readControls() {
   p.pal = colsOf($('palette').value);
-  p.figure = { mask: 1, sun: 2, none: 0 }[$('figure').value];
+  p.figure = { eye: 1, eclipse: 2, sigil: 3, none: 0 }[$('figure').value];
   p.density = 8 + +$('density').value / 100 * 40;
   p.warp = +$('warp').value / 100 * 2;
   p.mass = 0.35 + +$('mass').value / 100 * 0.3;
