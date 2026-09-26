@@ -6,6 +6,23 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
+**Print & Pattern · WebGPU** (newest first)
+
+After Kiyoshi Awazu's 1970s posters, crossed with late-90s digital design: flat silkscreen colour and hairline ink outlines, plus registration marks, ruler ticks, dimension lines and dot grids.
+
+- **Cross Section**
+  - Nested flat-colour layers, a folded core and a stacked spine
+  - Rainbow, rain hatching and an engraved sea
+  - Drag to press on the specimen
+
+- **Poster Collage**
+  - Generated poster of flat motifs over engraved hills
+  - Drag any shape to rearrange, Generate for a new composition
+
+- **Wave Mask**
+  - Dense contour bands following a moving field, around a mask or sun
+  - Drag to push the waves
+
 **Wire & Signal · WebGPU** (newest first)
 
 - **Ridgelines**
