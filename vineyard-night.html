@@ -141,6 +141,31 @@ fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
 }
 // The ink plate prints a hair off register from the colour.
 const MISREG = vec2f(0.0016, -0.0011);
+// Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
+fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
+  let f = fract(rot2(p, 0.785) / cell) - 0.5;
+  let r = sqrt(clamp(amt, 0.0, 1.0) / 3.14159) * cell;
+  return fillA(length(f) * cell - r, px) * step(0.01, amt);
+}
+// Printed sun or moon: rings around a disc of radius r0.
+fn rings(p: vec2f, c: vec2f, r0: f32, gap: f32, n: f32, px: f32) -> f32 {
+  let d = length(p - c) - r0;
+  let on = step(gap * 0.5, d) * step(d, gap * (n + 0.5));
+  return strokeA((fract(d / gap + 0.5) - 0.5) * gap, px * 0.55, px) * on;
+}
+// Scalloped wave crests: a row of arcs along y = y0.
+fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
+  let f = (fract(p.x / w) - 0.5) * w;
+  let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
+  return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
+}
+// Small bird: two ink arcs.
+fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
+  let q = (p - c) / s;
+  let x = abs(q.x);
+  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
+  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
+}
 
 // Vineyard Night: a deep blue sky of vertical drips and purple speckle with
 // wandering trails of white dots, sage hills edged with dotted scrub, a
@@ -174,6 +199,7 @@ const VP = vec2f(0.02, -0.12);
   return crest || rid;
 }
 
+const MOON = vec2f(0.3, -0.36);
 // Stepped night sky: whole numbers of this field are band edges.
 @diagnostic(off, derivative_uniformity) fn skyField(q: vec2f) -> f32 { return (q.y + 0.6) * 9.0 + 1.6 * vnoise(q * vec2f(2.0, 4.0) + u.a.w + vec2f(u.a.x * u.b.x * 0.004, 0.0)); }
 @diagnostic(off, derivative_uniformity) fn fieldEdge(q: vec2f) -> f32 { return abs(q.x - VP.x) - (0.1 + (q.y - hillFront(q.x) - 0.012) * 3.2); }
@@ -218,6 +244,12 @@ const VP = vec2f(0.02, -0.12);
     P.fine = select(0.0, 2.0, s);
     return P;
   }
+  if (length(q - MOON) < 0.045) {
+    P.col = mix(C(4), C(2), select(0.1, 0.35, r > 0.6));
+    P.ang = r * 6.28;
+    P.fine = 0.0;
+    return P;
+  }
   // Sky: streaks falling slowly, lavender and white toward the edges.
   let n = vnoise(vec2f(q.x * 9.0, q.y * 1.4 - ft * 0.05) + u.a.w);
   let edge = smoothstep(0.35, 0.8, abs(q.x) + 0.2 * (vnoise(q * 3.0) - 0.5)) + smoothstep(-0.05, 0.08, q.y) * 0.6;
@@ -240,7 +272,7 @@ const VP = vec2f(0.02, -0.12);
   let br = u.b.y;
   let ft = t * u.b.x;
   var col = scene(s, 0.5).col;
-  col = paintLayer(s, 0.028 * br, 0.95, 0.3, 1.0, pxs, col, false);
+  col = paintLayer(s, 0.02 * br, 0.95, 0.3, 1.0, pxs, col, false);
   if (s.y < hillBack(s.x)) {
     // Purple speckle and drips running down.
     let g = vec2f(s.x / 0.018, (s.y + ft * 0.004) / 0.03);
@@ -272,7 +304,71 @@ const VP = vec2f(0.02, -0.12);
       }
     }
   }
-  col = paintLayer(s, 0.011 * br, 0.95, 0.3, 2.0, pxs, col, true);
+  col = paintLayer(s, 0.0082 * br, 0.95, 0.3, 2.0, pxs, col, true);
+  // Moon rings and four-point stars.
+  let skyM = step(s.y, hillBack(s.x));
+  col = mix(col, C(18), rings(s, MOON, 0.045, 0.012, 3.0, pxs) * 0.55 * skyM);
+  col = mix(col, INK, strokeA(length(s - MOON) - 0.045, pxs * 0.7, pxs) * skyM * 0.6);
+  {
+    let sc = 0.06;
+    let sid = floor(s / sc);
+    let sh = hash21(sid + u.a.w + 17.0);
+    if (sh > 0.62) {
+      let v = s - (sid + 0.5 + (vec2f(hash21(sid + 4.1), hash21(sid + 6.3)) - 0.5) * 0.6) * sc;
+      let a = atan2(v.y, v.x);
+      let tw = 0.6 + 0.4 * sin(t * 1.7 + sh * 50.0);
+      let rs = 0.006 * (0.6 + sh) * tw;
+      let d = length(v) - rs * (0.18 + 0.82 * pow(abs(cos(a * 2.0)), 10.0));
+      col = mix(col, C(18), fillA(d, pxs) * skyM * step(0.09, length(s - MOON)));
+    }
+  }
+  // Oaks along the crests of the hills.
+  for (var h = 0; h < 2; h++) {
+    let cw = select(0.05, 0.07, h == 1);
+    let ci = floor(s.x / cw);
+    for (var o = -1; o <= 1; o++) {
+      let id = ci + f32(o);
+      let th = hash1(id * 1.7 + f32(h) * 9.0 + u.a.w);
+      if (th < 0.45) { continue; }
+      let cx = (id + 0.5 + (hash1(id * 3.3) - 0.5) * 0.5) * cw;
+      var gy = hillBack(cx);
+      if (h == 1) { gy = hillFront(cx); }
+      if (h == 1 && abs(cx - VP.x) < 0.16) { continue; }
+      let rad = select(0.011, 0.014, h == 1) * (0.7 + 0.5 * th);
+      let cc = vec2f(cx, gy - rad * 0.9);
+      let v = s - cc;
+      let cd = length(v / vec2f(1.25, 1.0)) - rad * (1.0 + 0.18 * (vnoise(v / rad * 2.5 + id) - 0.5));
+      let trunk = sdSeg(s, vec2f(cx, gy + 0.004), cc) - 0.0012;
+      col = mix(col, C(10), fillA(min(cd, trunk), pxs));
+      col = mix(col, C(9), fillA(length(v + vec2f(rad * 0.3, rad * 0.35)) - rad * 0.45, pxs) * fillA(cd, pxs) * 0.6);
+      col = mix(col, INK, strokeA(min(cd, trunk), pxs * 0.5, pxs) * 0.7);
+    }
+  }
+  // A small barn on the left hill with one lit window.
+  {
+    let bx = -0.42;
+    let by = hillFront(bx) + 0.004;
+    let v = s - vec2f(bx, by);
+    let wall = sdBox(v - vec2f(0.0, -0.013), vec2f(0.022, 0.013));
+    let roof = sdTri(v, vec2f(-0.027, -0.025), vec2f(0.027, -0.025), vec2f(0.0, -0.043));
+    col = mix(col, C(11), fillA(wall, pxs));
+    col = mix(col, C(13), fillA(roof, pxs));
+    col = mix(col, C(17), fillA(sdBox(v - vec2f(0.009, -0.014), vec2f(0.0045, 0.005)), pxs));
+    col = mix(col, C(13), fillA(sdBox(v - vec2f(-0.008, -0.009), vec2f(0.005, 0.009)), pxs));
+    col = mix(col, INK, strokeA(min(wall, roof), pxs * 0.5, pxs));
+  }
+  // Vine posts along each row, closer together toward the vanishing point.
+  {
+    let hf = hillFront(s.x);
+    let dy = s.y - VP.y;
+    if (s.y > hf + 0.02 && fieldEdge(s) < 0.0 && s.y < fieldBottom()) {
+      let rowv = (s.x - VP.x) / dy;
+      let rf = (fract(rowv * 7.0) - 0.5) * dy / 7.0;
+      let pz = fract(log(dy) * 14.0);
+      let post = strokeA(rf, 0.0006 + 0.0012 * dy, pxs) * step(pz, 0.22);
+      col = mix(col, INK, post * 0.75);
+    }
+  }
   // Spirals of yellow dots in the foreground brush.
   for (var i = 0; i < 3; i++) {
     let fi = f32(i);
