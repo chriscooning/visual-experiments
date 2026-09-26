@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Caustics Pool — WebGPU</title>
+<title>Pool Light — WebGPU</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -45,211 +45,668 @@
 <body>
 <canvas id="canvas"></canvas>
 <div class="panel" id="panel">
-  <div class="control-group"><label>Palette</label>
-    <select id="palette">
-      <option value="pool" selected>Pool</option>
-      <option value="lagoon">Lagoon</option>
-      <option value="night">Night Swim</option>
-      <option value="mono">Monochrome</option>
-    </select>
-  </div>
+  <div class="control-group"><label>Time <span class="val" id="timeVal">12</span></label><input type="range" id="time" min="0" max="100" value="12"></div>
+  <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Swell <span class="val" id="swellVal">45</span></label><input type="range" id="swell" min="0" max="100" value="45"></div>
-  <div class="control-group"><label>Depth <span class="val" id="depthVal">55</span></label><input type="range" id="depth" min="10" max="100" value="55"></div>
-  <div class="control-group"><label>Sunlight <span class="val" id="sunVal">60</span></label><input type="range" id="sun" min="10" max="100" value="60"></div>
-  <div class="control-group"><label>Ripple Size <span class="val" id="rippleVal">40</span></label><input type="range" id="ripple" min="10" max="100" value="40"></div>
-  <div class="control-group"><label>Ripple Fade <span class="val" id="fadeVal">30</span></label><input type="range" id="fade" min="0" max="100" value="30"></div>
-  <div class="control-group"><label>Rain <span class="val" id="rainVal">15</span></label><input type="range" id="rain" min="0" max="100" value="15"></div>
+  <div class="control-group"><label>Splashes <span class="val" id="swimmersVal">40</span></label><input type="range" id="swimmers" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Grain <span class="val" id="grainVal">25</span></label><input type="range" id="grain" min="0" max="100" value="25"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
     <button class="btn primary" id="generate">Generate</button>
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Tap or drag to make ripples · Tilt to slosh · H controls</div>
+<div class="hint-pill" id="hintPill">Tap the water to make a splash · Drag Time through the day · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
 <script type="module">
-import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
 import { tilt } from './lib/tilt.js';
 
-// ═══════════════════════════════════════
-// SHADERS
-// A small height-field simulation carries the ripples you make. On top of it,
-// a few analytic swells keep the water moving on its own. The render pass
-// bends the floor through the surface and brightens it where the surface
-// focuses light: caustics are where the refracted floor area shrinks, i.e.
-// 1 / det(I - depth * Hessian(height)).
-// ═══════════════════════════════════════
-const DROP = /* wgsl */ `
-struct Drop { pos: vec2f, radius: f32, strength: f32, aspect: f32 }
-@group(0) @binding(0) var<uniform> drop: Drop;
-@group(0) @binding(1) var src: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-
-@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-  var c = textureSampleLevel(src, samp, uv, 0.0);
-  let d = length((uv - drop.pos) * vec2f(drop.aspect, 1.0)) / drop.radius;
-  if (d < 1.0) { c.r -= drop.strength * (cos(d * 3.14159) * 0.5 + 0.5); }
+const SHADER = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var a = 0.5; var s = 0.0;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, 9.2); a *= 0.5; }
+  return s / 0.9375;
+}
+// Coverage of a shape from its signed distance (negative inside), one pixel wide.
+fn fillA(d: f32, px: f32) -> f32 { return clamp(0.5 - d / px, 0.0, 1.0); }
+// Coverage of an outline of half-width w along the shape's edge.
+fn strokeA(d: f32, w: f32, px: f32) -> f32 { return clamp(0.5 - (abs(d) - w) / px, 0.0, 1.0); }
+fn sdBox(p: vec2f, b: vec2f) -> f32 { let d = abs(p) - b; return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0); }
+fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+fn sdTri(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f) -> f32 {
+  let e0 = p1 - p0; let e1 = p2 - p1; let e2 = p0 - p2;
+  let v0 = p - p0; let v1 = p - p1; let v2 = p - p2;
+  let pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  let pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  let pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  let s = sign(e0.x * e2.y - e0.y * e2.x);
+  let d = min(min(vec2f(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+                  vec2f(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+                  vec2f(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+  return -sqrt(d.x) * sign(d.y);
+}
+fn rot2(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * p.x - s * p.y, s * p.x + c * p.y); }
+// Paper: a little fibre and grain, and ink that prints slightly unevenly.
+fn paperize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
+  let fibre = 0.965 + 0.035 * vnoise(pos * vec2f(0.02, 0.09));
+  let speck = hash21(floor(pos / 1.5)) - 0.5;
+  return col * fibre * (1.0 + speck * grain * 0.6) + (hash21(pos) - 0.5) * grain * 0.25;
+}
+// Registration mark: a ring with a cross through it.
+fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
+  let q = p - c;
+  let ring = strokeA(length(q) - r, px * 0.6, px);
+  let cross = max(strokeA(sdSeg(q, vec2f(-r * 1.7, 0.0), vec2f(r * 1.7, 0.0)), px * 0.5, px),
+                  strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
+  return max(ring, cross);
+}
+const INK = vec3f(0.07, 0.06, 0.08);
+const PAPER = vec3f(0.94, 0.91, 0.84);
+// Hairlines where a banding field crosses each whole number.
+fn bandLines(v: f32, px: f32) -> f32 {
+  let fw = max(fwidth(v), 1e-5);
+  let d = min(fract(v), 1.0 - fract(v)) / fw;
+  return (1.0 - smoothstep(0.35, 1.25, d)) * (1.0 - smoothstep(0.25, 0.5, fw));
+}
+// Paper margin with a keyline and registration marks at the edge midpoints.
+fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
+  let m = 0.024;
+  let d = sdBox(p, vec2f(asp * 0.5 - m, 0.5 - m));
+  var c = mix(PAPER, col, fillA(d, px));
+  c = mix(c, INK, strokeA(d, px * 0.9, px));
+  let r = m * 0.28;
+  var mk = max(regMark(p, vec2f(0.0, -0.5 + m * 0.5), r, px), regMark(p, vec2f(0.0, 0.5 - m * 0.5), r, px));
+  mk = max(mk, max(regMark(p, vec2f(-asp * 0.5 + m * 0.5, 0.0), r, px), regMark(p, vec2f(asp * 0.5 - m * 0.5, 0.0), r, px)));
+  return mix(c, INK, mk * step(0.0, d) * 0.8);
+}
+// The ink plate prints a hair off register from the colour.
+const MISREG = vec2f(0.0016, -0.0011);
+// Bushes after Chris's canvases: a near-black core with stippled highlights
+// that thicken toward the lit edge. lit runs 0 (deep shadow) to 1 (sunlit
+// rim); cell sets the stipple size. Two offset layers of jittered dots.
+fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, hiA: vec3f, hiB: vec3f, warm: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mix(dark, mid, 0.55), smoothstep(0.35, 0.9, l));
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / cell + vec2f(fl * 0.5, fl * 0.37);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 7.1);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3 + fl), hash21(id + 2.7 + fl)) - 0.5) * 0.55;
+    let dens = smoothstep(0.05, 0.85, l + (hash21(id + 5.9) - 0.5) * 0.45);
+    if (h < 0.4 + 0.6 * dens) {
+      let k = hash21(id + 9.1 + fl);
+      var dc = select(select(hiA, hiB, k > 0.55), warm, k > 0.95);
+      dc = mix(mix(dark, mid, 0.8), dc, smoothstep(0.15, 0.75, l + (h - 0.5) * 0.3));
+      let r = (0.24 + 0.2 * hash21(id + 3.3)) * mix(0.8, 1.0, l);
+      c = mix(c, dc, fillA((length(f) - r) * cell, px));
+    }
+  }
   return c;
 }
-`;
-
-const STEP = /* wgsl */ `
-struct Sim { texel: vec2f, damping: f32 }
-@group(0) @binding(0) var<uniform> sim: Sim;
-@group(0) @binding(1) var src: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-
-@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-  let c = textureSampleLevel(src, samp, uv, 0.0);
-  let avg = (textureSampleLevel(src, samp, uv + vec2f(sim.texel.x, 0.0), 0.0).r
-           + textureSampleLevel(src, samp, uv - vec2f(sim.texel.x, 0.0), 0.0).r
-           + textureSampleLevel(src, samp, uv + vec2f(0.0, sim.texel.y), 0.0).r
-           + textureSampleLevel(src, samp, uv - vec2f(0.0, sim.texel.y), 0.0).r) * 0.25;
-  // r = height, g = vertical velocity
-  let vel = (c.g + (avg - c.r) * 2.0) * sim.damping;
-  return vec4f(c.r + vel, vel, 0.0, 1.0);
+// Shadow pooled on the ground under a clump: a flat ellipse pushed away
+// from the sun, longer when the sun is low. Returns coverage.
+fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
+  let len = r * (1.1 + 2.2 * low);
+  let c = foot + vec2f(-side * len * 0.55, r * 0.12);
+  return fillA((length((p - c) / vec2f(len, r * 0.32)) - 1.0) * r * 0.32, px);
 }
-`;
-
-const RENDER = /* wgsl */ `
-struct Look {
-  floorA: vec3f, swell: f32,
-  floorB: vec3f, depth: f32,
-  grout: vec3f, sun: f32,
-  deep: vec3f, time: f32,
-  tilt: vec2f, aspect: f32, seed: f32,
-  texel: vec2f, rippleGain: f32, lane: f32,
+// Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
+fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
+  let f = fract(rot2(p, 0.785) / cell) - 0.5;
+  let r = sqrt(clamp(amt, 0.0, 1.0) / 3.14159) * cell;
+  return fillA(length(f) * cell - r, px) * step(0.01, amt);
 }
-@group(0) @binding(0) var<uniform> look: Look;
-@group(0) @binding(1) var sim: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
+// Printed sun or moon: rings around a disc of radius r0.
+fn rings(p: vec2f, c: vec2f, r0: f32, gap: f32, n: f32, px: f32) -> f32 {
+  let d = length(p - c) - r0;
+  let on = step(gap * 0.5, d) * step(d, gap * (n + 0.5));
+  return strokeA((fract(d / gap + 0.5) - 0.5) * gap, px * 0.55, px) * on;
+}
+// Scalloped wave crests: a row of arcs along y = y0.
+fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
+  let f = (fract(p.x / w) - 0.5) * w;
+  let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
+  return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
+}
+// Small bird: two ink arcs.
+fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
+  let q = (p - c) / s;
+  let x = abs(q.x);
+  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
+  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
+}
 
-fn h1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+// Pool Light: a California pool in the afternoon, drawn flat and crisp.
+// Interlocking squiggles of light wander over the water and bend round
+// splashes; a glass house sits behind a pink deck between stippled hedges,
+// palms throw their shadows across the water as the sun drops, and after
+// dark the pool glows from its lamps while the house windows light up.
+struct U {
+  a: vec4f,   // time, aspect, px, seed
+  b: vec4f,   // swell, gust, grain, zoom
+  c: vec4f,   // sun x, sun y, sun height, dark
+  d: vec4f,   // moon x, moon y, moon height, tilt x
+  drops: array<vec4f, 6>,   // world x, world z, age, strength
+  cols: array<vec4f, 36>,
+}
+@group(0) @binding(0) var<uniform> u: U;
 
-// Height, gradient and Hessian (xx, yy, xy) of the water surface at p, in
-// screen-height units. Analytic swells plus the simulated ripples.
-struct Surf { h: f32, g: vec2f, hess: vec3f }
+// 0 sky top, 1 sky mid, 2 horizon, 3 sun, 4 glow, 5 cloud lit, 6 cloud shade,
+// 7 mountains, 8 haze, 9 sky in water, 10 hill lit, 11 hill shade,
+// 12 bush dark, 13 bush mid, 14 bush hi, 15 bush hi 2, 16 house white,
+// 17 house accent, 18 glass, 19 overhang shade, 20 deck, 21 deck joint,
+// 22 coping, 23 water deep, 24 water mid, 25 water light line, 26 water dark line,
+// 27 tile, 28 board, 29 chair, 30 trunk, 31 frond dark, 32 frond lit,
+// 33 ink, 34 lamp, 35 pool lamp
+@diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+@diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
+@diagnostic(off, derivative_uniformity) fn light() -> f32 { return smoothstep(-0.04, 0.2, u.c.z); }
+@diagnostic(off, derivative_uniformity) fn lowSun() -> f32 { return 1.0 - smoothstep(0.1, 0.5, u.c.z); }
 
-fn surf(uv: vec2f) -> Surf {
-  var s: Surf;
-  let p = vec2f(uv.x * look.aspect, uv.y);
-  let tl = length(look.tilt);
-  for (var i = 0; i < 8; i++) {
-    let fi = f32(i);
-    var ang = look.seed * 6.2831 + fi * 2.39996;
-    var dir = vec2f(cos(ang), sin(ang));
-    var amp = look.swell * 0.016;
-    // Tilting sends the two broadest swells downhill and builds them up.
-    if (i < 2 && tl > 0.05) { dir = normalize(mix(dir, look.tilt / tl, min(tl * 1.5, 1.0))); amp *= 1.0 + 2.5 * tl; }
-    let k = 24.0 + fi * 8.0 + h1(fi + look.seed) * 8.0;
-    // Shorter waves carry less height but more curvature, which is what
-    // draws the thin, connected web of a real pool floor.
-    amp *= sqrt(30.0 / k);
-    let w = sqrt(9.8 * k) * 0.35;
-    let ph = dot(dir, p) * k - w * look.time + h1(fi * 3.1 + look.seed) * 6.2831;
-    let a = amp / k;
-    s.h += a * cos(ph);
-    s.g += -a * k * sin(ph) * dir;
-    let hc = -a * k * k * cos(ph);
-    s.hess += hc * vec3f(dir.x * dir.x, dir.y * dir.y, dir.x * dir.y);
+// Ground plane in perspective: a horizon line Y0 and focal length F.
+const Y0 = -0.07;
+const F = 0.32;
+const PX0 = -1.6;
+const PX1 = 1.6;
+const PZ0 = 0.62;
+const PZ1 = 2.6;
+const HOUSE_Z = 5.5;
+@diagnostic(off, derivative_uniformity) fn toWorld(p: vec2f) -> vec2f { let z = F / max(p.y - Y0, 1e-4); return vec2f(p.x * z / F, z); }
+@diagnostic(off, derivative_uniformity) fn toScreen(w: vec2f) -> vec2f { return vec2f(w.x * F / w.y, Y0 + F / w.y); }
+
+@diagnostic(off, derivative_uniformity) fn cloud(p: vec2f, k: i32) -> vec2f {
+  let fk = f32(k);
+  let L = 0.16 + 0.18 * hash1(fk + u.a.w);
+  let cy = -1.05 + fk * 0.13;
+  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0016 * (1.0 + fk * 0.2)) * 2.6 - 1.3;
+  let dx = (p.x - cx) / L;
+  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
+  let th = (0.014 + 0.01 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
+  let sc = abs(sin(dx * (6.0 + fk) + fk));
+  let top = cy - th * (1.0 + 0.8 * sc);
+  let bot = cy + th * 0.4;
+  return vec2f(max(top - p.y, p.y - bot), clamp((p.y - top) / (bot - top), 0.0, 1.0));
+}
+
+// Ripples from splashes, as a displacement of the water's pattern.
+@diagnostic(off, derivative_uniformity) fn ripple(w: vec2f) -> f32 {
+  var d = 0.0;
+  for (var i = 0; i < 6; i++) {
+    let dr = u.drops[i];
+    if (dr.w <= 0.0) { continue; }
+    let r = length(vec2f(w.x - dr.x, (w.y - dr.y) * 1.6));
+    let front = dr.z * 0.55;
+    let env = exp(-pow((r - front) * 7.0, 2.0)) * exp(-dr.z * 0.7) * dr.w;
+    d += sin((r - front) * 38.0) * env;
   }
-  // Simulated ripples: central differences on the sim texture.
-  // Sample 2 texels out: the linear filter averages neighbours, which keeps
-  // the curvature from amplifying the grid's checkerboard and 16-bit noise.
-  let tx = vec2f(look.texel.x * 2.0, 0.0);
-  let ty = vec2f(0.0, look.texel.y * 2.0);
-  let ex = look.texel.x * 2.0 * look.aspect;   // step size in p units
-  let ey = look.texel.y * 2.0;
-  let g0 = look.rippleGain;
-  let c  = textureSampleLevel(sim, samp, uv, 0.0).r * g0;
-  let l  = textureSampleLevel(sim, samp, uv - tx, 0.0).r * g0;
-  let r  = textureSampleLevel(sim, samp, uv + tx, 0.0).r * g0;
-  let u  = textureSampleLevel(sim, samp, uv - ty, 0.0).r * g0;
-  let d  = textureSampleLevel(sim, samp, uv + ty, 0.0).r * g0;
-  let ur = textureSampleLevel(sim, samp, uv + tx - ty, 0.0).r * g0;
-  let ul = textureSampleLevel(sim, samp, uv - tx - ty, 0.0).r * g0;
-  let dr = textureSampleLevel(sim, samp, uv + tx + ty, 0.0).r * g0;
-  let dl = textureSampleLevel(sim, samp, uv - tx + ty, 0.0).r * g0;
-  s.h += c;
-  s.g += vec2f((r - l) / (2.0 * ex), (d - u) / (2.0 * ey));
-  s.hess += vec3f((r - 2.0 * c + l) / (ex * ex), (d - 2.0 * c + u) / (ey * ey), (dr - dl - ur + ul) / (4.0 * ex * ey));
-  return s;
+  return d;
 }
 
-// Pool floor: square mosaic tiles with grout, plus a darker lane stripe.
-fn poolFloor(q: vec2f) -> vec3f {
-  let cell = q * 11.0;
-  let f = abs(fract(cell) - 0.5);
-  let grout = smoothstep(0.43, 0.47, max(f.x, f.y));
-  let id = floor(cell);
-  let tone = 0.94 + 0.06 * fract(sin(dot(id, vec2f(12.9898, 78.233))) * 43758.5453);
-  var col = mix(look.floorA, look.floorB, look.lane * smoothstep(0.035, 0.03, abs(q.x - look.aspect * 0.5)));
-  col = col * tone;
-  return mix(col, look.grout, grout);
+// The water's light: two families of wandering lines, one pale and one
+// dark, woven across each other and broken here and there.
+@diagnostic(off, derivative_uniformity) fn waterLines(w: vec2f, t: f32) -> vec3f {
+  let q = vec2f(w.x * 1.6, w.y * 4.2);
+  let sw = 0.5 + u.b.x;
+  let rp = ripple(w) * 1.4;
+  let a = q.y * 1.9 + 0.55 * sin(q.x * 2.3 + t * 0.7 * sw) + 0.3 * sin(q.x * 5.3 - t * 1.1 * sw + q.y * 1.3) + 0.14 * sin(q.x * 11.0 + t * 1.6) + rp;
+  let b = q.y * 1.9 + 0.5 + 0.55 * sin(q.x * 2.7 - t * 0.6 * sw + 2.0) + 0.3 * sin(q.x * 4.6 + t * 0.9 * sw - q.y * 1.7) + 0.14 * sin(q.x * 9.0 - t * 1.4) - rp;
+  let fa = max(fwidth(a), 1e-4);
+  let fb = max(fwidth(b), 1e-4);
+  let da = abs(fract(a) - 0.5) / fa;
+  let db = abs(fract(b) - 0.5) / fb;
+  let brkA = step(0.3, vnoise(vec2f(q.x * 3.0 + floor(a) * 1.7, t * 0.2)));
+  let brkB = step(0.4, vnoise(vec2f(q.x * 2.5 + floor(b) * 2.3, t * 0.25 + 5.0)));
+  let wA = 0.9 + 0.8 * vnoise(vec2f(q.x * 4.0, floor(a)));
+  let wB = 0.8 + 0.6 * vnoise(vec2f(q.x * 4.0, floor(b) + 9.0));
+  let la = (1.0 - smoothstep(wA, wA + 1.0, da)) * brkA * smoothstep(0.35, 0.1, fa);
+  let lb = (1.0 - smoothstep(wB, wB + 1.0, db)) * brkB * smoothstep(0.35, 0.1, fb);
+  return vec3f(la, lb, rp);
 }
 
-@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-  let s = surf(uv);
-  let p = vec2f(uv.x * look.aspect, uv.y);
-  let D = look.depth;
-  // Where this pixel's view ray lands on the floor after bending.
-  let q = p - s.g * D * 0.3 + look.tilt * 0.02;
-  // Area change of the light hitting the floor: small area = focused = bright.
-  let det = (1.0 - D * s.hess.x) * (1.0 - D * s.hess.y) - (D * s.hess.z) * (D * s.hess.z);
-  let caustic = clamp(1.0 / max(abs(det), 0.12), 0.0, 6.0);
-  // Soft-knee the focus so threads glow without blowing the floor out.
-  let focus = caustic - 1.0;
-  let light = 0.72 + look.sun * 0.45 * focus / (1.0 + 0.25 * max(focus, 0.0));
-  var col = poolFloor(q) * light;
-  // Water colour deepens with depth; a touch of sky glint on the slopes.
-  col = mix(col, look.deep, 0.1 + 0.18 * D / 1.5);
-  let n = normalize(vec3f(-s.g * 3.0, 1.0));
-  let hv = normalize(vec3f(0.35, -0.5, 1.0) + vec3f(0.0, 0.0, 1.0));
-  col += vec3f(1.0, 0.98, 0.9) * pow(max(dot(n, hv), 0.0), 350.0) * 0.8;
-  // Soft vignette like looking into the water from above.
-  let vig = 1.0 - 0.3 * smoothstep(0.4, 1.2, length((uv - 0.5) * vec2f(look.aspect, 1.0)));
-  return vec4f(col * vig, 1.0);
+// A fan palm, as in Palm Row.
+@diagnostic(off, derivative_uniformity) fn crown(v: vec2f, R: f32, sd: f32, px: f32) -> vec4f {
+  let lt = light();
+  let r = length(v);
+  let a = atan2(v.y, v.x);
+  let N = 19.0;
+  let seg = a * N / 6.2832 + sd;
+  let fs = fract(seg);
+  let tip = 1.0 - abs(fs - 0.5) * 2.0;
+  let hs = hash1(floor(seg) * 1.37 + sd);
+  let down = smoothstep(-0.2, 0.9, v.y / max(r, 1e-4));
+  let rr = R * (1.0 + 0.3 * down + 0.2 * (hs - 0.5)) * (0.58 + 0.42 * pow(tip, 0.7));
+  let d = (r - rr) * 0.8;
+  let sy = v.y - R * 0.3;
+  let sl = R * 1.1;
+  let skirtD = max(abs(v.x) - R * 0.4 * (1.0 - 0.45 * clamp(sy / sl, 0.0, 1.0)), max(-sy, sy - sl - R * 0.06 * sin(v.x / R * 30.0 + sd)));
+  var col = mix(C(30), C(20), 0.25);
+  col = mix(col, C(30) * 0.75, strokeA(fract(v.x / (R * 0.09)) - 0.5, 0.1, 0.12) * 0.6);
+  var alpha = fillA(skirtD, px);
+  if (d < px * 2.0) {
+    var fc = select(C(31), mix(C(31), C(32), 0.4), (i32(floor(seg)) % 2) == 0);
+    let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
+    fc = mix(fc, C(32), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.45, 0.9, r / rr), 2.0) * lt);
+    fc = mix(fc, C(31) * 0.7, smoothstep(0.3, 0.8, v.y / R) * 0.6 + smoothstep(0.22 * R, 0.1 * R, r));
+    fc = mix(fc, C(31) * 0.8, strokeA((fs - 0.5) * r * 6.2832 / N, px * 0.45, px) * smoothstep(0.15, 0.4, r / R));
+    fc = mix(fc, C(33), strokeA(d, px * 0.5, px));
+    col = mix(col, fc, fillA(d, px));
+    alpha = max(alpha, fillA(d, px));
+  }
+  return vec4f(col, alpha);
+}
+@diagnostic(off, derivative_uniformity) fn palmTrunk(p: vec2f, b: vec2f, c: vec2f, w0: f32, px: f32) -> vec4f {
+  let L = length(c - b);
+  let dir = (c - b) / L;
+  let nrm = vec2f(-dir.y, dir.x);
+  let rel = p - b;
+  let along = dot(rel, dir);
+  if (along < -0.01 || along > L) { return vec4f(0.0); }
+  let tt = clamp(along / L, 0.0, 1.0);
+  let across = dot(rel, nrm) - sin(tt * 3.14159) * 0.015;
+  let w = w0 * (1.0 - 0.4 * tt);
+  let d = abs(across) - w;
+  var col = mix(C(30) * 0.7, C(30), post(smoothstep(-0.3, 0.7, across / w * sign(u.c.x - p.x + 1e-4)) * light(), 2.0));
+  col = mix(col, C(30) * 0.6, step(0.72, fract(along / (w0 * 0.85) + abs(across / w) * 0.25)));
+  col = mix(col, C(33), strokeA(d, px * 0.45, px));
+  return vec4f(col, fillA(d, px));
+}
+
+@diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let t = u.a.x; let asp = u.a.y; let k = u.b.w;
+  let p0 = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
+  let px = u.a.z * k;
+  let dark = u.c.w;
+  let lt = light();
+  let sun = u.c.xy;
+  let moon = u.d.xy;
+  let tilt = u.d.w;
+  let side = sign(sun.x + 1e-4);
+  let pFar = p0 + vec2f(tilt * 0.008, 0.0);
+  let p = p0;
+
+  // ---- Sky.
+  let g = clamp((p0.y - Y0) / -1.0, 0.0, 1.0);
+  var col = mix(C(2), C(1), post(smoothstep(0.0, 0.3, g), 5.0));
+  col = mix(col, C(0), post(smoothstep(0.28, 0.9, g), 5.0));
+  let ds = length(p0 - sun);
+  col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+  {
+    let sg = p0 / 0.035;
+    let sid = floor(sg);
+    let sh = hash21(sid + 5.3);
+    if (sh > 0.72) {
+      let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+      let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
+      let sa = atan2(sv.y, sv.x);
+      let sdd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+      col = mix(col, C(34), fillA(sdd, px) * dark);
+    }
+  }
+  col = mix(col, C(3), fillA(ds - 0.042, px));
+  let dm = length(p0 - moon);
+  col = mix(col, mix(C(34), vec3f(0.95, 0.94, 0.88), 0.6), fillA(dm - 0.03, px));
+  for (var i = 0; i < 9; i++) {
+    let cl = cloud(p0, i);
+    if (cl.x < px * 2.0) {
+      let under = mix(1.0 - cl.y, cl.y, lowSun());
+      var cc = mix(C(6), C(5), post(under, 3.0));
+      cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
+      col = mix(col, cc, fillA(cl.x, px));
+      col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
+    }
+  }
+
+  // ---- Mountains and the near hills behind the house.
+  {
+    let mt = -0.16 - 0.05 * exp(-pow((pFar.x + 0.4) / 0.3, 2.0)) - 0.03 * exp(-pow((pFar.x - 0.5) / 0.25, 2.0)) + 0.008 * sin(pFar.x * 13.0 + u.a.w);
+    col = mix(col, mix(C(7), C(2), 0.3), fillA(mt - pFar.y, px));
+    let hx = p0.x + tilt * 0.014;
+    let ht = -0.1 + 0.03 * sin(hx * 3.3 + u.a.w) - 0.02 * exp(-pow((hx - 0.4) / 0.2, 2.0)) + 0.003 * sin(hx * 29.0);
+    if (p0.y > ht - px * 2.0) {
+      let s = (0.03 * 3.3 * cos(hx * 3.3 + u.a.w));
+      var hc = mix(C(11), C(10), post(clamp(0.5 + s * 6.0 * side, 0.0, 1.0) * lt + (1.0 - lt) * 0.2, 3.0));
+      hc = mix(hc, C(8), 0.2);
+      hc = mix(hc, C(11), step(0.8, fract((p0.y - ht) / 0.006 + 0.3 * sin(hx * 30.0))) * 0.35);
+      // Stippled oaks on the slope.
+      let ow = 0.05;
+      let oi = floor(hx / ow);
+      let oh = hash1(oi * 1.9 + u.a.w);
+      if (oh > 0.4) {
+        let ox = (oi + 0.5 + (hash1(oi * 4.1) - 0.5) * 0.4) * ow;
+        let oy = -0.1 + 0.03 * sin(ox * 3.3 + u.a.w) + 0.012 + 0.02 * hash1(oi * 7.7);
+        let rr = 0.009 + 0.005 * oh;
+        let v = vec2f(hx, p0.y) - vec2f(ox, oy);
+        let od = length(v / vec2f(1.2, 1.0)) - rr;
+        hc = mix(hc, mix(C(11), C(33), 0.5), groundShadow(vec2f(hx, p0.y), vec2f(ox, oy + rr * 0.8), rr, side, lowSun(), px) * lt * 0.6);
+        let olit = lt * clamp(0.35 - v.y / rr * 0.9 + v.x / rr * 0.3 * side, 0.0, 1.0);
+        hc = mix(hc, stippleBush(vec2f(hx, p0.y), olit, 0.0024, px, C(12), C(13), C(14), C(15), C(17), oi), fillA(od, px));
+      }
+      col = mix(col, hc, fillA(ht - p0.y, px));
+    }
+  }
+
+  // ---- The house: a white box under a thin roof slab, a glass wall, a
+  // pink panel, hedges either side.
+  let baseY = Y0 + F / HOUSE_Z;
+  {
+    let hx0 = -0.56; let hx1 = 0.12; let top = -0.14;
+    let body = sdBox(p0 - vec2f((hx0 + hx1) * 0.5, (top + baseY) * 0.5), vec2f((hx1 - hx0) * 0.5, (baseY - top) * 0.5));
+    let roof = sdBox(p0 - vec2f((hx0 + hx1) * 0.5 + 0.02, top - 0.006), vec2f((hx1 - hx0) * 0.5 + 0.06, 0.006));
+    var hc = C(16) * mix(0.55, 1.0, lt);
+    // Glass wall with mullions; it reflects the sky by day and glows at night.
+    let gx0 = -0.46; let gx1 = 0.02;
+    let glass = sdBox(p0 - vec2f((gx0 + gx1) * 0.5, (top + 0.012 + baseY) * 0.5), vec2f((gx1 - gx0) * 0.5, (baseY - top - 0.012) * 0.5));
+    var gc = mix(C(18), C(1), 0.25);
+    gc = mix(gc, mix(C(18), C(2), 0.5), step(0.0, sin((p0.x + p0.y * 0.8) * 90.0)) * 0.25 * lt);
+    let pane = fract((p0.x - gx0) / 0.08 + 0.001);
+    let lamp = step(0.35, hash1(floor((p0.x - gx0) / 0.08) + floor(t * 0.03)));
+    gc = mix(gc, mix(C(34), C(17), 0.25), dark * lamp * 0.9);
+    gc = mix(gc, C(33), step(0.95, pane) + step(pane, 0.02));
+    hc = mix(hc, gc, fillA(glass, px));
+    let accent = sdBox(p0 - vec2f(0.075, (top + baseY) * 0.5), vec2f(0.03, (baseY - top) * 0.5));
+    hc = mix(hc, C(17) * mix(0.55, 1.0, lt), fillA(accent, px));
+    hc = mix(hc, C(19), smoothstep(top + 0.02, top, p0.y) * step(top, p0.y) * 0.8);
+    col = mix(col, hc, fillA(body, px));
+    col = mix(col, C(16) * mix(0.6, 1.0, lt), fillA(roof, px));
+    col = mix(col, C(33), strokeA(min(body, roof), px * 0.5, px) * 0.8);
+    // Hedges either side of the house.
+    let hgTop = baseY - 0.03 - 0.008 * abs(sin(p0.x * 45.0 + u.a.w)) - 0.004 * sin(p0.x * 11.0);
+    let outside = step(0.0, -(p0.x - hx0 + 0.01) * (p0.x - hx1 - 0.07));
+    let hgl = (0.15 + 0.85 * lt) * clamp((baseY - p0.y) / (baseY - hgTop) * 1.1 - 0.15, 0.0, 1.0);
+    let hgc = stippleBush(p0, hgl, 0.0032, px, C(12), C(13), C(14), C(15), C(17), 21.0);
+    col = mix(col, hgc, fillA(hgTop - p0.y, px) * fillA(p0.y - baseY - 0.002, px) * (1.0 - outside));
+    col = mix(col, C(33), strokeA(p0.y - hgTop, px * 0.45, px) * (1.0 - outside) * step(p0.y, baseY) * 0.5);
+  }
+
+  // ---- Deck, coping and the pool, all on the ground plane.
+  if (p0.y > baseY - px) {
+    let w = toWorld(p0);
+    let inPool = w.x > PX0 && w.x < PX1 && w.y > PZ0 && w.y < PZ1;
+    let cop = 0.13;
+    let dxE = max(PX0 - w.x, w.x - PX1);
+    let dzE = max(PZ0 - w.y, w.y - PZ1);
+    let edge = max(dxE, dzE);
+    // Palm shadows on the ground: long wedges away from the sun.
+    let shL = 0.5 + 2.2 * lowSun();
+    var shade = 0.0;
+    var palmsW = array<vec3f, 2>(vec3f(2.3, 2.3, 1.0), vec3f(-2.2, 3.4, 0.8));
+    for (var i = 0; i < 2; i++) {
+      let pw = palmsW[i];
+      let tip = pw.xy + vec2f(-side * shL * pw.z, -0.35 * lowSun() * pw.z);
+      let tr = sdSeg(w, pw.xy, tip) - 0.035 * pw.z;
+      let cv = (w - tip) / vec2f(0.55, 0.3) / pw.z;
+      let ca = atan2(cv.y, cv.x);
+      let cr = length(cv) - (0.6 + 0.4 * pow(abs(sin(ca * 9.0 + f32(i))), 0.5));
+      shade = max(shade, max(fillA(tr, 0.02), fillA(cr * 0.3, 0.02)));
+    }
+    shade *= lt * 0.55;
+    if (inPool) {
+      // Water: deeper toward the camera, the floor's tiles swimming beneath,
+      // and the woven lines of light on top.
+      let depthT = smoothstep(PZ1, PZ0, w.y);
+      var wc = mix(C(24), C(23), post(depthT, 3.0));
+      wc = mix(wc, C(9), smoothstep(PZ0 + 0.8, PZ1, w.y) * 0.3 * lt);
+      let L = waterLines(w, t);
+      let fl = w + vec2f(0.03 * sin(w.y * 9.0 + t), 0.02 * sin(w.x * 7.0 - t * 0.8)) + L.z * 0.02;
+      let tile = max(step(0.95, fract(fl.x / 0.18)), step(0.94, fract(fl.y / 0.12)));
+      wc = mix(wc, C(27), tile * 0.25 * smoothstep(0.35, 0.0, fwidth(fl.y / 0.12)));
+      let lane = abs(fl.x) - 0.05;
+      wc = mix(wc, C(26), fillA(lane * 0.08, 0.004) * 0.5);
+      // Shadow just inside the wall on the side away from the sun.
+      let wallSh = smoothstep(0.12, 0.0, min(w.x - PX0, PX1 - w.x)) * step(0.0, (w.x) * side * -1.0) + smoothstep(0.1, 0.0, PZ1 - w.y);
+      wc = mix(wc, C(23) * 0.8, clamp(wallSh, 0.0, 1.0) * 0.5 * lt);
+      wc = mix(wc, C(26), L.y * 0.75);
+      wc = mix(wc, mix(C(25), C(3), 0.15 * lt), L.x);
+      wc = mix(wc, C(23) * 0.7, shade);
+      // After dark the lamps light the water from within.
+      let glow = exp(-length(vec2f(w.x * 0.7, (w.y - PZ1 + 0.2) * 1.8)) * 1.2) * 0.8 + exp(-length(vec2f(w.x, (w.y - 1.2) * 1.4)) * 0.9) * 0.5;
+      wc = mix(wc, C(35), clamp(glow, 0.0, 1.0) * dark * 0.8);
+      wc = mix(wc, mix(C(35), vec3f(1.0), 0.5), L.x * dark * 0.6);
+      col = wc;
+    } else {
+      // Deck: pink concrete in slabs; coping stones round the pool.
+      var dc = C(20) * mix(0.5, 1.0, lt);
+      let j = max(strokeA(fract(w.x / 0.8 + 0.5) - 0.5, fwidth(w.x / 0.8) * 0.6, fwidth(w.x / 0.8)), strokeA(fract(w.y / 0.5) - 0.5, fwidth(w.y / 0.5) * 0.6, fwidth(w.y / 0.5)));
+      dc = mix(dc, C(21), j * 0.6);
+      if (edge < cop) {
+        dc = C(22) * mix(0.55, 1.0, lt);
+        let cj = strokeA(fract((select(w.x, w.y, dxE > dzE)) / 0.3) - 0.5, 0.03, 0.05);
+        dc = mix(dc, C(21), cj * 0.5);
+      }
+      dc = mix(dc, C(21) * 0.8, shade);
+      // The deck catches the pool's glow at night.
+      dc = mix(dc, C(35), exp(-max(edge, 0.0) * 2.5) * dark * 0.35);
+      col = mix(col, dc, fillA(-(p0.y - baseY), px));
+    }
+    // Crisp lip where the water meets the wall.
+    let lipW = select(abs(dzE), abs(dxE), dxE > dzE);
+    col = mix(col, C(33), (1.0 - smoothstep(0.0, fwidth(edge) * 1.5, abs(edge))) * 0.7);
+    col = mix(col, C(33), (1.0 - smoothstep(0.0, fwidth(edge) * 1.5, abs(edge - cop))) * 0.35 * step(edge, cop + 0.05));
+  }
+
+  // ---- Splashes: a white crown of water rising where a drop went in.
+  for (var i = 0; i < 6; i++) {
+    let dr = u.drops[i];
+    if (dr.w <= 0.0 || dr.z > 1.2) { continue; }
+    let sc = toScreen(dr.xy);
+    let s = F / dr.y;
+    let v = (p0 - sc) / s;
+    let grow = smoothstep(0.0, 0.25, dr.z) * (1.0 - smoothstep(0.5, 1.2, dr.z));
+    let a = atan2(v.y, v.x);
+    let rr = 0.18 * dr.w * grow * (0.35 + 0.65 * pow(abs(sin(a * 5.0 + dr.x * 7.0)), 2.0)) * (1.0 + 0.8 * smoothstep(0.0, -1.0, sin(a)));
+    let sd = (length(v * vec2f(1.0, 1.1)) - rr) * s;
+    let base = max(sd, (v.y - 0.02) * s);
+    let spray = fillA(base, px) * grow;
+    col = mix(col, mix(vec3f(0.97, 0.98, 1.0), C(35), dark * 0.4), spray);
+    col = mix(col, C(26), strokeA(base, px * 0.4, px) * grow * 0.6);
+    // Droplets flung off the crown.
+    for (var d = 0; d < 7; d++) {
+      let fd = f32(d);
+      let ang = -0.4 - 2.35 * fd / 6.0;
+      let dist = dr.z * (0.5 + 0.3 * hash1(fd + dr.x)) * dr.w;
+      let dp = vec2f(cos(ang), sin(ang)) * dist + vec2f(0.0, dr.z * dr.z * 0.6);
+      col = mix(col, vec3f(0.97, 0.98, 1.0), fillA((length(v - dp) - 0.012 * dr.w) * s, px) * grow);
+    }
+  }
+
+  // ---- Palms behind the deck.
+  for (var i = 0; i < 2; i++) {
+    let fi = f32(i);
+    let wb = select(vec2f(2.3, 2.3), vec2f(-2.2, 3.4), i == 1);
+    let b = toScreen(wb);
+    let sc = F / wb.y * 3.2;
+    let sw = (u.b.x * 0.01 * sin(t * 0.9 + fi * 1.3) + u.b.y * 0.02) * sc;
+    let c = b + vec2f(-0.03 * sc + sw, -(0.72 + 0.1 * fi) * sc);
+    let tr = palmTrunk(p0, b, c + vec2f(0.0, 0.01 * sc), 0.009 * sc, px);
+    col = mix(col, tr.rgb, tr.a);
+    let v = rot2(p0 - c, 0.08 * sin(t * 1.1 + fi) * u.b.x);
+    let cr = crown(v, 0.1 * sc, fi * 2.7 + u.a.w, px);
+    col = mix(col, cr.rgb, cr.a);
+  }
+
+  // ---- Lounge chairs on the right, with their shadows.
+  for (var i = 0; i < 2; i++) {
+    let fi = f32(i);
+    let wc0 = vec2f(2.05 + fi * 0.15, 1.05 + fi * 0.55);
+    let b = toScreen(wc0);
+    let s = F / wc0.y;
+    let v = (p0 - b) / s;
+    let seat = sdBox(v - vec2f(0.0, -0.06), vec2f(0.32, 0.028));
+    let back = sdBox(rot2(v - vec2f(-0.34, -0.17), 0.9), vec2f(0.14, 0.026));
+    let legs = min(sdSeg(v, vec2f(-0.28, -0.04), vec2f(-0.28, 0.0)), sdSeg(v, vec2f(0.28, -0.04), vec2f(0.28, 0.0))) - 0.012;
+    let ch = min(min(seat, back), legs) * s;
+    let shd = sdBox((v - vec2f(-side * 0.25 * (1.0 + lowSun()), 0.02)) * vec2f(1.0, 3.0), vec2f(0.4, 0.05)) * s;
+    col = mix(col, C(21) * 0.7, fillA(shd, px) * lt * 0.5);
+    var cc = C(29) * mix(0.55, 1.0, lt);
+    cc = mix(cc, C(17), step(0.5, fract(v.x / 0.1)) * step(-0.09, v.y) * 0.6);
+    col = mix(col, cc, fillA(ch, px));
+    col = mix(col, C(33), strokeA(ch, px * 0.45, px) * 0.8);
+  }
+
+  // ---- Diving board reaching in from the foreground.
+  {
+    let bottom = 0.5 * k;
+    let wA = toScreen(vec2f(-0.13, 0.5));
+    let wB = toScreen(vec2f(0.13, 0.5));
+    let tA = toScreen(vec2f(-0.12, 0.85));
+    let tB = toScreen(vec2f(0.12, 0.85));
+    let q = p0;
+    let fy = clamp((q.y - tA.y) / max(wA.y - tA.y, 1e-4), 0.0, 1.0);
+    let hw = mix(tB.x, wB.x, fy);
+    let bd = max(max(abs(q.x) - hw, tA.y - q.y), q.y - bottom - 0.1);
+    col = mix(col, C(33) * 0.8, fillA(max(max(abs(q.x - 0.01) - hw, tA.y + 0.012 - q.y), q.y - bottom), px) * 0.35 * lt);
+    var bc = C(16) * mix(0.5, 1.0, lt);
+    bc = mix(bc, C(28) * mix(0.5, 1.0, lt), smoothstep(hw * 0.78, hw * 0.82, abs(q.x)));
+    col = mix(col, bc, fillA(bd, px));
+    col = mix(col, C(16) * mix(0.4, 0.8, lt), fillA(max(bd, tA.y + 0.006 - q.y), px));
+    col = mix(col, C(33), strokeA(bd, px * 0.5, px) * 0.8);
+  }
+  return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 `;
 
-// ═══════════════════════════════════════
-// PALETTES — floor tile, lane stripe, grout, water depth, lane on/off
-// ═══════════════════════════════════════
-const PALETTES = {
-  pool:   { floorA: [0.72, 0.9, 0.93], floorB: [0.1, 0.25, 0.55], grout: [0.55, 0.72, 0.76], deep: [0.0, 0.42, 0.55], lane: 1 },
-  lagoon: { floorA: [0.86, 0.78, 0.6], floorB: [0.76, 0.66, 0.48], grout: [0.8, 0.72, 0.55], deep: [0.0, 0.45, 0.42], lane: 0 },
-  night:  { floorA: [0.22, 0.4, 0.62], floorB: [0.05, 0.1, 0.26], grout: [0.1, 0.2, 0.32], deep: [0.0, 0.08, 0.22], lane: 1 },
-  mono:   { floorA: [0.82, 0.82, 0.82], floorB: [0.35, 0.35, 0.35], grout: [0.6, 0.6, 0.6], deep: [0.18, 0.18, 0.2], lane: 1 },
+const NAME = 'pool-light';
+
+// Time of day. tau runs 0..1 round the clock: afternoon at 0, sunset near
+// 0.3, night through the middle, dawn at 0.8. Each piece gives sky colours
+// per key and a land palette that is graded by the light of the moment.
+const DAY_KEYS = [
+  [0.00, 'afternoon', [1, 1, 1], 1.0],
+  [0.18, 'golden hour', [1.08, 0.94, 0.76], 1.12],
+  [0.28, 'sunset', [0.98, 0.7, 0.6], 1.05],
+  [0.35, 'blue hour', [0.46, 0.5, 0.76], 0.72],
+  [0.43, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.73, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.81, 'dawn', [0.86, 0.72, 0.8], 0.85],
+  [0.9, 'morning', [1.02, 0.98, 0.94], 0.95],
+  [1.0, 'afternoon', [1, 1, 1], 1.0],
+];
+const SKY_ORDER = ['afternoon', 'golden hour', 'sunset', 'blue hour', 'night', 'night', 'dawn', 'morning', 'afternoon'];
+function dayKey(tau) {
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && tau >= DAY_KEYS[i + 1][0]) i++;
+  const a = DAY_KEYS[i], b = DAY_KEYS[i + 1];
+  let f = (tau - a[0]) / (b[0] - a[0]);
+  f = f * f * (3 - 2 * f);
+  return { i, f, name: f < 0.5 ? a[1] : b[1] };
+}
+const lerp3 = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+// SKIES: name -> list of hex; LAND: list of hex; KEEP: land indexes left ungraded.
+function dayCols(tau, SKIES, LAND, KEEP) {
+  const k = dayKey(tau);
+  const A = DAY_KEYS[k.i], B = DAY_KEYS[k.i + 1];
+  const sa = SKIES[SKY_ORDER[k.i]], sb = SKIES[SKY_ORDER[k.i + 1]];
+  const out = sa.map((h, j) => [...lerp3(hex(h), hex(sb[j]), k.f), 1]);
+  const m = lerp3(A[2], B[2], k.f), sat = A[3] + (B[3] - A[3]) * k.f;
+  LAND.forEach((h, j) => {
+    const c = hex(h);
+    if (KEEP.includes(j)) { out.push([...c, 1]); return; }
+    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    out.push([...c.map((v, q) => Math.max(0, Math.min(1, (l + (v - l) * sat) * m[q]))), 1]);
+  });
+  return out;
+}
+// Sun and moon: position on screen, height above the horizon (-1..1).
+function celestial(tau, hz) {
+  const df = ((tau - 0.8) % 1 + 1) % 1;
+  let elev, sx, sy, mx = 0, my = 2, mElev = -1;
+  if (df < 0.51) { const f = df / 0.51; elev = Math.sin(Math.PI * f); sx = -0.55 + 0.9 * f; }
+  else { const f = (df - 0.51) / 0.49; elev = -Math.sin(Math.PI * f); sx = 0.35; mElev = Math.sin(Math.PI * f); mx = 0.5 - 0.95 * f; my = hz - mElev * 0.46 + 0.04; }
+  sy = hz - elev * 0.55 + 0.02;
+  return { sx, sy, elev, mx, my, mElev };
+}
+
+// sky top, sky mid, horizon, sun, glow, cloud lit, cloud shade, mountains, haze, sky in water
+const SKIES = {
+  'afternoon':   ['#5aaee0', '#9fd0ec', '#e8f0ea', '#fff8e0', '#fff2cc', '#ffffff', '#c8d4dc', '#a8bccc', '#e0ecee', '#bfe6f2'],
+  'golden hour': ['#6aa0d0', '#b8cce0', '#f6dcb0', '#fff0c0', '#ffd890', '#fff4e0', '#d8b0a8', '#b8a8b8', '#f0e0d0', '#f0d8b8'],
+  'sunset':      ['#5a5a9a', '#e0809a', '#ffb07a', '#ffe0a0', '#ff9860', '#ffc4a4', '#9a6480', '#9a7a9a', '#f0c0b8', '#f8b8a0'],
+  'blue hour':   ['#1e2a5c', '#44528c', '#a888b0', '#f0c0a8', '#9a7aa8', '#9486b4', '#4a4674', '#4a4a78', '#7a7aa8', '#6a78b0'],
+  'night':       ['#070a1e', '#0e1838', '#1c2a50', '#f4f0dc', '#30406a', '#303c5c', '#131a30', '#141c38', '#222c50', '#1a2448'],
+  'dawn':        ['#6a78b0', '#d0a0c0', '#ffd4b8', '#fff0d0', '#ffc0a8', '#ffe6dc', '#a88cac', '#a894b0', '#ecdce4', '#e8c8d0'],
+  'morning':     ['#6ab8e8', '#b0d8ee', '#f0f2e8', '#fff8e4', '#fff4d8', '#fffcf8', '#ccd6de', '#b0c2d2', '#e6f0f0', '#c8ecf4'],
 };
+// hill lit, hill shade, bush dark, bush mid, bush hi, bush hi 2, house white, accent, glass, overhang,
+// deck, deck joint, coping, water deep, water mid, water light, water dark, tile, board, chair,
+// trunk, frond dark, frond lit, ink, lamp, pool lamp
+const LAND = ['#c8c088', '#8a9468', '#12261e', '#2a4a34', '#b8c860', '#e0c850', '#f6f2ea', '#e88a8a', '#3a5a6a', '#b8b0a8',
+  '#f0b8b0', '#d09890', '#f2eadc', '#1a6ab0', '#2a8ad0', '#e8f8ff', '#12508e', '#8ac8e8', '#e8c050', '#f4f0e8',
+  '#b08a5a', '#1f4a3a', '#8ab04a', '#141a1c', '#ffd98a', '#5ae8e0'];
+const KEEP = [23, 24, 25];
+
+const p = {};
+let tau = 0.08 + Math.random() * 0.12;
+let timeHooked = false;
+function readControls() {
+  p.swell = +$('swell').value / 100 * 1.4;
+  p.speed = +$('speed').value / 100;
+  p.swimmers = +$('swimmers').value / 100;
+  p.grain = +$('grain').value / 100 * 0.1;
+  for (const id of ['swell', 'speed', 'swimmers', 'grain']) $(id + 'Val').textContent = $(id).value;
+  if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
+}
+const drops = [];
+function splash(x, z, s) {
+  drops.push([x, z, 0, s]);
+  while (drops.length > 6) drops.shift();
+}
+let gust = 0, shown = -1, nextDrop = 2;
+function generate() { splash((Math.random() - 0.5) * 2.2, 0.9 + Math.random() * 1.4, 0.8 + Math.random() * 0.4); }
+function uniforms() {
+  const zoom = Math.max(1, 1.1 / aspect);
+  const s = celestial(tau, -0.07);
+  const dark = 1 - Math.min(1, Math.max(0, (s.elev + 0.25) / 0.3));
+  const d = [];
+  for (let i = 0; i < 6; i++) d.push(drops[i] ? drops[i] : [0, 0, 0, 0]);
+  return {
+    a: [t, aspect, 1 / Math.max(1, H), seed],
+    b: [p.swell, gust, p.grain, zoom],
+    c: [s.sx, s.sy, s.elev, dark],
+    d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
+    drops: d,
+    cols: dayCols(tau, SKIES, LAND, KEEP),
+  };
+}
+function step(dt) {
+  tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
+  for (const d of drops) d[2] += dt;
+  while (drops.length && drops[0][2] > 6) drops.shift();
+  nextDrop -= dt * p.swimmers;
+  if (nextDrop < 0) { nextDrop = 2 + Math.random() * 5; generate(); }
+  const v = Math.round(tau * 100);
+  if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(tau).name; }
+}
+// Tap the water to drop something in.
+function onDown(q) {
+  const zoom = Math.max(1, 1.1 / aspect);
+  const sx = q[0] * zoom, sy = q[1] * zoom;
+  if (sy <= -0.07) return;
+  const z = 0.32 / (sy + 0.07), x = sx * z / 0.32;
+  if (Math.abs(x) < 1.6 && z > 0.62 && z < 2.6) splash(x, z, 1.1);
+}
+function onMove(q) {}
+function onUp() {}
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const colsOf = (name) => PALETTES[name].map((h) => [...hex(h), 1]);
 
-// ═══════════════════════════════════════
-// STATE
-// ═══════════════════════════════════════
-const p = {};
-function readControls() {
-  p.swell = +$('swell').value / 100;
-  p.depth = 0.3 + +$('depth').value / 100 * 1.2;
-  p.sun = +$('sun').value / 100 * 1.2;
-  p.ripple = 0.02 + +$('ripple').value / 100 * 0.08;
-  p.damping = 0.997 - +$('fade').value / 100 * 0.03;
-  p.rain = +$('rain').value / 100;
-  p.palette = PALETTES[$('palette').value];
-  for (const id of ['swell', 'depth', 'sun', 'ripple', 'fade', 'rain']) $(id + 'Val').textContent = $(id).value;
-}
-readControls();
-
-let seed = Math.random() * 10;
-let t = 0;
-const tl = tilt();
-
-// ═══════════════════════════════════════
-// GPU
-// ═══════════════════════════════════════
 let gpu;
 try {
   if (!navigator.gpu) throw new Error('no webgpu');
@@ -263,108 +720,40 @@ try {
 }
 
 const surf = surface(gpu, canvas, { dpr: [1, 2] });
-const SIM_W = 320;
-const simSize = () => [SIM_W, Math.max(64, Math.round(SIM_W * surf.size[1] / Math.max(1, surf.size[0])))];
-let simA = target(gpu, { size: simSize(), format: 'rgba16float' });
-let simB = target(gpu, { size: simSize(), format: 'rgba16float' });
-let cur = simA, nxt = simB;
-const swap = () => { const x = cur; cur = nxt; nxt = x; };
-const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+const clk = clock(gpu);
+const tl = tilt();
+let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
+let seed = Math.random() * 100;
 
-const texel = () => [1 / cur.size[0], 1 / cur.size[1]];
-const dropE = effect(gpu, DROP, { set: { drop: { pos: [0.5, 0.5], radius: p.ripple, strength: 0, aspect: 1 }, src: cur, samp: linear } });
-const stepE = effect(gpu, STEP, { set: { sim: { texel: texel(), damping: p.damping }, src: cur, samp: linear } });
-const renderE = effect(gpu, RENDER, { set: {
-  look: {
-    floorA: p.palette.floorA, swell: p.swell, floorB: p.palette.floorB, depth: p.depth,
-    grout: p.palette.grout, sun: p.sun, deep: p.palette.deep, time: 0,
-    tilt: [0, 0], aspect: 1, seed, texel: texel(), rippleGain: 0.012, lane: p.palette.lane,
-  },
-  sim: cur, samp: linear,
-} });
-
-let needClear = true;
-function clearSim(f) {
-  needClear = false;
-  f.pass({ target: simA, clear: [0, 0, 0, 1] }, () => {});
-  f.pass({ target: simB, clear: [0, 0, 0, 1] }, () => {});
-}
-
-surf.onResize(({ width, height }) => {
-  const aspect = width / height;
-  simA.resize(simSize());
-  simB.resize(simSize());
-  stepE.set({ sim: { texel: texel() } });
-  dropE.set({ drop: { aspect } });
-  renderE.set({ look: { aspect, texel: texel() } });
-  // vgpu resizes the canvas at the start of a frame, so clear there rather
-  // than opening a frame from inside this callback.
-  needClear = true;
-});
-
-function applyControls() {
-  readControls();
-  const pal = p.palette;
-  stepE.set({ sim: { damping: p.damping } });
-  dropE.set({ drop: { radius: p.ripple } });
-  renderE.set({ look: {
-    floorA: pal.floorA, floorB: pal.floorB, grout: pal.grout, deep: pal.deep, lane: pal.lane,
-    swell: p.swell, depth: p.depth, sun: p.sun, seed,
-  } });
-}
-
-// ═══════════════════════════════════════
-// RIPPLES: one queued drop per frame, from taps, drags and rain
-// ═══════════════════════════════════════
-let pending = null;
-function toUV(e) {
+function toP(e) {
   const r = canvas.getBoundingClientRect();
-  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+  return [((e.clientX - r.left) / r.width - 0.5) * aspect, (e.clientY - r.top) / r.height - 0.5];
 }
-let dragging = false;
-canvas.addEventListener('pointerdown', (e) => { dragging = true; pending = { pos: toUV(e), strength: 0.9 }; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener('pointermove', (e) => { if (dragging) pending = { pos: toUV(e), strength: 0.35 }; });
-const release = () => { dragging = false; };
+let dragging = false, pointer = [0, 0];
+canvas.addEventListener('pointerdown', (e) => { dragging = true; pointer = toP(e); canvas.setPointerCapture(e.pointerId); onDown(pointer); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) { pointer = toP(e); onMove(pointer); } });
+const release = () => { if (dragging) { dragging = false; onUp(); } };
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 
-// ═══════════════════════════════════════
-// FRAME
-// ═══════════════════════════════════════
-const clk = clock(gpu);
+readControls();
+generate();
+const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
+
+function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
 let fpsCount = 0, fpsAt = performance.now();
-
-function simulate(f) {
-  if (needClear) clearSim(f);
-  if (!pending && Math.random() < p.rain * 0.12) pending = { pos: [Math.random(), Math.random()], strength: 0.25 + Math.random() * 0.3 };
-  if (pending) {
-    dropE.set({ drop: { pos: pending.pos, strength: pending.strength }, src: cur });
-    f.pass(nxt, dropE); swap();
-    pending = null;
-  }
-  for (let i = 0; i < 2; i++) {
-    stepE.set({ src: cur });
-    f.pass(nxt, stepE); swap();
-  }
-}
-
-function render(f) {
-  renderE.set({ sim: cur });
-  f.pass(surf, renderE);
-}
-
 let loop = null, playing = false;
 function tick(f) {
   const dt = Math.min(clk.deltaTime, 0.1);
   t += dt;
-  renderE.set({ look: { time: t, tilt: [tl.x, tl.y] } });
-  simulate(f);
+  step(dt);
   render(f);
   fpsCount++;
   const now = performance.now();
   if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
 }
-
 function togglePlay() {
   playing = !playing;
   if (playing) {
@@ -380,26 +769,17 @@ function togglePlay() {
   }
 }
 
-// ═══════════════════════════════════════
-// CONTROLS
-// ═══════════════════════════════════════
-for (const id of ['swell', 'depth', 'sun', 'ripple', 'fade', 'rain']) $(id).addEventListener('input', applyControls);
-$('palette').addEventListener('change', applyControls);
+for (const el of document.querySelectorAll('#panel input[type=range]')) el.addEventListener('input', readControls);
+for (const el of document.querySelectorAll('#panel select')) el.addEventListener('change', readControls);
 $('playPause').addEventListener('click', togglePlay);
-$('generate').addEventListener('click', () => {
-  seed = Math.random() * 10;
-  applyControls();
-  needClear = true;
-  if (!playing) frame(gpu, (f) => { clearSim(f); render(f); });
-});
+$('generate').addEventListener('click', () => { seed = Math.random() * 100; generate(); if (!playing) frame(gpu, render); });
 $('save').addEventListener('click', () => {
   frame(gpu, render);
   const a = document.createElement('a');
-  a.download = 'caustics-pool-' + Date.now() + '.png';
+  a.download = NAME + '-' + Date.now() + '.png';
   a.href = canvas.toDataURL('image/png');
   a.click();
 });
-
 const panel = $('panel'), hintPill = $('hintPill');
 document.addEventListener('keydown', (e) => {
   if (e.key === 'h' || e.key === 'H') {
@@ -408,8 +788,8 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-applyControls();
-togglePlay();
+// The viewer may already have pressed Play while WebGPU was starting up.
+if (!playing) togglePlay();
 </script>
 </body>
 </html>

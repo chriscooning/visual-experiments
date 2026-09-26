@@ -94,10 +94,10 @@ These need a browser with WebGPU. Where a phone has a motion sensor, `lib/tilt.j
   - Drag to pull the metal, tilt to turn the studio
   - Chrome, gold, oil slick, obsidian, candy
 
-- **Caustics Pool**
-  - Height-field ripple sim plus analytic swells
-  - Caustics from the surface's curvature: 1 / det(I − depth·Hessian)
-  - Tap or drag for ripples, rain, tilt to slosh
+- **Pool Light** (caustics-pool.html)
+  - A California pool drawn flat: woven lines of light on the water, a glass house, palms, lounge chairs
+  - Shadows lengthen through a slow day cycle; the pool glows from its lamps after dark
+  - Tap the water to make a splash
 
 - **Light Rays**
   - Three-pass god rays: occlusion mask, radial blur, composite
