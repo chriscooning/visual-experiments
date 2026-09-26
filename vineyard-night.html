@@ -119,6 +119,28 @@ fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
                   strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
   return max(ring, cross);
 }
+const INK = vec3f(0.07, 0.06, 0.08);
+const PAPER = vec3f(0.94, 0.91, 0.84);
+// Hairlines where a banding field crosses each whole number.
+fn bandLines(v: f32, px: f32) -> f32 {
+  let fw = max(fwidth(v), 1e-5);
+  let d = min(fract(v), 1.0 - fract(v)) / fw;
+  return (1.0 - smoothstep(0.35, 1.25, d)) * (1.0 - smoothstep(0.25, 0.5, fw));
+}
+// Paper margin with a keyline and registration marks at the edge midpoints.
+fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
+  let m = 0.024;
+  let d = sdBox(p, vec2f(asp * 0.5 - m, 0.5 - m));
+  var c = mix(PAPER, col, fillA(d, px));
+  c = mix(c, INK, strokeA(d, px * 0.9, px));
+  let r = m * 0.28;
+  var mk = max(regMark(p, vec2f(0.0, -0.5 + m * 0.5), r, px), regMark(p, vec2f(0.0, 0.5 - m * 0.5), r, px));
+  mk = max(mk, max(regMark(p, vec2f(-asp * 0.5 + m * 0.5, 0.0), r, px), regMark(p, vec2f(asp * 0.5 - m * 0.5, 0.0), r, px)));
+  return mix(c, INK, mk * step(0.0, d) * 0.8);
+}
+// The ink plate prints a hair off register from the colour.
+const MISREG = vec2f(0.0016, -0.0011);
 
 // Vineyard Night: a deep blue sky of vertical drips and purple speckle with
 // wandering trails of white dots, sage hills edged with dotted scrub, a
@@ -151,6 +173,10 @@ const VP = vec2f(0.02, -0.12);
             && vnoise(vec2f(q.x * 3.0, u.a.w)) > 0.4;
   return crest || rid;
 }
+
+// Stepped night sky: whole numbers of this field are band edges.
+@diagnostic(off, derivative_uniformity) fn skyField(q: vec2f) -> f32 { return (q.y + 0.6) * 9.0 + 1.6 * vnoise(q * vec2f(2.0, 4.0) + u.a.w + vec2f(u.a.x * u.b.x * 0.004, 0.0)); }
+@diagnostic(off, derivative_uniformity) fn fieldEdge(q: vec2f) -> f32 { return abs(q.x - VP.x) - (0.1 + (q.y - hillFront(q.x) - 0.012) * 3.2); }
 
 @diagnostic(off, derivative_uniformity) fn scene(q: vec2f, r: f32) -> Paint {
   var P: Paint;
@@ -195,8 +221,10 @@ const VP = vec2f(0.02, -0.12);
   // Sky: streaks falling slowly, lavender and white toward the edges.
   let n = vnoise(vec2f(q.x * 9.0, q.y * 1.4 - ft * 0.05) + u.a.w);
   let edge = smoothstep(0.35, 0.8, abs(q.x) + 0.2 * (vnoise(q * 3.0) - 0.5)) + smoothstep(-0.05, 0.08, q.y) * 0.6;
-  var c = select(C(0), C(1), n < 0.45);
-  if (r > 0.75) { c = C(3); }
+  let band = i32(floor(skyField(q)));
+  var c = select(C(0), C(1), (band % 2) == 0);
+  if (n < 0.3 && r > 0.5) { c = C(select(1, 0, (band % 2) == 0)); }
+  if (r > 0.8) { c = C(3); }
   c = mix(c, select(C(2), C(4), r > 0.6), clamp(edge * (0.4 + 0.6 * r), 0.0, 1.0));
   P.col = c;
   P.ang = 1.5708 + (r - 0.5) * 0.35;
@@ -260,7 +288,19 @@ const VP = vec2f(0.02, -0.12);
       col = mix(col, C(17), fillA(dd, pxs) * select(0.0, 1.0, onArm));
     }
   }
-  return vec4f(canvasize(col, pos.xy, u.b.z), 1.0);
+  // Ink plate: sky hairlines and the land's contours, off register.
+  let so = s + MISREG;
+  var ink = 0.0;
+  let hb = hillBack(so.x);
+  let hf = hillFront(so.x);
+  let fg = fgTop(so.x);
+  ink = max(ink, bandLines(skyField(so), pxs) * 0.35 * step(so.y, hb));
+  ink = max(ink, strokeA(so.y - hb, pxs * 0.8, pxs));
+  ink = max(ink, strokeA(so.y - hf, pxs * 0.8, pxs) * 0.8);
+  ink = max(ink, strokeA(so.y - fg, pxs * 0.9, pxs));
+  if (so.y > hf + 0.012 && so.y < fg) { ink = max(ink, strokeA(fieldEdge(so) / 3.3, pxs * 0.7, pxs) * 0.8); }
+  col = mix(col, INK, ink);
+  return vec4f(posterFrame(canvasize(col, pos.xy, u.b.z), uv, asp, px), 1.0);
 }
 
 // Brush painter. Each page defines scene(q, r) -> Paint: the colour a dab
@@ -291,17 +331,19 @@ struct Paint { col: vec3f, ang: f32, fine: f32 }
       let tx = clamp(abs(q.x) / L, 0.0, 1.0);
       let We = Wd * (1.0 - 0.55 * tx * tx);
       let d = (length(q / vec2f(L, We)) - 1.0) * We;
-      let cov = fillA(d, px * 1.3) * 0.9;
+      let cov = fillA(d, px * 1.1);
       if (cov > 0.0 && h > best) {
-        let bristle = 0.93 + 0.07 * sin(q.y / Wd * 7.0 + h * 20.0);
-        let dc = s.col * (0.9 + 0.2 * hash21(id + sl + 1.1)) * bristle;
+        // Flat, silkscreen-like dabs: little tonal jitter, a faint darker rim.
+        let dc = s.col * (0.96 + 0.08 * hash21(id + sl + 1.1));
         col = mix(col, dc, cov);
+        col = mix(col, dc * 0.78, strokeA(d, px * 0.45, px) * cov * 0.5);
         best = h;
       }
     }
   }
   return col;
 }
+// Print finish, after Kiyoshi Awazu's silkscreens.
 // Canvas: a faint weave on top of the paper grain.
 @diagnostic(off, derivative_uniformity) fn canvasize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
   let w = 0.975 + 0.025 * sin(pos.x * 1.7) * sin(pos.y * 1.7);
