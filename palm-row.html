@@ -744,6 +744,7 @@ const HZ = 0.02;
   return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 `;
+const PIXEL_BUDGET = 4500000;
 
 const NAME = 'palm-row';
 
@@ -873,7 +874,9 @@ try {
   throw e;
 }
 
-const surf = surface(gpu, canvas, { dpr: [1, 2] });
+// Desktop renders above screen resolution within a pixel budget and lets the
+// browser scale down, for crisper edges and finer marks; phones stay light.
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(PIXEL_BUDGET) });
 const clk = clock(gpu);
 const tl = tilt();
 let W = 1, H = 1, aspect = 1, t = Math.random() * 100;

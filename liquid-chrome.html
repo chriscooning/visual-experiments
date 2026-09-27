@@ -239,7 +239,7 @@ try {
 
 // Ray marching is per-pixel work, so cap the pixel ratio lower than the
 // other experiments; the soft studio hides it.
-const surf = surface(gpu, canvas, { dpr: [1, 1.5] });
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(2.5e6) });
 const fx = effect(gpu, CHROME, { set: { u: {
   tint: p.palette.tint, time: t, rim: p.palette.rim, aspect: 1,
   pointer, pull: 0, count: p.count,
