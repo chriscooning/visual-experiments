@@ -8,7 +8,7 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 **Light & Glass · WebGPU**
 
-- **Sliced Light**: a glowing sphere built from stacked frosted discs inside dichroic glass panes; drag to turn, tap to change the light
+- **Sliced Light**: a glowing sphere built from stacked frosted discs inside dichroic glass panes; drag to turn it any way, pinch or scroll to zoom, twist to roll, tap to change the light, double-tap to reset
 
 **Studio · WebGPU** (newest first)
 
