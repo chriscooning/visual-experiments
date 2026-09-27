@@ -56,6 +56,7 @@
   <div class="control-group"><label>Discs <span class="val" id="discsVal">50</span></label><input type="range" id="discs" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Spread <span class="val" id="spreadVal">40</span></label><input type="range" id="spread" min="0" max="100" value="40"></div>
   <div class="control-group"><label>Glass <span class="val" id="glassVal">60</span></label><input type="range" id="glass" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Refraction <span class="val" id="refractVal">55</span></label><input type="range" id="refract" min="0" max="100" value="55"></div>
   <div class="control-group"><label>Spin <span class="val" id="spinVal">30</span></label><input type="range" id="spin" min="0" max="100" value="30"></div>
   <div class="control-group"><label>Colour cycle <span class="val" id="cycleVal">40</span></label><input type="range" id="cycle" min="0" max="100" value="40"></div>
   <div class="btn-row">
@@ -282,7 +283,7 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 // order along the stack.
 struct U {
   a: vec4f,    // time, aspect, px, seed
-  b: vec4f,    // _, _, distance, disc count
+  b: vec4f,    // refraction, _, distance, disc count
   c: vec4f,    // dichroic, spread, glow, hue shift
   colA: vec4f, // light at one end of the stack
   colB: vec4f, // light at the other end
@@ -327,9 +328,22 @@ const EXTRA = 4;
 
   let K = 2 * N - 1 + 2 * EXTRA;
   let sp = 2.0 * R * 0.9 / f32(2 * N - 2) * spread;
+  let refr = u.b.x;
+  let lampMid = (u.colA.rgb + u.colB.rgb) * 0.5;
   var col = vec3f(0.0);
   var T = vec3f(1.0);
+  // Each thick pane shifts the ray sideways as it passes, a little more for
+  // blue than red, so what lies behind appears sliced, offset and fringed.
+  var offR = vec2f(0.0);
+  var offG = vec2f(0.0);
+  var offB = vec2f(0.0);
   let fwd = rd.x > 0.0;
+  let cosv = abs(rd.x);
+  let sinv = sqrt(max(1.0 - cosv * cosv, 0.0));
+  let dyz = rd.yz / max(length(rd.yz), 1e-5);
+  // Fresnel for glass, and the mirrored ray off any pane (they share a normal).
+  let fres = 0.04 + 0.96 * pow(1.0 - cosv, 5.0);
+  let rdr = vec3f(-rd.x, rd.y, rd.z);
   if (abs(rd.x) > 1e-4) {
     for (var j = 0; j < 64; j++) {
       if (j >= K) { break; }
@@ -341,60 +355,96 @@ const EXTRA = 4;
       let h = ro + rd * tt;
       let pw = px * tt / FOC * 1.3;
       let isDisc = ki >= 0 && ki <= 2 * N - 2 && (ki % 2) == 0 && abs(x) < R * 0.97;
-      let rr = length(h.yz);
       let lamp = lampAt(x);
       if (isDisc) {
         let rad = sqrt(max(R * R - x * x, 0.0));
-        if (rr < rad + pw) {
-          let f = rr / rad;
-          let cover = 1.0 - smoothstep(rad - pw, rad + pw, rr);
-          // Frosted glow, whiter at the heart, with two fine dark rings.
-          var e = lamp * (1.35 - 0.55 * f * f);
-          e = mix(e, vec3f(1.0), 0.12 * (1.0 - f) * (1.0 - f));
-          let rings = max(line(rr - rad + pw, pw), line(rr - rad * 0.64, pw) * 0.7);
+        let rrR = length(h.yz + offR);
+        let rrG = length(h.yz + offG);
+        let rrB = length(h.yz + offB);
+        if (min(min(rrR, rrG), rrB) < rad + pw) {
+          let cover = vec3f(1.0) - smoothstep(vec3f(rad - pw), vec3f(rad + pw), vec3f(rrR, rrG, rrB));
+          let f = rrG / rad;
+          // Frosted acrylic glowing from within: brighter at the heart,
+          // with fine dark rings cut into it.
+          var e = lamp * (1.9 - 0.95 * f * f);
+          e = mix(e, vec3f(1.0), 0.2 * (1.0 - f) * (1.0 - f));
+          let rings = max(line(rrG - rad + pw, pw), line(rrG - rad * 0.64, pw) * 0.7);
           e *= 1.0 - 0.85 * rings;
-          let a = 0.7 * cover;
+          // A glossy sheen where the face catches its neighbours' light.
+          e += lampMid * fres * 0.6;
+          let a = 0.66 * cover;
           col += T * e * a;
-          T *= 1.0 - a * 0.8;
+          T *= vec3f(1.0) - a * 0.78;
         }
       } else if (((ki % 4) + 4) % 4 == 1 || ki < 0 || ki > 2 * N - 2) {
-        let m = max(abs(h.y), abs(h.z));
+        let hyz = h.yz + offG;
+        let m = max(abs(hyz.x), abs(hyz.y));
         if (m < S + pw * 2.0) {
           let inP = 1.0 - smoothstep(S - pw, S + pw, m);
-          let cosv = abs(rd.x);
           // Dichroic film: the tint slides through the spectrum with angle.
-          let hue = fract(u.c.w + f32(k) * 0.035 + (1.0 - cosv) * 0.95 + h.y * 0.08);
-          let tint = hsv(hue, 0.8, 1.0);
+          let hue = fract(u.c.w + f32(k) * 0.035 + (1.0 - cosv) * 0.95 + hyz.x * 0.08);
+          let tint = hsv(hue, 0.85, 1.0);
+          let F = mix(vec3f(fres), max(vec3f(fres), tint * (0.25 + 0.75 * fres)), clamp(dich, 0.0, 1.0));
+          // Reflection: the glowing sphere seen in the pane, as a soft core
+          // and a wider halo along the mirrored ray.
+          let toLamp = -dot(h, rdr);
+          let w = h + rdr * toLamp;
+          let dl = length(w);
+          let refl = lampAt(clamp(w.x, -R, R)) * (2.2 * exp(-dl * dl / (R * R) * 2.2) + 0.35 * exp(-dl * 1.4)) * step(0.0, toLamp);
+          // A hot glint where the mirrored ray grazes the lamp's brightest band.
+          let glint = pow(max(0.0, 1.0 - dl / (R * 0.55)), 6.0) * step(0.0, toLamp) * 2.0;
+          col += T * inP * F * (refl + lampMid * glint);
+          // Light from the lamp scattering inside the sheet.
+          let rr = length(hyz);
           let near = exp(-rr * rr / (R * R) * 1.1) * exp(-max(abs(x) - R, 0.0) * 1.5);
-          // Light from the lamp scattering in the sheet, and a sheen at grazing angles.
-          col += T * (lamp * 0.035 + tint * 0.025 * dich) * near * inP;
-          col += T * tint * dich * 0.1 * pow(1.0 - cosv, 3.0) * inP;
-          T *= mix(vec3f(1.0), tint * 0.95, dich * 0.14 * inP);
-          // Bright edges where the pane's cut faces catch the light.
-          let edge = line(m - S, pw * 1.1 + 0.002);
-          // Edges light up most where they pass nearest the lamp.
-          let ey = exp(-pow(length(h.yz) / (S * 1.3), 2.0) * 1.5);
-          let eg = (0.12 + 1.1 * ey) * exp(-max(abs(x) - R * 0.5, 0.0) * 1.4);
-          col += T * edge * (lamp * 1.1 + tint * 0.5 * dich) * eg;
+          col += T * (lamp * 0.05 + tint * 0.03 * dich) * near * inP;
+          T *= mix(vec3f(1.0), (vec3f(1.0) - F) * mix(vec3f(1.0), tint, 0.18 * dich), inP);
+          // Glowing edges: light trapped in the glass escapes at the cut face,
+          // with a white-hot core.
+          let edge = line(m - S, pw * 1.2 + 0.003);
+          let core = line(m - S, pw * 0.6 + 0.0008);
+          let ey = exp(-pow(rr / (S * 1.3), 2.0) * 1.4);
+          let eg = (0.18 + 1.6 * ey) * exp(-max(abs(x) - R * 0.5, 0.0) * 1.3);
+          col += T * (edge * (lamp * 1.3 + tint * 0.6 * dich) + core * vec3f(0.9) * ey) * eg;
+          // The slab shifts the ray on toward what lies behind it.
+          let th = 0.05 * refr;
+          let nR = 1.47; let nG = 1.52; let nB = 1.58;
+          let dR = th * sinv * (1.0 - cosv / sqrt(max(nR * nR - sinv * sinv, 1e-3))) / max(cosv, 0.15);
+          let dG = th * sinv * (1.0 - cosv / sqrt(max(nG * nG - sinv * sinv, 1e-3))) / max(cosv, 0.15);
+          let dB = th * sinv * (1.0 - cosv / sqrt(max(nB * nB - sinv * sinv, 1e-3))) / max(cosv, 0.15);
+          offR -= dyz * dR * inP * 2.0;
+          offG -= dyz * dG * inP * 2.0;
+          offB -= dyz * dB * inP * 2.0;
         }
       }
     }
   }
-  // Halo round the whole lamp, and a dark studio behind.
+  // Studio: a halo round the lamp, a soft wash, and a glossy floor.
   let dd = length(wro - wrd * dot(wro, wrd));
-  let lampMid = (u.colA.rgb + u.colB.rgb) * 0.5;
-  var bg = vec3f(0.012, 0.012, 0.016) + lampMid * u.c.z * (0.28 * exp(-dd * dd * 1.2) + 0.06 * exp(-dd * 0.8));
-  // A glossy floor catching the glow.
+  var bg = vec3f(0.01, 0.01, 0.014) + lampMid * u.c.z * (0.45 * exp(-dd * dd * 1.1) + 0.1 * exp(-dd * 0.7));
   if (wrd.y < 0.0) {
     let tf = (-2.05 - wro.y) / wrd.y;
     let fp = wro + wrd * tf;
     let fd = length(fp.xz);
-    bg += lampMid * u.c.z * 0.25 * exp(-fd * fd * 0.45) * smoothstep(0.0, -0.2, wrd.y);
-    bg += vec3f(0.02) * exp(-fd * 0.3);
+    // A pool of light under the lamp, crossed by caustic stripes the panes
+    // throw: bright lines where light is bent through each sheet.
+    let fo = vec3f(dot(u.r0.xyz, fp), dot(u.r1.xyz, fp), dot(u.r2.xyz, fp));
+    let stripe = pow(abs(cos(fo.x / (2.0 * sp) * 3.14159)), 18.0) * exp(-dot(fo.yz, fo.yz) * 0.35);
+    let pool = exp(-fd * fd * 0.4);
+    var fl = lampMid * u.c.z * (0.3 * pool + 0.5 * stripe * pool);
+    fl += hsv(fract(u.c.w + fo.x * 0.2), 0.8, 1.0) * stripe * pool * dich * 0.25;
+    // The lamp mirrored in the floor, stretched and softened.
+    let mr = vec3f(wrd.x, -wrd.y, wrd.z);
+    let mo = vec3f(fp.x, -4.1 - fp.y, fp.z);
+    let md = length(mo - mr * dot(mo, mr));
+    fl += lampMid * 0.35 * exp(-md * md * 1.3);
+    bg += fl * smoothstep(0.0, -0.15, wrd.y) + vec3f(0.015) * exp(-fd * 0.3);
   }
   col += T * bg;
-  col = 1.0 - exp(-col * 1.25);
-  col = pow(col, vec3f(0.92));
+  // Filmic tone and a touch of bloom around the brightest light.
+  col += lampMid * 0.12 * exp(-dd * dd * 3.0);
+  col = 1.0 - exp(-col * 1.35);
+  col = pow(col, vec3f(0.9));
   let vig = 1.0 - 0.35 * dot(uv - 0.5, uv - 0.5);
   col *= vig;
   col += (hash21(pos.xy + fract(t) * 91.0) - 0.5) * 0.02;
@@ -437,9 +487,10 @@ function readControls() {
   p.discs = 6 + Math.round(+$('discs').value / 100 * 10);
   p.spread = 0.7 + +$('spread').value / 100 * 0.9;
   p.glass = +$('glass').value / 100 * 1.4;
+  p.refract = +$('refract').value / 100 * 2.5;
   p.spin = +$('spin').value / 100 * 0.35;
   p.cycle = +$('cycle').value / 100 * 0.12;
-  for (const id of ['discs', 'spread', 'glass', 'spin', 'cycle']) $(id + 'Val').textContent = $(id).value;
+  for (const id of ['discs', 'spread', 'glass', 'refract', 'spin', 'cycle']) $(id + 'Val').textContent = $(id).value;
   if (!inputHooked) { inputHooked = true; hookInput(); }
 }
 function generate() {
@@ -464,7 +515,7 @@ function uniforms() {
   const m = qmat(q);
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
-    b: [0, 0, dist, p.discs],
+    b: [p.refract, 0, dist, p.discs],
     c: [p.glass, p.spread * (1 + 0.04 * Math.sin(t * 0.6)), 1.0, hue + t * 0.01],
     colA: [...A, 1],
     colB: [...B, 1],
