@@ -443,7 +443,7 @@ const HY = -0.12;
 
   // Coastal scrub along the cliff crown: stippled clumps with dark cores.
   {
-    let side = sign(u.d.z - p.x + 1e-4);
+    let side = clamp(u.d.z / 0.35, -1.0, 1.0);
     let cw = 0.03;
     let ci = floor(p.x / cw);
     for (var o = -1; o <= 1; o++) {

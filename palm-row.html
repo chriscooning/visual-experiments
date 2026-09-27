@@ -377,8 +377,7 @@ const HZ = 0.02;
   let sw = R * 0.42 * (1.0 - 0.45 * clamp(sy / sl, 0.0, 1.0));
   let skirtD = max(abs(v.x) - sw, max(-sy, sy - sl - R * 0.06 * sin(v.x / R * 30.0 + sd)));
   var col = C(22);
-  let sun = sign(u.c.x - v.x * 0.0 - 0.0);
-  col = mix(col, mix(C(22), C(23), 0.5), step(0.0, v.x * sign(u.c.x + 1e-4)) * lt * 0.6);
+  col = mix(col, mix(C(22), C(23), 0.5), step(0.0, v.x * sunSide()) * lt * 0.6);
   col = mix(col, C(24), strokeA(fract(v.x / (R * 0.09) + 0.3 * sin(v.y / R * 5.0)) - 0.5, 0.1, 0.12) * 0.6);
   var alpha = fillA(skirtD, px);
   col = mix(col, C(27), strokeA(skirtD, px * 0.5, px) * alpha);
@@ -434,7 +433,7 @@ const HZ = 0.02;
   let d = abs(across) - w;
   if (d > px * 2.0) { return vec4f(0.0); }
   let lt = light();
-  let side = across / w * sign(u.c.x - p.x + 1e-4) * sign(nrm.x + 1e-4);
+  let side = across / w * sunSide() * sign(nrm.x + 1e-4);
   var col = barkTex(along, across / w, w, smoothstep(-0.2, 0.7, side) * lt, px, C(24) * 0.8, C(24), C(23), s * 7.0 + b.x * 13.0);
   col = mix(col, mix(C(24), C(23), 0.5), post(smoothstep(0.1, 0.8, side) * lt, 2.0) * 0.45);
   // Rings, bowed a little, closer together near the top.
@@ -518,7 +517,7 @@ const HZ = 0.02;
     let mt = mountTop(pFar.x);
     let s = (mountTop(pFar.x + 0.01) - mountTop(pFar.x - 0.01)) / 0.02;
     var mcol = hazeStep(C(7), 0.45, mix(C(2), C(8), 0.4));
-    let lit = clamp(0.5 - s * 3.0 * sign(sun.x - pFar.x + 1e-4), 0.0, 1.0);
+    let lit = clamp(0.5 - s * 3.0 * sunSide(), 0.0, 1.0);
     mcol = mix(mix(mcol, C(7) * 0.85, 0.6), mix(mcol, C(2), 0.35), post(lit, 3.0) * lt);
     // Gullies running down from the crest, fading into the haze below.
     let fold = fract(pFar.x * 9.0 + 2.0 * (vnoise(vec2f(pFar.x * 6.0, u.a.w)) - 0.5) - (pFar.y - mt) * 3.0);
@@ -562,7 +561,7 @@ const HZ = 0.02;
           let v = (pMid - vec2f(cx, cy)) / sc;
           let wall = sdBox(v, vec2f(0.009, 0.006));
           let roof = sdTri(v, vec2f(-0.011, -0.006), vec2f(0.011, -0.006), vec2f(0.003 * sign(h - 0.7), -0.012));
-          let face = select(0.75, 1.0, v.x * sign(sun.x - pMid.x + 1e-4) > 0.0);
+          let face = select(0.75, 1.0, v.x * sunSide() > 0.0);
           hc = mix(hc, C(12) * mix(1.0, face, lt), fillA(wall * sc, px));
           hc = mix(hc, C(13) * mix(1.0, face, lt), fillA(roof * sc, px));
           let win = sdBox(v - vec2f(0.003 * (hash21(id + 4.0) - 0.5) * 2.0, 0.001), vec2f(0.0022, 0.002));
@@ -578,7 +577,7 @@ const HZ = 0.02;
           let rr = 0.006 + 0.004 * th + f32(r) * 0.002;
           let v = pMid - vec2f(cx, cy - rr);
           let td = length(v) - rr * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + th * 9.0));
-          let side = sign(sun.x - cx + 1e-4);
+          let side = sunSide();
           hc = mix(hc, mix(C(11), C(27), 0.5), groundShadow(pMid, vec2f(cx, cy), rr, side, lowSun(), px) * lt * 0.6);
           let tlit = lt * clamp(0.5 - v.y / rr * 0.6 + v.x / rr * 0.35 * side, 0.0, 1.0);
           let tc = stippleBush(pMid, tlit, 0.0022, px, mix(C(14), C(27), 0.45), C(14), C(21), mix(C(21), C(16), 0.5), C(18), th * 11.0);
@@ -683,7 +682,7 @@ const HZ = 0.02;
         let cy = nt + (bb + 1.0 - 0.3 * sin(cx * 7.0 + u.a.w)) * 0.032;
         let v = p - vec2f(cx, cy);
         let sd = max(length(v / vec2f(1.25, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.55);
-        let side = sign(sun.x - cx + 1e-4);
+        let side = sunSide();
         hc = mix(hc, mix(C(15), C(27), 0.6), groundShadow(liftShadow(p, hillZ(p)), vec2f(cx, cy + r * 0.4), r * 1.2, side, lowSun(), px) * (0.3 + 0.4 * lt));
         let blit = (0.15 + 0.85 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
         var bc = stippleBush(p, blit, 0.0028 + r * 0.1, px, mix(C(14), C(27), 0.45), C(14), C(21), C(16), C(18), h * 17.0);
@@ -695,16 +694,16 @@ const HZ = 0.02;
     }
     // Palms' shadows raking across the hill, longer as the sun drops.
     {
-      let side = sign(sun.x - p.x + 1e-4);
+      let side = sunSide();
       let L = 0.05 + 0.3 * lowSun();
       var sh = 0.0;
       let ps = liftShadow(p, hillZ(p));
       for (var i = 0; i < 9; i++) {
         if (i >= i32(u.e.x)) { break; }
         let b = palmBase(i);
-        let e2 = b + vec2f(-sign(sun.x - b.x + 1e-4) * L, 0.012 + L * 0.05);
+        let e2 = b + vec2f(-sunSide() * L, 0.012 + L * 0.05);
         sh = max(sh, softShadowSeg(ps, b, e2, 0.0035, px));
-        sh = max(sh, groundShadow(ps, e2, 0.035, sign(sun.x - b.x + 1e-4), 0.0, px));
+        sh = max(sh, groundShadow(ps, e2, 0.035, sunSide(), 0.0, px));
       }
       hc = mix(hc, mix(C(15), C(27), 0.6), sh * (0.15 + 0.4 * lt));
     }
@@ -845,8 +844,12 @@ const HZ = 0.02;
 // catches the shadow that would fall further from its caster on flat
 // ground, and sits higher on screen than its footprint; so a shadow is
 // looked up at the lifted point and bends over terraces and mounds.
+// The sun is far away, so its light comes from one direction across the
+// whole scene: -1 from the left .. 1 from the right, easing through 0 as it
+// passes overhead or straight ahead (never flipping at a line on screen).
+@diagnostic(off, derivative_uniformity) fn sunSide() -> f32 { return clamp(u.c.x / 0.35, -1.0, 1.0); }
 @diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
-  let side = sign(u.c.x - p.x + 1e-4);
+  let side = sunSide();
   return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
 }
 // A terrace step inside one contour band: a flat tread, then a drop.
@@ -858,9 +861,7 @@ const HZ = 0.02;
 // from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
 // ground line; returns 0 shade .. 1 lit, in three flat steps.
 @diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
-  let side = sign(u.c.x - x + 1e-4);
-  let az = clamp(abs(u.c.x - x) * 1.2, 0.2, 1.0);
-  let v = 0.5 - s * 3.5 * side * az - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  let v = 0.5 - s * 3.5 * sunSide() - depth * 2.5 + 0.35 * (1.0 - lowSun());
   return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;

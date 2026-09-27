@@ -392,7 +392,7 @@ const HZ = 0.02;
 
 // Palm shadows at a ground point: long bands away from the sun.
 @diagnostic(off, derivative_uniformity) fn palmShadeAt(q: vec2f, px: f32) -> f32 {
-  let side = sign(u.c.x + 1e-4);
+  let side = sunSide();
   let L = 0.06 + 0.3 * lowSun();
   var s = 0.0;
   for (var i = 0; i < 9; i++) {
@@ -456,7 +456,7 @@ const HZ = 0.02;
       let oy = hillNear(ox) + 0.01 + 0.03 * hash1(oi * 7.7);
       let rr = 0.008 + 0.005 * oh;
       let v = pMid - vec2f(ox, oy);
-      let side = sign(sun.x - ox + 1e-4);
+      let side = sunSide();
       hc = mix(hc, mix(C(11), C(26), 0.5), groundShadow(pMid, vec2f(ox, oy + rr * 0.8), rr, side, lowSun(), px) * lt * 0.6);
       let olit = (0.12 + 0.88 * lt) * clamp(0.35 - v.y / rr * 0.9 + v.x / rr * 0.3 * side, 0.0, 1.0);
       hc = mix(hc, stippleBush(pMid, olit, 0.0022, px, C(12), C(13), C(14), C(15), C(16), oi), fillA(length(v / vec2f(1.15, 1.0)) - rr, px));
@@ -505,7 +505,7 @@ const HZ = 0.02;
     if (br.x < 1e2 && p.y > br.x - px * 2.0) {
       let c = vec2f(br.y, br.w);
       let v = (p - c) / br.z;
-      let side = sign(sun.x - br.y + 1e-4);
+      let side = sunSide();
       let blit = (0.1 + 0.9 * lt) * clamp(-0.05 - v.y * 0.95 + v.x * 0.4 * side, 0.0, 1.0);
       var bc = stippleBush(p, blit, 0.0026 + fr * 0.0005, px, C(12), C(13), C(14), C(15), C(16), fr * 3.0 + 1.0);
       bc = mix(bc, C(12) * 0.75, smoothstep(-0.3, 0.4, v.y) * 0.8);
@@ -550,7 +550,7 @@ const HZ = 0.02;
         let w = (0.011 - 0.004 * tt) * sc;
         let d = abs(across) - w;
         if (d < px * 2.0) {
-          let side = sign(sun.x - p.x + 1e-4) * sign(nT.x + 1e-4);
+          let side = sunSide() * sign(nT.x + 1e-4);
           var tc = barkTex(along, across / w, w, smoothstep(-0.3, 0.8, across / w * side) * lt, px, C(21), C(22), C(23), f32(i) * 7.0);
           tc = mix(tc, C(21), step(0.7, fract(along / (0.008 * sc) + abs(across / w) * 0.4)) * 0.6);
           // Green crownshaft just under the fronds.
@@ -683,8 +683,12 @@ const HZ = 0.02;
 // catches the shadow that would fall further from its caster on flat
 // ground, and sits higher on screen than its footprint; so a shadow is
 // looked up at the lifted point and bends over terraces and mounds.
+// The sun is far away, so its light comes from one direction across the
+// whole scene: -1 from the left .. 1 from the right, easing through 0 as it
+// passes overhead or straight ahead (never flipping at a line on screen).
+@diagnostic(off, derivative_uniformity) fn sunSide() -> f32 { return clamp(u.c.x / 0.35, -1.0, 1.0); }
 @diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
-  let side = sign(u.c.x - p.x + 1e-4);
+  let side = sunSide();
   return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
 }
 // A terrace step inside one contour band: a flat tread, then a drop.
@@ -696,9 +700,7 @@ const HZ = 0.02;
 // from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
 // ground line; returns 0 shade .. 1 lit, in three flat steps.
 @diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
-  let side = sign(u.c.x - x + 1e-4);
-  let az = clamp(abs(u.c.x - x) * 1.2, 0.2, 1.0);
-  let v = 0.5 - s * 3.5 * side * az - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  let v = 0.5 - s * 3.5 * sunSide() - depth * 2.5 + 0.35 * (1.0 - lowSun());
   return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;

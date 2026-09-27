@@ -429,7 +429,7 @@ const HZ = -0.04;
       if (oy > ridgeBase(ox) - 0.01) { continue; }
       let rad = 0.008 + 0.005 * h;
       let v = pFar - vec2f(ox, oy);
-      let side = sign(sun.x - ox + 1e-4);
+      let side = sunSide();
       gc = mix(gc, mix(C(11), C(31), 0.45), groundShadow(pFar, vec2f(ox, oy + rad * 0.8), rad, side, lowSun(), px) * (0.2 + 0.5 * lt));
       let od = length(v / vec2f(1.15, 1.0)) - rad * (1.0 + 0.15 * (vnoise(v / rad * 2.0 + id) - 0.5));
       let olit = (0.15 + 0.85 * lt) * clamp(0.35 - v.y / rad * 0.9 + v.x / rad * 0.35 * side, 0.0, 1.0);
@@ -454,7 +454,7 @@ const HZ = -0.04;
     let rowF = fract(dy / 0.014);
     let spire = abs(cf) - (0.45 - rowF * 0.45);
     rc = mix(rc, C(13) * 0.78, step(spire, 0.0) * step(0.25, hash1(ci + band * 7.0)) * 0.55);
-    rc = mix(rc, mix(C(12), C(16), 0.3), step(0.0, cf * sign(sun.x - pMid.x)) * step(spire, 0.0) * step(-0.08, spire) * lt * 0.4);
+    rc = mix(rc, mix(C(12), C(16), 0.3), step(0.0, cf * sunSide()) * step(spire, 0.0) * step(-0.08, spire) * lt * 0.4);
     rc = mix(rc, C(13) * 0.85, cloudShade(vec2f(pMid.x, 2.0 + dy * 4.0), t) * 0.5);
     rc = hazeStep(rc, 0.1, hazeC);
     col = mix(col, rc, fillA(rt - pMid.y, px));
@@ -475,7 +475,7 @@ const HZ = -0.04;
   {
     let cd = cypressD(p);
     if (cd < px * 2.0) {
-      let side = sign(sun.x - p.x + 1e-4);
+      let side = sunSide();
       let v = fract(p.x / 0.13 + 0.5) - 0.5;
       let clit = (0.12 + 0.88 * lt) * clamp(0.35 + v * 2.2 * side - (p.y - fieldTop(p.x) + 0.08) * 1.5, 0.0, 1.0);
       let cc = stippleBush(p, clit, 0.003, px, C(14), C(15), C(16), C(17), C(10), 3.3);
@@ -499,7 +499,7 @@ const HZ = -0.04;
     let v = dot(p - b0, vec2f(-e.y, e.x) / L) / w;
     let d = sdSeg(p, b0, b1) - w;
     if (d > px * 2.0) { continue; }
-    let side = sign(sun.x - bx + 1e-4);
+    let side = sunSide();
     let blit = (0.2 + 0.8 * lt) * clamp(0.5 + v * 0.5 * side, 0.0, 1.0);
     var tc = barkTex(along, v, w, blit, px, mix(C(21), C(31), 0.3), C(21), C(22), fi * 3.0);
     let peel = step(0.55, vnoise(vec2f(along * 60.0, fi * 3.0 + floor(v * 1.5))));
@@ -510,7 +510,7 @@ const HZ = -0.04;
   {
     let gd = groveD(p, t);
     if (gd < px * 2.0) {
-      let side = sign(sun.x - p.x + 1e-4);
+      let side = sunSide();
       let n = groveN(p, t);
       let under = smoothstep(-0.28, -0.14, p.y);
       let glit = (0.12 + 0.88 * lt) * clamp(0.45 - n.y * 0.55 + n.x * 0.35 * side - under * 0.5, 0.0, 1.0);
@@ -560,7 +560,7 @@ const HZ = -0.04;
       let cy = ft + (rr + 0.8) * (0.05 + depth * 0.06);
       let r = 0.014 + 0.03 * clamp((cy - ft) / 0.45, 0.0, 1.0) + 0.008 * h;
       let v = p - vec2f(cx, cy);
-      let side = sign(sun.x - cx + 1e-4);
+      let side = sunSide();
       fc = mix(fc, mix(C(24), C(31), 0.55), groundShadow(liftShadow(p, fieldZ(p)), vec2f(cx, cy + r * 0.2), r * 1.1, side, lowSun(), px) * (0.18 + 0.3 * lt));
       let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
       let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
@@ -569,7 +569,7 @@ const HZ = -0.04;
     }
     // Eucalyptus and cypress shadows lying across the field.
     {
-      let side = sign(sun.x + 1e-4);
+      let side = sunSide();
       let L = 0.05 + 0.25 * lowSun();
       let q = liftShadow(p, fieldZ(p)) + drape(p, 0.06, 5.0);
       let gsh = softA(groveD(vec2f(q.x + side * L * 0.6, ft - (q.y - ft) * 2.2 - 0.1), t), 0.02 + dy * 0.2) * smoothstep(0.15, 0.05, dy);
@@ -685,8 +685,12 @@ const HZ = -0.04;
 // catches the shadow that would fall further from its caster on flat
 // ground, and sits higher on screen than its footprint; so a shadow is
 // looked up at the lifted point and bends over terraces and mounds.
+// The sun is far away, so its light comes from one direction across the
+// whole scene: -1 from the left .. 1 from the right, easing through 0 as it
+// passes overhead or straight ahead (never flipping at a line on screen).
+@diagnostic(off, derivative_uniformity) fn sunSide() -> f32 { return clamp(u.c.x / 0.35, -1.0, 1.0); }
 @diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
-  let side = sign(u.c.x - p.x + 1e-4);
+  let side = sunSide();
   return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
 }
 // A terrace step inside one contour band: a flat tread, then a drop.
@@ -698,9 +702,7 @@ const HZ = -0.04;
 // from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
 // ground line; returns 0 shade .. 1 lit, in three flat steps.
 @diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
-  let side = sign(u.c.x - x + 1e-4);
-  let az = clamp(abs(u.c.x - x) * 1.2, 0.2, 1.0);
-  let v = 0.5 - s * 3.5 * side * az - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  let v = 0.5 - s * 3.5 * sunSide() - depth * 2.5 + 0.35 * (1.0 - lowSun());
   return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;
