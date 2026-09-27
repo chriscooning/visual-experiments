@@ -372,6 +372,11 @@ const HZ = -0.04;
   return d;
 }
 
+// Height of the field: long swells running across it.
+@diagnostic(off, derivative_uniformity) fn fieldZ(p: vec2f) -> f32 {
+  let dy = p.y - fieldTop(p.x);
+  return 0.05 * (fbm(vec2f(p.x * 2.5, dy * 6.0) + u.a.w * 1.3) - 0.5) + 0.012 * sin(dy * 40.0 + p.x * 3.0);
+}
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
   let t = u.a.x; let asp = u.a.y; let k = u.b.w;
   let p0 = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
@@ -556,7 +561,7 @@ const HZ = -0.04;
       let r = 0.014 + 0.03 * clamp((cy - ft) / 0.45, 0.0, 1.0) + 0.008 * h;
       let v = p - vec2f(cx, cy);
       let side = sign(sun.x - cx + 1e-4);
-      fc = mix(fc, mix(C(24), C(31), 0.55), groundShadow(p, vec2f(cx, cy + r * 0.2), r * 1.1, side, lowSun(), px) * (0.18 + 0.3 * lt));
+      fc = mix(fc, mix(C(24), C(31), 0.55), groundShadow(liftShadow(p, fieldZ(p)), vec2f(cx, cy + r * 0.2), r * 1.1, side, lowSun(), px) * (0.18 + 0.3 * lt));
       let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
       let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
       fc = mix(fc, stippleBush(p, blit, 0.0028 + r * 0.08, px, C(14), C(15), C(16), C(17), C(25), h * 13.0), fillA(sd, px));
@@ -566,7 +571,7 @@ const HZ = -0.04;
     {
       let side = sign(sun.x + 1e-4);
       let L = 0.05 + 0.25 * lowSun();
-      let q = p + drape(p, 0.06, 5.0);
+      let q = liftShadow(p, fieldZ(p)) + drape(p, 0.06, 5.0);
       let gsh = softA(groveD(vec2f(q.x + side * L * 0.6, ft - (q.y - ft) * 2.2 - 0.1), t), 0.02 + dy * 0.2) * smoothstep(0.15, 0.05, dy);
       let csh = softA(cypressD(vec2f(q.x + side * L * 0.6, ft - (q.y - ft) * 2.2)), 0.015 + dy * 0.2) * smoothstep(0.13, 0.04, dy);
       fc = mix(fc, fc * 0.62, max(gsh, csh) * lt * 0.7);
@@ -676,6 +681,17 @@ const HZ = -0.04;
   let n = fbm(vec2f(q.x * 1.1 - t * 0.012, q.y * 2.6 + u.a.w * 1.3));
   return smoothstep(0.5, 0.64, n) * light() * (1.0 - 0.5 * lowSun());
 }
+// Terrain for cast shadows. A point on ground raised by z (screen units)
+// catches the shadow that would fall further from its caster on flat
+// ground, and sits higher on screen than its footprint; so a shadow is
+// looked up at the lifted point and bends over terraces and mounds.
+@diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
+  let side = sign(u.c.x - p.x + 1e-4);
+  return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
+}
+// A terrace step inside one contour band: a flat tread, then a drop.
+// f is the position within the band 0..1; returns height about zero.
+@diagnostic(off, derivative_uniformity) fn terrace(f: f32) -> f32 { return smoothstep(0.55, 0.97, f) - f + 0.5; }
 // Aerial haze in flat steps: d 0 near .. 1 far.
 @diagnostic(off, derivative_uniformity) fn hazeStep(col: vec3f, d: f32, hz: vec3f) -> vec3f { return mix(col, hz, post(clamp(d, 0.0, 1.0), 4.0) * 0.75); }
 // Light raking across a slope: the terminator sits where the surface turns
