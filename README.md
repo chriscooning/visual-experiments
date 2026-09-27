@@ -8,6 +8,7 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 **Light & Glass · WebGPU**
 
+- **Prism Ring**: rings of tilted dichroic glass tiles on a wall, ray-traced shadows and reflected colour from a circling light; drag to change the angle, pinch or scroll to zoom
 - **Sliced Light**: a glowing sphere built from stacked frosted discs inside dichroic glass panes; grab any point and drag to turn it, grab the rim to spin it, pinch or scroll to zoom, tap to change the light, double-tap to reset
 
 **Studio · WebGPU** (newest first)
