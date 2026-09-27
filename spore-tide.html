@@ -45,24 +45,20 @@
 <body>
 <canvas id="canvas"></canvas>
 <div class="panel" id="panel">
-  <div class="control-group"><label>Palette</label>
-    <select id="palette">
-      <option value="board" selected>Board</option>
-      <option value="tide">Tide</option>
-      <option value="mono">Mono</option>
-    </select>
-  </div>
-  <div class="control-group"><label>Sway <span class="val" id="swayVal">50</span></label><input type="range" id="sway" min="0" max="100" value="50"></div>
-  <div class="control-group"><label>Speckle <span class="val" id="speckleVal">60</span></label><input type="range" id="speckle" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Time <span class="val" id="timeVal">16</span></label><input type="range" id="time" min="0" max="100" value="16"></div>
+  <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Wind <span class="val" id="windVal">40</span></label><input type="range" id="wind" min="0" max="100" value="40"></div>
   <div class="control-group"><label>Mushrooms <span class="val" id="countVal">60</span></label><input type="range" id="count" min="0" max="100" value="60"></div>
-  <div class="control-group"><label>Grain <span class="val" id="grainVal">30</span></label><input type="range" id="grain" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Night glow <span class="val" id="glowVal">70</span></label><input type="range" id="glow" min="0" max="100" value="70"></div>
+  <div class="control-group"><label>Spores <span class="val" id="sporesVal">70</span></label><input type="range" id="spores" min="0" max="100" value="70"></div>
+  <div class="control-group"><label>Grain <span class="val" id="grainVal">25</span></label><input type="range" id="grain" min="0" max="100" value="25"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
     <button class="btn primary" id="generate">Generate</button>
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag to pull the stems · Generate for a new patch · H controls</div>
+<div class="hint-pill" id="hintPill">Drag to pull the caps · Drag Time to move through the day · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -271,256 +267,506 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
   return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
 }
 
-// Spore Tide: after my painted surfboard. Mushrooms with hatched orange caps
-// and dark gilled undersides rest on a red ground; their long dotted stems
-// sway up into a black ink mass that drips and splashes into the cream
-// above, over a sea of short lavender, blue and purple dashes speckled with
-// white dots.
+// Spore Tide: after my painted surfboard, drawn crisp in the manner of
+// Eyvind Earle. Giant mushrooms with hatched orange caps, black spots,
+// gilled undersides and dotted stems stand on a red bluff over a sea of
+// short lavender and blue dashes, with a headland stepping into haze. The
+// day turns slowly: the caps cast long shadows, and after dark they glow
+// from within and loose luminous spores that drift up into the stars.
 struct U {
   a: vec4f,   // time, aspect, px, seed
-  b: vec4f,   // sway, speckle, grain, count
-  c: vec4f,   // touch x, y, strength, zoom
-  cols: array<vec4f, 12>,
-  m: array<vec4f, 12>,    // cap x, cap y, size, tilt
-  n: array<vec4f, 12>,    // top x, top y, phase, face (0 top, 1 gills)
+  b: vec4f,   // wind, gust, grain, zoom
+  c: vec4f,   // sun x, sun y, sun height, dark
+  d: vec4f,   // moon x, moon y, moon height, tilt x
+  e: vec4f,   // count, glow, spores, fog
+  f: vec4f,   // touch x, y, strength, _
+  cols: array<vec4f, 33>,
+  m: array<vec4f, 10>,   // base x, base y, height, cap radius
+  n: array<vec4f, 10>,   // tilt, phase, gill view, hue
 }
 @group(0) @binding(0) var<uniform> u: U;
 
+// 0-6 sky, 7 headland, 8 mist, 9 mist light, 10 sea far, 11 sea near,
+// 12 dash lavender, 13 dash blue, 14 foam, 15 ground red, 16 ground shade,
+// 17 ground light, 18 cap orange, 19 cap hatch, 20 cap shade, 21 gill red,
+// 22 stem cream, 23 stem shade, 24 spot ink, 25 bush dark, 26 bush mid,
+// 27 bush hi, 28 bush hi 2, 29 glow, 30 ink, 31 lamp, 32 pink
 @diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+@diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
+@diagnostic(off, derivative_uniformity) fn light() -> f32 { return smoothstep(-0.04, 0.2, u.c.z); }
+@diagnostic(off, derivative_uniformity) fn lowSun() -> f32 { return 1.0 - smoothstep(0.1, 0.5, u.c.z); }
 
-@diagnostic(off, derivative_uniformity) fn inkTop(x: f32) -> f32 {
-  return -0.2 - 0.12 * exp(-pow((x - 0.15) / 0.25, 2.0)) - 0.08 * exp(-pow((x + 0.45) / 0.2, 2.0))
-       + 0.03 * sin(x * 13.0 + u.a.w) + 0.025 * (fbm(vec2f(x * 9.0, u.a.w)) - 0.5);
-}
-@diagnostic(off, derivative_uniformity) fn seaTop(x: f32) -> f32 { return 0.02 + 0.05 * sin(x * 2.2 + u.a.w) + 0.02 * sin(x * 7.0); }
-@diagnostic(off, derivative_uniformity) fn redTop(x: f32) -> f32 { return 0.14 + 0.06 * sin(x * 1.7 + u.a.w * 1.3) - 0.04 * x; }
+const HZ = -0.04;
+@diagnostic(off, derivative_uniformity) fn groundTop(x: f32) -> f32 { return 0.07 + 0.035 * sin(x * 2.3 + u.a.w) - 0.03 * smoothstep(0.2, 0.9, x) + 0.006 * sin(x * 13.0); }
+@diagnostic(off, derivative_uniformity) fn headTop(x: f32) -> f32 { return HZ + 0.004 - 0.09 * smoothstep(0.25, 0.75, x) + 0.01 * sin(x * 11.0 + u.a.w) - 0.02 * smoothstep(0.8, 1.2, x); }
 
-// Stepped bands in the cream sky and the red ground, Awazu-style.
-@diagnostic(off, derivative_uniformity) fn skyField(q: vec2f) -> f32 { return (q.y + 0.62) * 11.0 + 1.4 * vnoise(q * vec2f(2.0, 4.0) + u.a.w + vec2f(u.a.x * 0.01, 0.0)); }
-@diagnostic(off, derivative_uniformity) fn redField(q: vec2f) -> f32 { return (q.y - redTop(q.x)) * 22.0 + 1.0 * vnoise(q * vec2f(3.0, 7.0) + u.a.w); }
-
-const SUN = vec2f(0.42, -0.4);
-@diagnostic(off, derivative_uniformity) fn stemPoint(i: i32, s: f32) -> vec2f {
+// Stem of mushroom i at s (0 foot .. 1 cap), swaying from the foot.
+@diagnostic(off, derivative_uniformity) fn stemAt(i: i32, s: f32) -> vec2f {
   let m = u.m[i]; let n = u.n[i];
   let t = u.a.x;
-  // Stem leaves the cap at its crown.
-  let base = m.xy + rot2(vec2f(0.0, -0.068 * m.z), m.w);
-  var top = n.xy;
-  // Sway, and lean toward the finger.
-  top.x += u.b.x * 0.03 * sin(t * 0.7 + n.z);
-  top += (u.c.xy - top) * u.c.z * 0.25;
-  let mid = mix(base, top, 0.5) + vec2f(0.06 * sin(n.z * 3.0 + t * 0.4) * u.b.x, 0.0);
-  let a = mix(base, mid, s); let b = mix(mid, top, s);
-  return mix(a, b, s);
+  let w = u.b.x + u.b.y;
+  let foot = m.xy;
+  let lean = n.x * 0.35 + (0.05 * sin(t * 0.7 + n.y) + 0.03 * sin(t * 1.3 + n.y * 2.0)) * w;
+  // Pull toward the finger.
+  let tip0 = foot + vec2f(sin(lean), -cos(lean)) * m.z;
+  let tip = tip0 + (u.f.xy - tip0) * u.f.z * 0.2 * step(0.0, u.f.z);
+  let mid = mix(foot, tip, 0.5) + vec2f(0.03 * sin(n.y * 3.0) * m.z, 0.0);
+  return mix(mix(foot, mid, s), mix(mid, tip, s), s);
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let t = u.a.x; let asp = u.a.y; let k = u.c.w;
+  let t = u.a.x; let asp = u.a.y; let k = u.b.w;
+  let p0 = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
   let px = u.a.z * k;
-  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
-  // Cream sky in stepped bands, a touch of yellow in every other one.
-  let sb = i32(floor(skyField(p)));
-  var col = mix(C(0), C(8), select(0.0, 0.16, (sb % 2) == 0));
-  col = mix(col, INK, bandLines(skyField(p + MISREG), px) * 0.35 * step(p.y, inkTop(p.x)) * step(0.05, length(p - SUN)));
-  // A yellow sun in the cream, ringed.
-  col = mix(col, C(8), fillA(length(p - SUN) - 0.042, px));
-  col = mix(col, C(9), fillA(length(p - SUN + vec2f(0.012, -0.012)) - 0.02, px) * 0.35);
-  col = mix(col, INK, strokeA(length(p - SUN) - 0.042, px * 0.7, px) + rings(p, SUN, 0.042, 0.011, 3.0, px) * 0.6);
+  let tilt = u.d.w;
+  let dark = u.c.w;
+  let lt = light();
+  let sun = u.c.xy;
+  let moon = u.d.xy;
+  let wind = u.b.x + u.b.y;
+  let glowAmt = u.e.y * dark;
+  let pFar = p0 + vec2f(tilt * 0.006, 0.0);
+  let p = p0 + vec2f(tilt * 0.02, 0.0);
+  let hazeC = mix(C(2), C(8), 0.5);
 
-  // Sea of short dashes.
-  let st = seaTop(p.x);
-  if (p.y > inkTop(p.x) - 0.05) {
-    let g = vec2f(p.x / 0.016 + floor(p.y / 0.006) * 0.37 + t * 0.05, p.y / 0.006);
-    let id = floor(g);
-    let h = hash21(id + u.a.w);
-    var dc = C(3);
-    if (h < 0.35) { dc = C(4); } else if (h < 0.55) { dc = C(5); } else if (h < 0.62) { dc = C(6); } else if (h < 0.66) { dc = C(1); }
-    let f = fract(g) - 0.5;
-    let dash = fillA(sdBox(vec2f(f.x * 0.016, f.y * 0.006), vec2f(0.0065 * (0.6 + 0.4 * h), 0.0017)), px);
-    let sea = mix(C(3), dc, dash);
-    col = mix(col, sea, step(inkTop(p.x) - 0.04, p.y));
+  var col = daySky(p0, HZ, px, t, C(31), -0.12);
+  // Gulls by day.
+  for (var i = 0; i < 4; i++) {
+    let fi = f32(i);
+    let bx = fract(0.3 + fi * 0.27 - t * (0.006 + 0.003 * hash1(fi)) * (1.0 + wind)) * 2.0 - 1.0;
+    let by = -0.34 - 0.1 * hash1(fi * 3.0 + u.a.w) + 0.01 * sin(t * 0.7 + fi);
+    col = mix(col, C(30), bird(p0, vec2f(bx, by), 0.014 + 0.006 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), px) * (1.0 - dark) * 0.85);
   }
-  // Ink mass: jagged top, drips rising into the cream, splashes above.
-  let it = inkTop(p.x);
-  let inkBottom = st + 0.03 * sin(p.x * 5.0 + 1.0);
-  var ink = fillA(it - p.y, px) * fillA(p.y - inkBottom, px);
-  // Drips: thin tendrils rising from the ink with a bead on top.
-  for (var j = 0; j < 14; j++) {
-    let fj = f32(j);
-    let dx = -0.78 + fj * 0.12 + 0.05 * (hash1(fj + u.a.w) - 0.5);
-    let len = 0.05 + 0.2 * pow(hash1(fj * 3.1 + u.a.w), 1.5);
-    let grow = 0.85 + 0.15 * sin(t * 0.5 + fj);
-    let b0 = vec2f(dx, inkTop(dx) + 0.01);
-    let b1 = b0 + vec2f(0.02 * sin(fj * 2.0), -len * grow);
-    ink = max(ink, fillA(sdSeg(p, b0, b1) - 0.0022 * (1.0 + 0.5 * hash1(fj)), px));
-    let bead = length((p - b1) / vec2f(1.0, 1.4)) - 0.008 * (0.8 + 0.6 * hash1(fj * 7.0));
-    ink = max(ink, fillA(bead, px));
-    // A pink splash beside a few of them.
-    if (hash1(fj * 5.3 + u.a.w) > 0.55) {
-      let sp = b1 + vec2f(0.025, 0.02);
-      col = mix(col, C(11), fillA(length((p - sp) / vec2f(1.0, 1.6)) - 0.012, px));
+
+  // ---- Sea: perspective rows of short lavender and blue dashes.
+  if (p0.y > HZ) {
+    let d = p0.y - HZ;
+    var sc = mix(C(10), C(11), post(smoothstep(0.0, 0.18, d), 4.0));
+    let rowF = log(d + 0.004) * 34.0;
+    let row = floor(rowF);
+    let rowH = (d + 0.004) / 34.0;
+    let dashL = 0.008 + d * 0.22;
+    let xx = pFar.x / dashL + hash1(row) * 17.0 + t * 0.05 * (0.5 + hash1(row * 3.0));
+    let h = hash21(vec2f(floor(xx), row) + u.a.w);
+    let inDash = smoothstep(0.1, 0.25, fract(xx)) * smoothstep(0.9, 0.75, fract(xx));
+    let line = strokeA((fract(rowF) - 0.5) * rowH, max(px * 0.4, rowH * 0.16), px) * inDash;
+    let dc = select(select(C(12), C(13), h > 0.5), C(14), h > 0.9);
+    sc = mix(sc, dc * mix(0.5, 1.0, lt), line * step(0.3, h) * 0.85);
+    // Glitter under the sun or moon.
+    let src = select(sun, moon, u.c.z < 0.0);
+    let srcUp = select(smoothstep(0.0, 0.1, u.c.z), smoothstep(0.0, 0.1, u.d.z) * 0.8, u.c.z < 0.0);
+    let path = exp(-pow((p0.x - src.x) / (0.01 + d * 0.3), 2.0)) * srcUp;
+    sc = mix(sc, select(C(3), C(31), u.c.z < 0.0), line * path);
+    sc = mix(sc, C(14), strokeA(d, px * 0.5, px) * 0.6);
+    col = sc;
+  }
+  // ---- A headland stepping into haze on the right.
+  {
+    let ht = headTop(pFar.x);
+    if (pFar.y > ht - px * 2.0 && pFar.y < HZ + 0.01) {
+      let s = (headTop(pFar.x + 0.01) - headTop(pFar.x - 0.01)) / 0.02;
+      var hc = mix(C(7) * 0.8, C(7), slopeLight(s, pFar.x, (pFar.y - ht) * 2.0));
+      hc = mix(hc, C(7) * 0.8, step(0.75, fract(pFar.x * 18.0 + (pFar.y - ht) * 12.0)) * 0.35);
+      hc = hazeStep(hc, 0.55, hazeC);
+      col = mix(col, hc, fillA(ht - pFar.y, px) * fillA(pFar.y - HZ - 0.01, px));
+      col = mix(col, C(14), strokeA(pFar.y - HZ - 0.01, px * 0.7, px) * step(ht, pFar.y) * (0.5 + 0.5 * sin(pFar.x * 90.0 + t * 1.5)));
     }
   }
-  col = mix(col, C(2), ink);
-  // Wave crests running through the lower sea.
+  // ---- Mist over the water at dawn and dusk.
   {
-    let rowS = floor((p.y - inkBottom) / 0.012);
-    let wv = scallop(p + vec2f(rowS * 0.007 - t * 0.006, 0.0), inkBottom + rowS * 0.012, 0.012, px);
-    col = mix(col, C(2), wv * 0.55 * step(inkBottom + 0.01, p.y) * step(p.y, redTop(p.x)));
+    let fog = u.e.w;
+    for (var m = 0; m < 3; m++) {
+      let fm = f32(m);
+      let base = HZ + 0.006 + fm * 0.02;
+      let sx = pFar.x + t * 0.006 * (1.0 + fm * 0.4) + fm * 2.3;
+      let top = base - (0.008 + 0.025 * fog) * (0.5 + 0.5 * abs(sin(sx * (7.0 + fm) + fm))) - 0.008 * sin(sx * 2.3);
+      let a = fillA(top - pFar.y, px) * smoothstep(0.05, 0.5, fog) * (0.7 - fm * 0.15);
+      col = mix(col, mix(C(8), C(9), select(0.0, 0.6, m == 0)), a);
+    }
   }
-  // Speckle over the ink and upper sea: white, yellow and blue dots.
-  let sg = p / 0.009;
-  let sid = floor(sg);
-  let sh = hash21(sid + u.a.w * 1.7);
-  let dens = u.b.y * (0.55 * ink + 0.25 * smoothstep(inkBottom + 0.08, inkBottom, p.y) * step(inkBottom, p.y));
-  if (sh < dens) {
-    let f = fract(sg) - 0.5 - (vec2f(hash21(sid + 3.1), hash21(sid + 5.7)) - 0.5) * 0.5;
-    let tw = 0.7 + 0.3 * sin(t * 2.0 + sh * 40.0);
-    let dd = (length(f) - 0.18 * (0.6 + tw * 0.5)) * 0.009;
-    let dcol = select(select(C(6), C(8), sh < dens * 0.25), C(3), sh > dens * 0.8);
-    col = mix(col, dcol, fillA(dd, px));
-  }
-  // Red ground.
-  let rt = redTop(p.x);
-  let rb = i32(floor(redField(p)));
-  let rc = mix(C(7), C(10), select(0.0, 0.25, (rb % 2) == 1));
-  col = mix(col, mix(rc, INK, bandLines(redField(p + MISREG), px) * 0.35), fillA(rt - p.y, px));
-  col = mix(col, INK, strokeA(p.y - rt + MISREG.y, px * 0.8, px));
-  let ht = select(0.06, 0.3, (rb % 2) == 0) * smoothstep(rt, rt + 0.1, p.y);
-  col = mix(col, C(10), halftone(p, 0.0075, ht, px) * step(rt, p.y) * 0.7);
 
-  // Mushrooms: stems first, then caps.
-  let n = i32(u.b.w);
-  for (var i = 0; i < 12; i++) {
+  // ---- Red bluff: raked light, stippled earth, pebbles, bushes along the lip.
+  let gt = groundTop(p.x);
+  let n = i32(u.e.x);
+  if (p.y > gt - px * 2.0) {
+    let dy = p.y - gt;
+    let s = (groundTop(p.x + 0.01) - groundTop(p.x - 0.01)) / 0.02;
+    var gc = mix(C(16), C(15), 0.5 + 0.5 * slopeLight(s, p.x, dy * 0.3));
+    gc = mix(gc, C(17), smoothstep(0.015, 0.0, dy) * lt * 0.7);
+    // Contour bands and hatching down the bluff.
+    let rowV = dy / 0.03 + 0.3 * sin(p.x * 6.0 + u.a.w);
+    gc = mix(gc, mix(gc, C(16), 0.35), step(0.5, fract(floor(rowV) * 0.5)));
+    gc = mix(gc, C(16), strokeA(fract(rowV) * 0.03, px * 0.45, px) * 0.4);
+    gc = mix(gc, C(16) * 0.9, step(0.8, fract(p.x / (0.004 + dy * 0.012) + fract(rowV) * 0.5)) * 0.25);
+    // Pebbles.
+    let pc = 0.02 + dy * 0.05;
+    let pid = floor(p / pc);
+    let ph = hash21(pid + 7.0);
+    if (ph > 0.94) {
+      let pv = fract(p / pc) - 0.5 - (vec2f(hash21(pid + 1.0), hash21(pid + 2.0)) - 0.5) * 0.4;
+      let pd = (length(pv / vec2f(1.0, 0.6)) - 0.18) * pc;
+      gc = mix(gc, mix(C(17), C(22), 0.4) * mix(0.5, 1.0, lt), fillA(pd, px));
+      gc = mix(gc, C(30), strokeA(pd, px * 0.4, px) * 0.5);
+    }
+    // Low scrub mounds scattered over the bluff: dark cores, stippled tops.
+    {
+      let sw = 0.12 + dy * 0.2;
+      let row = floor(dy / 0.07);
+      for (var o = 0; o <= 1; o++) {
+        let rr = row - f32(o);
+        let si = floor(p.x / sw + rr * 0.37);
+        let id = vec2f(si, rr);
+        let h = hash21(id + u.a.w + 50.0);
+        if (h < 0.6) { continue; }
+        let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
+        let cy = groundTop(cx) + (rr + 0.8) * 0.07;
+        let r = 0.014 + 0.025 * clamp((cy - groundTop(cx)) / 0.4, 0.0, 1.0) + 0.006 * h;
+        let v = p - vec2f(cx, cy);
+        let side = sign(sun.x - cx + 1e-4);
+        gc = mix(gc, C(16) * 0.7, groundShadow(p, vec2f(cx, cy + r * 0.2), r * 1.1, side, lowSun(), px) * (0.18 + 0.3 * lt));
+        let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
+        let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
+        gc = mix(gc, stippleBush(p, blit, 0.0028 + r * 0.08, px, C(25), C(26), C(27), C(28), C(18), h * 13.0), fillA(sd, px));
+        gc = mix(gc, C(30), strokeA(sd, px * 0.45, px) * 0.5);
+      }
+    }
+    // Mushroom shadows lying across the ground, longer as the sun drops.
+    {
+      let side = sign(sun.x + 1e-4);
+      let L = 0.4 + 2.2 * lowSun();
+      var sh = 0.0;
+      for (var i = 0; i < 10; i++) {
+        if (i >= n) { break; }
+        let m = u.m[i];
+        let e2 = m.xy + vec2f(-side * m.z * L * 0.45, m.z * 0.08);
+        sh = max(sh, fillA(sdSeg(p, m.xy, e2) - m.w * 0.12, px * 2.0));
+        sh = max(sh, fillA((length((p - e2) / vec2f(1.0, 0.3)) - m.w * 0.9) * 0.3, px * 2.0));
+      }
+      gc = mix(gc, C(16) * 0.7, sh * lt * 0.55);
+    }
+    // Glow pooled under the caps at night.
+    for (var i = 0; i < 10; i++) {
+      if (i >= n) { break; }
+      let m = u.m[i];
+      let q = (p - m.xy) / vec2f(m.w * 2.2, m.w * 0.7);
+      gc += C(29) * glowAmt * 0.35 * exp(-dot(q, q));
+    }
+    col = mix(col, gc, fillA(gt - p.y, px));
+    col = mix(col, C(30), strokeA(p.y - gt, px * 0.6, px) * 0.7);
+    // Coastal scrub along the lip.
+    let cw = 0.05;
+    let ci = floor(p.x / cw);
+    for (var o = -1; o <= 1; o++) {
+      let id = ci + f32(o);
+      let h = hash1(id * 1.9 + u.a.w);
+      if (h < 0.4) { continue; }
+      let cx = (id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * cw;
+      let r = 0.012 + 0.012 * h;
+      let cy = groundTop(cx) + r * 0.3;
+      let v = p - vec2f(cx, cy);
+      let side = sign(sun.x - cx + 1e-4);
+      let sd = max(length(v / vec2f(1.35, 1.0)) - r * (1.0 + 0.14 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.3);
+      let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
+      col = mix(col, stippleBush(p, blit, 0.0026, px, C(25), C(26), C(27), C(28), C(18), h * 17.0), fillA(sd, px));
+      col = mix(col, C(30), strokeA(sd, px * 0.45, px) * 0.5);
+    }
+  }
+
+  // ---- Mushrooms, far to near: dotted stems, then caps.
+  for (var i = 0; i < 10; i++) {
     if (i >= n) { break; }
-    var dmin = 1e3;
-    var sAt = 0.0;
-    var prev = stemPoint(i, 0.0);
-    for (var k2 = 1; k2 <= 10; k2++) {
-      let s = f32(k2) / 10.0;
-      let cur = stemPoint(i, s);
+    let m = u.m[i]; let nn = u.n[i];
+    let R = m.w;
+    // Stem: find the nearest point along the curve.
+    var dmin = 1e3; var sAt = 0.0;
+    var prev = stemAt(i, 0.0);
+    for (var k2 = 1; k2 <= 8; k2++) {
+      let s = f32(k2) / 8.0;
+      let cur = stemAt(i, s);
       let d = sdSeg(p, prev, cur);
       if (d < dmin) { dmin = d; sAt = s; }
       prev = cur;
     }
-    let sz = u.m[i].z;
-    let w = sz * (0.0085 - 0.003 * sAt);
+    let w = R * (0.2 - 0.07 * sAt) * (1.0 + 0.4 * smoothstep(0.15, 0.0, sAt));
     if (dmin < w + px * 2.0) {
-      var sc = C(6);
-      // Dotted outline and a pale sheen down the middle.
-      let edge = smoothstep(w * 0.55, w, dmin);
-      let dotsAlong = step(0.45, fract(sAt * 120.0));
-      sc = mix(sc, C(2), edge * dotsAlong);
-      sc = mix(sc, C(3), smoothstep(w * 0.3, 0.0, dmin) * 0.35);
+      let tip = stemAt(i, 1.0);
+      let side = sign(sun.x - m.x + 1e-4);
+      let across = (p.x - mix(m.x, tip.x, sAt)) / w;
+      var sc = mix(C(23), C(22), post(clamp(0.5 + across * 0.6 * side, 0.0, 1.0) * lt + (1.0 - lt) * 0.2, 2.0));
+      // The painting's dotted outline down each side, and a sheen.
+      let edge = smoothstep(0.6, 0.95, abs(across));
+      sc = mix(sc, C(30), edge * step(0.45, fract(sAt * m.z * 90.0)) * 0.9);
+      sc = mix(sc, C(29), glowAmt * 0.6 * (1.0 - edge));
       col = mix(col, sc, fillA(dmin - w, px));
-      col = mix(col, C(2), strokeA(dmin - w, px * 0.5, px));
+      col = mix(col, C(30), strokeA(dmin - w, px * 0.45, px) * 0.7);
     }
-  }
-  for (var i = 0; i < 12; i++) {
-    if (i >= n) { break; }
-    let m = u.m[i];
-    let bob = 0.004 * sin(t * 0.9 + u.n[i].z);
-    let q = rot2(p - m.xy - vec2f(0.0, bob), -m.w);
-    let R = m.z * 0.1;
-    let face = u.n[i].w;
-    // Cap: a broad dome; underside flat with a rim.
-    let dome = max(length(q / vec2f(1.0, 0.75)) - R, q.y - R * 0.12);
-    var d = dome;
-    var cc = C(9);
-    if (face > 0.5) {
-      // Gill view: the cap tipped up to show a dark red underside with
-      // radial gill lines and a yellow rim.
-      let gillD = length(q / vec2f(1.0, 0.36)) - R;
-      d = min(dome, gillD);
-      let gd = length(q / vec2f(1.0, 0.36));
-      let isGill = gillD < 0.0 && q.y > -R * 0.02;
+    // Cap: a dome over a gilled underside that shows as the cap tips.
+    let tip = stemAt(i, 1.0);
+    let tip2 = stemAt(i, 0.92);
+    let ang = atan2(tip.x - tip2.x, tip2.y - tip.y);
+    let q = rot2(p - tip, -ang);
+    if (dot(q, q) < R * R * 2.2) {
+      let gv = nn.z;
+      let dome = max(length(q / vec2f(1.0, 0.72)) - R, q.y - R * 0.06);
+      let gill = length((q - vec2f(0.0, R * 0.02)) / vec2f(1.0, 0.1 + 0.3 * gv)) - R * 0.98;
+      let capD = min(dome, gill);
+      let isGill = gill < 0.0 && q.y > 0.0;
+      let side = sign(sun.x - tip.x + 1e-4);
+      var cc: vec3f;
       if (isGill) {
-        cc = C(10);
-        let ga = atan2(q.y / 0.45, q.x);
-        cc = mix(cc, C(2), strokeA((fract(ga * 5.0) - 0.5) / 5.0 * gd, px * 0.5, px) * 0.7);
-        cc = mix(cc, C(8), strokeA(gd - R * 0.92, px * 0.8, px));
-        cc = mix(cc, C(1), fillA(length(fract(vec2f(atan2(q.y, q.x) * 6.0, 0.5)) - 0.5) * R * 0.1 - R * 0.02, px) * step(R * 0.88, gd) * 0.0);
+        let ga = atan2(q.y / (0.1 + 0.3 * gv), q.x);
+        let gr = length(q / vec2f(1.0, 0.1 + 0.3 * gv));
+        cc = mix(C(21) * 0.7, C(21), smoothstep(0.2, 0.9, gr / R));
+        cc = mix(cc, C(30), strokeA((fract(ga * 9.0) - 0.5) / 9.0 * gr, px * 0.4, px) * 0.6);
+        cc = mix(cc, C(29), glowAmt * 0.8);
+      } else {
+        let nrm = q / vec2f(R, R * 0.72);
+        let lit = clamp(0.45 + nrm.x * 0.6 * side - nrm.y * 0.3, 0.0, 1.0) * lt;
+        cc = mix(C(20), C(18), post(lit + (1.0 - lt) * 0.2, 3.0));
+        // Yellow hatching following the dome, and black spots.
+        let hv = (q.x * 0.8 + q.y) / (R * 0.1) + nn.y;
+        cc = mix(cc, C(19) * mix(0.5, 1.0, lt), strokeA((fract(hv) - 0.5) * R * 0.1, px * 0.55, px) * smoothstep(-0.2, 0.6, lit + 0.2));
+        for (var j = 0; j < 6; j++) {
+          let fj = f32(j);
+          let sp = vec2f((hash1(fj + f32(i) * 7.0) - 0.5) * 1.4, -0.15 - 0.45 * hash1(fj * 3.0 + f32(i))) * R;
+          cc = mix(cc, C(24), fillA(length(q - sp) - R * (0.06 + 0.06 * hash1(fj * 5.0 + f32(i))), px));
+        }
+        // A glossy rim light and, after dark, the cap glowing from within.
+        cc = mix(cc, mix(C(19), vec3f(1.0), 0.4), strokeA(dome + R * 0.04, R * 0.02, px) * step(q.y, 0.0) * step(0.0, q.x * side) * lt * 0.6);
+        cc = mix(cc, mix(C(29), C(18), 0.35), glowAmt * 0.55 * (1.0 - smoothstep(0.0, 1.0, -nrm.y)));
       }
-      if (!isGill) {
-        cc = C(9);
-        cc = mix(cc, C(8), strokeA((fract((q.x + q.y * 0.4) / (R * 0.12)) - 0.5) * R * 0.12, px * 0.6, px));
-      }
-    } else {
-      // Top view: orange with yellow hatching and black spots.
-      cc = mix(cc, C(8), strokeA((fract((q.x * 0.8 + q.y) / (R * 0.11) + u.n[i].z) - 0.5) * R * 0.11, px * 0.6, px));
-      for (var j = 0; j < 5; j++) {
-        let fj = f32(j);
-        let sp = vec2f((hash1(fj + f32(i) * 7.0) - 0.5) * 1.3, -0.1 - 0.45 * hash1(fj * 3.0 + f32(i))) * R;
-        cc = mix(cc, C(2), fillA(length(q - sp) - R * (0.07 + 0.06 * hash1(fj * 5.0 + f32(i))), px));
-      }
+      col = mix(col, cc, fillA(capD, px));
+      col = mix(col, C(30), strokeA(capD, px * 0.6, px) * 0.9);
+      // Halo round the glowing cap.
+      col += C(29) * glowAmt * 0.25 * exp(-max(capD, 0.0) / (R * 0.35)) * step(0.0, capD);
     }
-    col = mix(col, cc, fillA(d, px));
-    col = mix(col, C(2), strokeA(d, px * 0.9, px));
   }
-  // Spores drifting up off the caps.
-  for (var i = 0; i < 24; i++) {
+
+  // ---- Spores drifting up off the caps; they glow after dark.
+  for (var i = 0; i < 28; i++) {
     let fi = f32(i);
-    let life = fract(t * (0.03 + 0.02 * hash1(fi * 1.3)) + hash1(fi * 7.9));
-    let x0 = (hash1(fi * 3.7 + u.a.w) - 0.5) * 1.6;
-    let sp = vec2f(x0 + 0.03 * sin(t * 0.8 + fi * 2.1) + life * 0.06 * (hash1(fi) - 0.5), 0.35 - life * 0.9);
-    let r = 0.0035 + 0.003 * hash1(fi * 5.1);
-    let a = smoothstep(0.0, 0.1, life) * smoothstep(1.0, 0.8, life);
+    let mi = i % max(n, 1);
+    let src = stemAt(mi, 1.0);
+    let life = fract(t * (0.025 + 0.02 * hash1(fi * 1.3)) + hash1(fi * 7.9));
+    let sp = src + vec2f((hash1(fi * 3.7) - 0.5) * u.m[mi].w * 1.6 + 0.04 * sin(t * 0.8 + fi * 2.1) + life * 0.12 * (hash1(fi) - 0.5) - wind * life * 0.08, -life * 0.5);
+    let r = 0.0028 + 0.0025 * hash1(fi * 5.1);
+    let a = smoothstep(0.0, 0.1, life) * smoothstep(1.0, 0.7, life) * u.e.z;
     let d = length(p - sp) - r;
-    col = mix(col, C(1), fillA(d, px) * a);
-    col = mix(col, C(2), strokeA(d, px * 0.45, px) * a * 0.8);
+    col = mix(col, mix(C(22), C(29), glowAmt), fillA(d, px) * a);
+    col += C(29) * glowAmt * a * 0.5 * exp(-max(d, 0.0) / 0.006);
   }
-  col = layerTex(p, col, px, 0.55, 0.009, 8.0);
-  return vec4f(posterFrame(paperize(col, pos.xy, u.b.z), uv, asp, u.a.z), 1.0);
+  // Painted layers over everything, finer in the distance, faint in the sky.
+  let land = smoothstep(HZ - 0.1, HZ + 0.02, p0.y);
+  col = layerTex(p0, col, px, mix(0.12, 0.9, land), mix(0.006, 0.013, clamp((p0.y + 0.05) * 1.6, 0.0, 1.0)), 8.0);
+  return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
+}
+
+// Shared pieces for the day-cycle scenes. The page defines C(), post(),
+// light(), lowSun() and a uniform u with c = (sun x, y, height, dark) and
+// d = (moon x, y, height, _). Sky colours: C(0) top, C(1) mid, C(2)
+// horizon, C(3) sun, C(4) glow, C(5) cloud lit, C(6) cloud shade.
+@diagnostic(off, derivative_uniformity) fn skyCloud(p: vec2f, k: i32) -> vec2f {
+  let fk = f32(k);
+  let L = 0.16 + 0.18 * hash1(fk + u.a.w);
+  let cy = -1.0 + fk * 0.13;
+  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0016 * (1.0 + fk * 0.2)) * 2.6 - 1.3;
+  let dx = (p.x - cx) / L;
+  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
+  let th = (0.014 + 0.01 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
+  let sc = abs(sin(dx * (6.0 + fk) + fk));
+  let top = cy - th * (1.0 + 0.8 * sc);
+  let bot = cy + th * 0.4;
+  return vec2f(max(top - p.y, p.y - bot), clamp((p.y - top) / (bot - top), 0.0, 1.0));
+}
+// Stepped sky with glow, stars, sun, moon and banded clouds below cloudMax.
+@diagnostic(off, derivative_uniformity) fn daySky(p0: vec2f, hz: f32, px: f32, t: f32, lampC: vec3f, cloudMax: f32) -> vec3f {
+  let sun = u.c.xy; let moon = u.d.xy; let dark = u.c.w;
+  let g = clamp((p0.y - hz) / -1.0, 0.0, 1.0);
+  var col = mix(C(2), C(1), post(smoothstep(0.0, 0.3, g), 5.0));
+  col = mix(col, C(0), post(smoothstep(0.28, 0.9, g), 5.0));
+  let ds = length(p0 - sun);
+  col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+  let sg = p0 / 0.035;
+  let sid = floor(sg);
+  let sh = hash21(sid + 5.3);
+  if (sh > 0.72) {
+    let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+    let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
+    let sa = atan2(sv.y, sv.x);
+    let sdd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+    col = mix(col, lampC, fillA(sdd, px) * dark);
+  }
+  col = mix(col, C(3), fillA(ds - 0.045, px));
+  col = mix(col, C(4), strokeA(ds - 0.058, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
+  let dm = length(p0 - moon);
+  let mc = mix(lampC, vec3f(0.95, 0.94, 0.88), 0.6);
+  col = mix(col, mix(col, lampC, 0.25), post(exp(-dm * 8.0) * dark, 4.0));
+  col = mix(col, mc, fillA(dm - 0.032, px));
+  col = mix(col, mc * 0.82, fillA(length(p0 - moon - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(p0 - moon - vec2f(-0.008, 0.01)) - 0.006, px));
+  for (var i = 0; i < 9; i++) {
+    let cl = skyCloud(p0, i);
+    if (cl.x < px * 2.0 && p0.y < cloudMax) {
+      let under = mix(1.0 - cl.y, cl.y, lowSun());
+      var cc = mix(C(6), C(5), post(under, 3.0));
+      cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
+      cc = mix(cc, C(6) * 0.9, strokeA(fract(p0.x / 0.012 + cl.y * 2.0) - 0.5, 0.05, 0.08) * 0.25);
+      col = mix(col, cc, fillA(cl.x, px));
+      col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
+    }
+  }
+  return col;
+}
+// Cloud shadows sliding over the land: q is a ground position (x across,
+// y into the distance). 0 in sun, up to 1 under a cloud; none after dusk.
+@diagnostic(off, derivative_uniformity) fn cloudShade(q: vec2f, t: f32) -> f32 {
+  let n = fbm(vec2f(q.x * 1.1 - t * 0.012, q.y * 2.6 + u.a.w * 1.3));
+  return smoothstep(0.54, 0.6, n) * light() * (1.0 - 0.5 * lowSun());
+}
+// Aerial haze in flat steps: d 0 near .. 1 far.
+@diagnostic(off, derivative_uniformity) fn hazeStep(col: vec3f, d: f32, hz: vec3f) -> vec3f { return mix(col, hz, post(clamp(d, 0.0, 1.0), 4.0) * 0.75); }
+// Light raking across a slope: the terminator sits where the surface turns
+// from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
+// ground line; returns 0 shade .. 1 lit, in three flat steps.
+@diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
+  let side = sign(u.c.x - x + 1e-4);
+  let az = clamp(abs(u.c.x - x) * 1.2, 0.2, 1.0);
+  let v = 0.5 - s * 3.5 * side * az - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;
 const PIXEL_BUDGET = 4500000;
 
 const NAME = 'spore-tide';
-// cream, white, ink, sea lavender, blue, purple, stem white, red ground, yellow, orange cap, gill red, splash pink
-const PALETTES = {
-  board:  ['#efe8d4', '#f7f5ee', '#0c0a0c', '#9aaee0', '#2f4ab8', '#6a58b8', '#eeeae0', '#e0321f', '#f2c63a', '#e8782a', '#6a1a14', '#f2586a'],
-  tide:   ['#e8f0ec', '#ffffff', '#0a1418', '#7ec8d0', '#1f6a8a', '#3a4a8a', '#eef4f0', '#1f8a7a', '#f2d04a', '#f08a3a', '#3a1a2a', '#ff7a8a'],
-  mono:   ['#ece8e0', '#ffffff', '#0e0e0e', '#b8b8bc', '#5a5a64', '#7a7a84', '#f2f2ee', '#2a2a2e', '#d8d8d0', '#9a9a96', '#3a3a3a', '#c8c8c8'],
+
+// Time of day. tau runs 0..1 round the clock: afternoon at 0, sunset near
+// 0.3, night through the middle, dawn at 0.8. Each piece gives sky colours
+// per key and a land palette that is graded by the light of the moment.
+const DAY_KEYS = [
+  [0.00, 'afternoon', [1, 1, 1], 1.0],
+  [0.18, 'golden hour', [1.08, 0.94, 0.76], 1.12],
+  [0.28, 'sunset', [0.98, 0.7, 0.6], 1.05],
+  [0.35, 'blue hour', [0.46, 0.5, 0.76], 0.72],
+  [0.43, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.73, 'night', [0.2, 0.25, 0.42], 0.5],
+  [0.81, 'dawn', [0.86, 0.72, 0.8], 0.85],
+  [0.9, 'morning', [1.02, 0.98, 0.94], 0.95],
+  [1.0, 'afternoon', [1, 1, 1], 1.0],
+];
+const SKY_ORDER = ['afternoon', 'golden hour', 'sunset', 'blue hour', 'night', 'night', 'dawn', 'morning', 'afternoon'];
+function dayKey(tau) {
+  let i = 0;
+  while (i < DAY_KEYS.length - 2 && tau >= DAY_KEYS[i + 1][0]) i++;
+  const a = DAY_KEYS[i], b = DAY_KEYS[i + 1];
+  let f = (tau - a[0]) / (b[0] - a[0]);
+  f = f * f * (3 - 2 * f);
+  return { i, f, name: f < 0.5 ? a[1] : b[1] };
+}
+const lerp3 = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+// SKIES: name -> list of hex; LAND: list of hex; KEEP: land indexes left ungraded.
+function dayCols(tau, SKIES, LAND, KEEP) {
+  const k = dayKey(tau);
+  const A = DAY_KEYS[k.i], B = DAY_KEYS[k.i + 1];
+  const sa = SKIES[SKY_ORDER[k.i]], sb = SKIES[SKY_ORDER[k.i + 1]];
+  const out = sa.map((h, j) => [...lerp3(hex(h), hex(sb[j]), k.f), 1]);
+  const m = lerp3(A[2], B[2], k.f), sat = A[3] + (B[3] - A[3]) * k.f;
+  LAND.forEach((h, j) => {
+    const c = hex(h);
+    if (KEEP.includes(j)) { out.push([...c, 1]); return; }
+    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    out.push([...c.map((v, q) => Math.max(0, Math.min(1, (l + (v - l) * sat) * m[q]))), 1]);
+  });
+  return out;
+}
+// Sun and moon: position on screen, height above the horizon (-1..1).
+function celestial(tau, hz) {
+  const df = ((tau - 0.8) % 1 + 1) % 1;
+  let elev, sx, sy, mx = 0, my = 2, mElev = -1;
+  if (df < 0.51) { const f = df / 0.51; elev = Math.sin(Math.PI * f); sx = -0.55 + 0.9 * f; }
+  else { const f = (df - 0.51) / 0.49; elev = -Math.sin(Math.PI * f); sx = 0.35; mElev = Math.sin(Math.PI * f); mx = 0.5 - 0.95 * f; my = hz - mElev * 0.46 + 0.04; }
+  sy = hz - elev * 0.55 + 0.02;
+  return { sx, sy, elev, mx, my, mElev };
+}
+
+// sky top, sky mid, horizon, sun, glow, cloud lit, cloud shade, headland, mist, mist light
+const SKIES = {
+  'afternoon':   ['#6a9ee0', '#a8c8ec', '#efe8d4', '#fff6dc', '#fff0c8', '#fffaf0', '#c8c8d8', '#9aa0c0', '#e0e4ee', '#f6f6f8'],
+  'golden hour': ['#7a90d0', '#d8b8c0', '#f8d8aa', '#fff0c0', '#ffd890', '#fff2e0', '#d8a8a8', '#b8a0b8', '#f0e0d8', '#fff4ea'],
+  'sunset':      ['#5a4a98', '#e0709a', '#ffa87a', '#ffe0a0', '#ff9060', '#ffc4a4', '#9a5a80', '#8a6a98', '#e8c0c0', '#ffd8c8'],
+  'blue hour':   ['#1e2458', '#40488a', '#a07ab0', '#f0c0a8', '#9a70a8', '#9080b4', '#484270', '#48467a', '#8a86b0', '#a8a4c8'],
+  'night':       ['#08081e', '#101436', '#1c2450', '#f4f0dc', '#2e3a6a', '#2e3658', '#14162e', '#161a38', '#282e56', '#383e6a'],
+  'dawn':        ['#6a70b0', '#d098c0', '#ffd0b8', '#fff0d0', '#ffc0a8', '#ffe6dc', '#a888ac', '#a08eb0', '#ece0e8', '#fff2f0'],
+  'morning':     ['#7aaee8', '#b4d0ee', '#f2ecdc', '#fff8e4', '#fff4d8', '#fffcf8', '#ccd0dc', '#a4acc8', '#eaeef4', '#fcfcfa'],
 };
+// sea far, sea near, dash lavender, dash blue, foam, ground red, ground shade, ground light,
+// cap orange, cap hatch, cap shade, gill red, stem cream, stem shade, spot ink,
+// bush dark, bush mid, bush hi, bush hi 2, glow, ink, lamp, pink
+const LAND = ['#8a9ad8', '#3a4ab0', '#b8b0e8', '#2a3aa8', '#f4f6ff', '#e0321f', '#8a1a14', '#f07a4a',
+  '#e8782a', '#f2c63a', '#a83a14', '#6a1a14', '#eeeae0', '#b8a898', '#0c0a0c',
+  '#141c24', '#2a3a30', '#7a9a48', '#b8b85a', '#7affd8', '#0c0a0c', '#ffd98a', '#f2586a'];
+const KEEP = [19, 21];
 
 const p = {};
+let tau = 0.1 + Math.random() * 0.12;
+let timeHooked = false;
 function readControls() {
-  p.pal = colsOf($('palette').value);
-  p.sway = +$('sway').value / 100 * 1.6;
-  p.speckle = +$('speckle').value / 100;
-  p.count = 5 + Math.round(+$('count').value / 100 * 7);
+  p.wind = +$('wind').value / 100 * 1.5;
+  p.speed = +$('speed').value / 100;
+  p.count = 4 + Math.round(+$('count').value / 100 * 6);
+  p.glow = +$('glow').value / 100 * 1.4;
+  p.spores = +$('spores').value / 100;
   p.grain = +$('grain').value / 100 * 0.1;
-  for (const id of ['sway', 'speckle', 'count', 'grain']) $(id + 'Val').textContent = $(id).value;
+  for (const id of ['wind', 'speed', 'count', 'glow', 'spores', 'grain']) $(id + 'Val').textContent = $(id).value;
+  if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
   if (shrooms.length) layout();
 }
-let shrooms = [], touch = [0, 0, 0];
+let shrooms = [], seedN = 1 + Math.floor(Math.random() * 1e6), touch = [0, 0, 0];
 function layout() {
   let s = seedN;
   const R = () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
   shrooms = [];
   for (let i = 0; i < p.count; i++) {
-    const x = -0.72 + (i + 0.5) / p.count * 1.44 + (R() - 0.5) * 0.1;
-    const y = 0.22 + R() * 0.24;
-    const size = 0.5 + R() * 0.5 + (y - 0.22) * 1.6;
-    shrooms.push({ m: [x, y, size, (R() - 0.5) * 0.9], n: [x + (R() - 0.5) * 0.35, -0.16 - R() * 0.12, R() * 6.28, R() < 0.45 ? 1 : 0] });
+    const x = -0.72 + (i + 0.5) / p.count * 1.44 + (R() - 0.5) * 0.12;
+    const depth = R();
+    const y = 0.14 + depth * 0.3;
+    const sc = 0.55 + depth * 0.7;
+    shrooms.push({ m: [x, y, (0.15 + R() * 0.14) * sc, (0.075 + R() * 0.04) * sc], n: [(R() - 0.5) * 0.6, R() * 6.28, R() < 0.45 ? 0.6 + R() * 0.4 : R() * 0.2, 0] });
   }
-  // Nearer (lower, bigger) caps draw last.
+  // Nearer (lower) mushrooms draw last.
   shrooms.sort((a, b) => a.m[1] - b.m[1]);
 }
-let seedN = 1;
+let gust = 0, gustGoal = 0, shown = -1;
 function generate() { seedN = 1 + Math.floor(Math.random() * 1e6); layout(); }
+function fogAt(tau) {
+  const bump = (x, a, b, c, d) => x < a || x > d ? 0 : x < b ? (x - a) / (b - a) : x < c ? 1 : 1 - (x - c) / (d - c);
+  return 0.2 + 0.8 * bump(tau, 0.3, 0.42, 0.82, 0.96);
+}
 function uniforms() {
-  const zoom = Math.max(1, 0.62 / aspect);
+  if (!shrooms.length) layout();
+  const zoom = Math.max(1, 1.2 / aspect);
+  const s = celestial(tau, -0.04);
+  const dark = 1 - Math.min(1, Math.max(0, (s.elev + 0.25) / 0.3));
   const m = [], n = [];
-  for (let i = 0; i < 12; i++) { const s = shrooms[i]; m.push(s ? s.m : [0, 0, 0, 0]); n.push(s ? s.n : [0, 0, 0, 0]); }
+  for (let i = 0; i < 10; i++) { const sh = shrooms[i]; m.push(sh ? sh.m : [0, 0, 0, 0]); n.push(sh ? sh.n : [0, 0, 0, 0]); }
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
-    b: [p.sway, p.speckle, p.grain, shrooms.length],
-    c: [touch[0] * zoom, touch[1] * zoom, touch[2], zoom],
-    cols: p.pal, m, n,
+    b: [p.wind, gust, p.grain, zoom],
+    c: [s.sx, s.sy, s.elev, dark],
+    d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
+    e: [shrooms.length, p.glow, p.spores, fogAt(tau)],
+    f: [touch[0] * zoom, touch[1] * zoom, touch[2], 0],
+    cols: dayCols(tau, SKIES, LAND, KEEP),
+    m, n,
   };
 }
-function step(dt) { touch[2] += ((dragging ? 1 : 0) - touch[2]) * (1 - Math.exp(-dt * 4)); }
+function step(dt) {
+  tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
+  gustGoal *= Math.exp(-dt * 1.2);
+  gust += (gustGoal - gust) * (1 - Math.exp(-dt * 5));
+  touch[2] += ((dragging ? 1 : 0) - touch[2]) * (1 - Math.exp(-dt * 4));
+  const v = Math.round(tau * 100);
+  if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(tau).name; }
+}
+// Drag to pull the caps toward your finger.
 function onDown(q) { touch[0] = q[0]; touch[1] = q[1]; }
 function onMove(q) { touch[0] = q[0]; touch[1] = q[1]; }
 function onUp() {}

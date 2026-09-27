@@ -337,10 +337,10 @@ const HY = 0.06;   // horizon
     // Lumps hanging from the underside.
     pad -= step(c.y, q.y) * step(abs(q.x - c.x), r.x * 0.9) * 0.45 * r.y * abs(sin((q.x - c.x) / r.x * 7.0 + sd));
     let inPad = fillA(pad, px);
-    var fc = C(12);
-    // Combed needle lines, following the pad.
-    let comb = fract((q.y - c.y + 0.25 * r.y * sin((q.x - c.x) / r.x * 9.0)) / (r.y * 0.28));
-    fc = mix(fc, C(11), step(0.72, comb) * 0.55);
+    // Near-black underside, stippled light thickening toward the top rim.
+    let side = sign(u.d.z - q.x + 1e-4);
+    let plit = clamp(0.45 - (q.y - c.y) / r.y * 0.55 + (q.x - c.x) / r.x * 0.25 * side, 0.0, 1.0);
+    var fc = stippleBush(q, plit, max(0.0024 * s, px * 2.4), px, mix(C(11), C(12), 0.15), C(12), C(13), mix(C(13), C(12), 0.45), C(10), sd * 3.0 + fk);
     // Sunward rim along the top of each pad.
     fc = mix(fc, C(13), strokeA(pad, px * 0.7, px) * step(q.y, c.y) * 0.8);
     col = mix(col, fc, inPad);
@@ -514,12 +514,24 @@ const HY = 0.06;   // horizon
   let ht = headTop(Xh);
   if (p.y > ht - 0.2) {
     var hc = C(11);
-    // Chaparral clumps catching a little light near the crest.
-    let g = p / 0.011;
-    let cell = floor(g);
-    let hh = hash21(cell + u.a.w);
-    let clump = fillA(length(fract(g) - 0.5 - (vec2f(hash1(hh), hash1(hh * 3.0)) - 0.5) * 0.4) - 0.28 * hh, 1.0 / 0.011 * px);
-    hc = mix(hc, C(12), clump * smoothstep(0.12, 0.0, p.y - ht) * 0.6);
+    // Chaparral: stippled clumps with dark cores and shadows, thinning down the slope.
+    let side = sign(u.d.z - p.x + 1e-4);
+    let cw = 0.026;
+    for (var rr = 0; rr < 4; rr++) {
+      let fr = f32(rr);
+      let ci = floor(p.x / cw + fr * 0.5);
+      let h = hash21(vec2f(ci, fr) + u.a.w);
+      if (h < 0.3 + fr * 0.12) { continue; }
+      let cx = (ci - fr * 0.5 + 0.5 + (hash21(vec2f(ci, fr) + 1.7) - 0.5) * 0.4) * cw;
+      let cy = headTop(cx / (0.5 * asp) + tilt.x * 0.06) + 0.006 + fr * 0.022;
+      let r = 0.009 + 0.006 * h;
+      let v = p - vec2f(cx, cy);
+      let sd = max(length(v / vec2f(1.3, 1.0)) - r * (1.0 + 0.14 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.45);
+      hc = mix(hc, mix(C(11), vec3f(0.0), 0.3), groundShadow(p, vec2f(cx, cy + r * 0.3), r * 1.2, side, 0.8, px) * 0.6);
+      let blit = clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
+      let bc = stippleBush(p, blit, 0.0026, px, mix(C(11), vec3f(0.0), 0.2), C(12), C(13), mix(C(13), C(12), 0.4), C(10), h * 13.0);
+      hc = mix(hc, bc, fillA(sd, px));
+    }
     col = mix(col, hc, fillA(ht - p.y, px));
     col = mix(col, C(13), strokeA(p.y - ht, px * 0.6, px) * 0.4);
   }
@@ -531,6 +543,8 @@ const HY = 0.06;   // horizon
     let cy = cypress(p - bx, tr.y, tr.z, tr.w, px);
     col = mix(col, cy.rgb, cy.a);
   }
+  let land = smoothstep(HY - 0.1, HY + 0.02, p.y);
+  col = layerTex(p, col, px, mix(0.12, 1.0, land), mix(0.006, 0.013, clamp((p.y + 0.05) * 1.6, 0.0, 1.0)), 11.0);
   return vec4f(paperize(col, pos.xy, u.c.w), 1.0);
 }
 `;

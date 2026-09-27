@@ -486,7 +486,7 @@ const HZ = 0.02;
   {
     let mt = mountTop(pFar.x);
     let s = (mountTop(pFar.x + 0.01) - mountTop(pFar.x - 0.01)) / 0.02;
-    var mcol = mix(C(7), C(2), 0.25);
+    var mcol = hazeStep(C(7), 0.45, mix(C(2), C(8), 0.4));
     let lit = clamp(0.5 - s * 3.0 * sign(sun.x - pFar.x + 1e-4), 0.0, 1.0);
     mcol = mix(mix(mcol, C(7) * 0.85, 0.6), mix(mcol, C(2), 0.35), post(lit, 3.0) * lt);
     // Gullies running down from the crest, fading into the haze below.
@@ -513,9 +513,9 @@ const HZ = 0.02;
     if (pMid.y > mt - px * 2.0) {
       let dy = pMid.y - mt;
       let s = (midTop(pMid.x + 0.01) - midTop(pMid.x - 0.01)) / 0.02;
-      let lit = clamp(0.5 - s * 4.0 * sign(sun.x - pMid.x + 1e-4) - dy * 4.0, 0.0, 1.0);
-      var hc = mix(C(11), C(10), post(lit * lt + (1.0 - lt) * 0.2, 3.0));
-      hc = mix(hc, C(8), 0.18);
+      var hc = mix(C(11), C(10), slopeLight(s, pMid.x, dy) + (1.0 - lt) * 0.15);
+      hc = mix(hc, hc * 0.8, cloudShade(vec2f(pMid.x, 2.5 + dy * 3.0), t) * 0.65);
+      hc = hazeStep(hc, 0.25, mix(C(2), C(8), 0.4));
       let comb = fract((dy + 0.004 * sin(pMid.x * 30.0)) / 0.006);
       hc = mix(hc, C(11), step(0.8, comb) * 0.4);
       // Houses: white walls, terracotta roofs, windows lit after dark.
@@ -604,6 +604,9 @@ const HZ = 0.02;
     let cs = 0.0075 * (1.0 + max(band, 0.0) * 0.18);
     var hc = select(C(15), mix(C(15), C(17), 0.5), bi % 2 == 0);
     hc = mix(hc, mix(C(15), C(10), 0.4), smoothstep(0.02, 0.0, dy) * lt);
+    let ns = (nearTop(p.x + 0.01) - nearTop(p.x - 0.01)) / 0.02;
+    hc = mix(hc * 0.8, hc, 0.4 + 0.6 * slopeLight(ns * 2.0, p.x, dy * 0.3));
+    hc = mix(hc, hc * 0.72, cloudShade(vec2f(p.x, 0.8 + dy * 3.0), t) * 0.7);
     let gw = gustWave(p, t) * (0.3 + 0.7 * lt);
     hc = mix(hc, mix(C(17), C(21), 0.5), gw * 0.35);
     let g = vec2f(p.x / cs, (p.y - nt) / cs);
@@ -742,6 +745,79 @@ const HZ = 0.02;
   let land = smoothstep(HZ - 0.12, HZ + 0.02, p0.y);
   col = layerTex(p0, col, px, mix(0.12, 1.0, land), mix(0.006, 0.013, clamp((p0.y + 0.1) * 1.5, 0.0, 1.0)), 3.0);
   return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
+}
+
+// Shared pieces for the day-cycle scenes. The page defines C(), post(),
+// light(), lowSun() and a uniform u with c = (sun x, y, height, dark) and
+// d = (moon x, y, height, _). Sky colours: C(0) top, C(1) mid, C(2)
+// horizon, C(3) sun, C(4) glow, C(5) cloud lit, C(6) cloud shade.
+@diagnostic(off, derivative_uniformity) fn skyCloud(p: vec2f, k: i32) -> vec2f {
+  let fk = f32(k);
+  let L = 0.16 + 0.18 * hash1(fk + u.a.w);
+  let cy = -1.0 + fk * 0.13;
+  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0016 * (1.0 + fk * 0.2)) * 2.6 - 1.3;
+  let dx = (p.x - cx) / L;
+  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
+  let th = (0.014 + 0.01 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
+  let sc = abs(sin(dx * (6.0 + fk) + fk));
+  let top = cy - th * (1.0 + 0.8 * sc);
+  let bot = cy + th * 0.4;
+  return vec2f(max(top - p.y, p.y - bot), clamp((p.y - top) / (bot - top), 0.0, 1.0));
+}
+// Stepped sky with glow, stars, sun, moon and banded clouds below cloudMax.
+@diagnostic(off, derivative_uniformity) fn daySky(p0: vec2f, hz: f32, px: f32, t: f32, lampC: vec3f, cloudMax: f32) -> vec3f {
+  let sun = u.c.xy; let moon = u.d.xy; let dark = u.c.w;
+  let g = clamp((p0.y - hz) / -1.0, 0.0, 1.0);
+  var col = mix(C(2), C(1), post(smoothstep(0.0, 0.3, g), 5.0));
+  col = mix(col, C(0), post(smoothstep(0.28, 0.9, g), 5.0));
+  let ds = length(p0 - sun);
+  col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+  let sg = p0 / 0.035;
+  let sid = floor(sg);
+  let sh = hash21(sid + 5.3);
+  if (sh > 0.72) {
+    let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+    let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
+    let sa = atan2(sv.y, sv.x);
+    let sdd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+    col = mix(col, lampC, fillA(sdd, px) * dark);
+  }
+  col = mix(col, C(3), fillA(ds - 0.045, px));
+  col = mix(col, C(4), strokeA(ds - 0.058, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
+  let dm = length(p0 - moon);
+  let mc = mix(lampC, vec3f(0.95, 0.94, 0.88), 0.6);
+  col = mix(col, mix(col, lampC, 0.25), post(exp(-dm * 8.0) * dark, 4.0));
+  col = mix(col, mc, fillA(dm - 0.032, px));
+  col = mix(col, mc * 0.82, fillA(length(p0 - moon - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(p0 - moon - vec2f(-0.008, 0.01)) - 0.006, px));
+  for (var i = 0; i < 9; i++) {
+    let cl = skyCloud(p0, i);
+    if (cl.x < px * 2.0 && p0.y < cloudMax) {
+      let under = mix(1.0 - cl.y, cl.y, lowSun());
+      var cc = mix(C(6), C(5), post(under, 3.0));
+      cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
+      cc = mix(cc, C(6) * 0.9, strokeA(fract(p0.x / 0.012 + cl.y * 2.0) - 0.5, 0.05, 0.08) * 0.25);
+      col = mix(col, cc, fillA(cl.x, px));
+      col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
+    }
+  }
+  return col;
+}
+// Cloud shadows sliding over the land: q is a ground position (x across,
+// y into the distance). 0 in sun, up to 1 under a cloud; none after dusk.
+@diagnostic(off, derivative_uniformity) fn cloudShade(q: vec2f, t: f32) -> f32 {
+  let n = fbm(vec2f(q.x * 1.1 - t * 0.012, q.y * 2.6 + u.a.w * 1.3));
+  return smoothstep(0.54, 0.6, n) * light() * (1.0 - 0.5 * lowSun());
+}
+// Aerial haze in flat steps: d 0 near .. 1 far.
+@diagnostic(off, derivative_uniformity) fn hazeStep(col: vec3f, d: f32, hz: vec3f) -> vec3f { return mix(col, hz, post(clamp(d, 0.0, 1.0), 4.0) * 0.75); }
+// Light raking across a slope: the terminator sits where the surface turns
+// from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
+// ground line; returns 0 shade .. 1 lit, in three flat steps.
+@diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
+  let side = sign(u.c.x - x + 1e-4);
+  let az = clamp(abs(u.c.x - x) * 1.2, 0.2, 1.0);
+  let v = 0.5 - s * 3.5 * side * az - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;
 const PIXEL_BUDGET = 4500000;
