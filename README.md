@@ -13,18 +13,18 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 **Studio · WebGPU** (newest first)
 
-Animated versions of my own paintings. A brush layer rebuilds each scene from hundreds of painted marks laid along the scene's own stroke directions, with a second pass of fine strokes and pointillist dots.
+Animated versions of my own paintings. A brush layer rebuilds each scene from hundreds of painted marks laid along the scene's own stroke directions, with a second pass of fine strokes and pointillist dots. One light, the sun by day and the moon by night, shades every hill, tree, bush and rock from its own form and throws every shadow the same way; lines are laid down as chains of small dots. Drag the sun (or the moon) across the sky.
 
 - **Poppy Hill**: poppies and lupine under a eucalyptus grove, cypress windbreak, conifer ridge and golden hill; a slow day-to-night cycle
 - **Fern Palms**: feather palms over rows of dark bushes traced with dotted lines, hills in haze, ferns; a slow day-to-night cycle
 - **Spore Tide**: from a painted surfboard; giant mushrooms on a red bluff over a sea of dashes, glowing and shedding spores at night
-- **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, luminous currents flowing through the dark brush
-- **Palm Row**: fan palms on a flower-patterned hill over hillside houses, valley mist and mountains; a slow day-to-night cycle
-- **Windswept**: a wind-bent cypress on a Big Sur bluff with cliff, surf, lighthouse and visible wind; a slow day-to-night cycle
+- **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, luminous currents flowing through the dark brush, lit by a drifting moon you can drag
+- **Palm Row**: fan palms on a flower-patterned hill over hillside houses, valley mist, soft stippled clouds and mountains; a slow day-to-night cycle
+- **Windswept**: a wind-bent cypress on a Big Sur bluff with cliff, surf, lighthouse, dabbed streaks of cloud and visible wind; a slow day-to-night cycle
 
 **Big Sur · WebGPU** (newest first)
 
-The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees drawn leaf by leaf, fog, glitter and a lot of small detail. Drag to move the sun in each.
+The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees drawn leaf by leaf, fog, glitter and a lot of small detail. The sun drifts slowly on its own; drag it anywhere, and the light and shadows on every hill, tree and rock follow.
 
 - **Cove**
   - Striated cliff with a grassy crown, lighthouse and fence
@@ -33,10 +33,10 @@ The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees dra
 
 - **Golden Hills**
   - Sunlit hills with oak groves of dotted canopies
-  - Mackerel sky, sun path, trail, fence, rocks, poppies and lupine, a hawk
+  - Soft stippled clouds, sun path, trail, fence, rocks, poppies and lupine, a hawk
 
 - **Headlands**
-  - Receding ridges with combed gullies and drifting fog
+  - Receding ridges with combed gullies and drifting fog, stratus in dabbed streaks
   - Arch bridge, Highway 1, sea stacks, boats, pelicans
   - Windswept cypresses on the near headland
 

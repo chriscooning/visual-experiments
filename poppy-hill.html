@@ -57,7 +57,7 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag Time to move through the day · Swipe for a gust · H controls</div>
+<div class="hint-pill" id="hintPill">Drag the sun across the sky · Swipe the land for a gust · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -297,6 +297,9 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 // peeling trunks stand over a field thick with poppies and lupine, broken by
 // dark scrub. The day turns slowly: cloud shadows slide over the slopes,
 // mist fills the hollow at dawn and dusk, and the poppies close at night.
+// One light, the sun or the moon, shades every surface from its own form:
+// swells in the field catch it in rolling bands, crowns and trunks turn to
+// it, every shadow falls away from it; lines are laid down in dots.
 struct U {
   a: vec4f,   // time, aspect, px, seed
   b: vec4f,   // wind, gust, grain, zoom
@@ -318,6 +321,7 @@ struct U {
 @diagnostic(off, derivative_uniformity) fn lowSun() -> f32 { return 1.0 - smoothstep(0.1, 0.5, u.c.z); }
 
 const HZ = -0.04;
+const DOT = 0.0011;
 @diagnostic(off, derivative_uniformity) fn goldTop(x: f32) -> f32 { return -0.25 + 0.13 * smoothstep(-0.9, 0.8, x) + 0.02 * sin(x * 4.0 + u.a.w) + 0.004 * sin(x * 19.0); }
 @diagnostic(off, derivative_uniformity) fn ridgeBase(x: f32) -> f32 { return -0.14 + 0.05 * smoothstep(-0.8, 0.2, x) - 0.05 * smoothstep(0.3, 0.9, x) + 0.012 * sin(x * 9.0 + u.a.w) + 0.006 * (vnoise(vec2f(x * 30.0, 1.0)) - 0.5); }
 // The ridge's crest is a row of conifer tips.
@@ -391,8 +395,9 @@ const HZ = -0.04;
   let pMid = p0 + vec2f(tilt * 0.014, 0.0);
   let p = p0 + vec2f(tilt * 0.024, 0.0);
   let hazeC = mix(C(2), C(8), 0.5);
+  dayLight();
 
-  var col = daySky(p0, HZ, px, t, C(32), -0.2);
+  var col = paintSky(p0, HZ, px, t, C(32), -0.2, 1);
   // Birds over the hills by day.
   for (var i = 0; i < 5; i++) {
     let fi = f32(i);
@@ -429,15 +434,14 @@ const HZ = -0.04;
       if (oy > ridgeBase(ox) - 0.01) { continue; }
       let rad = 0.008 + 0.005 * h;
       let v = pFar - vec2f(ox, oy);
-      let side = sunSide();
-      gc = mix(gc, mix(C(11), C(31), 0.45), groundShadow(pFar, vec2f(ox, oy + rad * 0.8), rad, side, lowSun(), px) * (0.2 + 0.5 * lt));
+      gc = mix(gc, mix(C(11), C(31), 0.45), blobShadow(pFar, vec2f(ox, oy), rad, oy + rad * 0.9, px) * 0.7);
       let od = length(v / vec2f(1.15, 1.0)) - rad * (1.0 + 0.15 * (vnoise(v / rad * 2.0 + id) - 0.5));
-      let olit = (0.15 + 0.85 * lt) * clamp(0.35 - v.y / rad * 0.9 + v.x / rad * 0.35 * side, 0.0, 1.0);
-      gc = mix(gc, stippleBush(pFar, olit, 0.0022, px, C(14), C(15), C(16), C(17), C(10), id * 2.9), fillA(od, px));
+      let olit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(rad * 1.15, rad)), 0.4));
+      gc = mix(gc, moonCast(stippleBush(pFar, 0.06 + 0.94 * olit, 0.0022, px, C(14), C(15), C(16), C(17), C(10), id * 2.9), olit), fillA(od, px));
     }
     gc = hazeStep(gc, 0.3, hazeC);
     col = mix(col, gc, fillA(gt - pFar.y, px));
-    col = mix(col, C(31), strokeA(pFar.y - gt, px * 0.5, px) * 0.35);
+    col = mix(col, C(31), dotLine(pFar.y - gt, pFar.x, DOT * 0.8, px, 3.0) * 0.35);
   }
 
   // ---- Violet ridge: conifer crest, stepped folds, gullies.
@@ -454,7 +458,8 @@ const HZ = -0.04;
     let rowF = fract(dy / 0.014);
     let spire = abs(cf) - (0.45 - rowF * 0.45);
     rc = mix(rc, C(13) * 0.78, step(spire, 0.0) * step(0.25, hash1(ci + band * 7.0)) * 0.55);
-    rc = mix(rc, mix(C(12), C(16), 0.3), step(0.0, cf * sunSide()) * step(spire, 0.0) * step(-0.08, spire) * lt * 0.4);
+    let sl = lambert(normalize(vec3f(sign(cf) * 0.9, 0.35, 0.55)), 0.2);
+    rc = mix(rc, mix(C(12), C(16), 0.3), smoothstep(0.35, 0.6, sl) * step(spire, 0.0) * step(-0.08, spire) * 0.45);
     rc = mix(rc, C(13) * 0.85, cloudShade(vec2f(pMid.x, 2.0 + dy * 4.0), t) * 0.5);
     rc = hazeStep(rc, 0.1, hazeC);
     col = mix(col, rc, fillA(rt - pMid.y, px));
@@ -468,19 +473,20 @@ const HZ = -0.04;
     let top = base - (0.01 + 0.03 * fog) * (0.5 + 0.5 * abs(sin(sx * (7.0 + fm) + fm))) - 0.008 * sin(sx * 2.3);
     let a = fillA(top - pMid.y, px) * smoothstep(0.05, 0.5, fog) * (0.65 - fm * 0.12) * (1.0 - smoothstep(0.0, 0.06, pMid.y - base - 0.02));
     col = mix(col, mix(C(8), C(9), select(0.0, 0.6, m == 0)), a);
-    col = mix(col, C(9), strokeA(pMid.y - top, px * 0.5, px) * a * 0.6 * (1.0 - dark * 0.7));
+    col = mix(col, C(9), dotLine(pMid.y - top, pMid.x, DOT * 0.75, px, fm * 3.0 + 1.0) * a * 0.6 * (1.0 - dark * 0.7));
   }
 
   // ---- Cypress windbreak on the left.
   {
     let cd = cypressD(p);
-    if (cd < px * 2.0) {
-      let side = sunSide();
-      let v = fract(p.x / 0.13 + 0.5) - 0.5;
-      let clit = (0.12 + 0.88 * lt) * clamp(0.35 + v * 2.2 * side - (p.y - fieldTop(p.x) + 0.08) * 1.5, 0.0, 1.0);
-      let cc = stippleBush(p, clit, 0.003, px, C(14), C(15), C(16), C(17), C(10), 3.3);
+    if (cd < px * 2.0 + DOT * 2.0) {
+      let v = fract((p.x + 0.78) / 0.13 + 0.5) - 0.5;
+      let up = clamp((fieldTop(p.x) - p.y) / 0.14, 0.0, 1.0);
+      let cn = normalize(vec3f(v * 2.2, up * 0.9 - 0.2, sqrt(max(1.0 - v * v * 4.0, 0.0)) + 0.2));
+      let clit = smoothstep(0.0, 0.6, lambert(cn, 0.35)) * (1.0 - smoothstep(0.3, 0.0, up) * 0.5);
+      let cc = moonCast(stippleBush(p, 0.06 + 0.94 * clit, 0.003, px, C(14), C(15), C(16), C(17), C(10), 3.3), clit);
       col = mix(col, cc, fillA(cd, px));
-      col = mix(col, C(31), strokeA(cd, px * 0.45, px) * 0.5);
+      col = mix(col, C(31), dotLine(cd, p.y + v * 0.1, DOT * 0.8, px, floor((p.x + 0.78) / 0.13 + 0.5)) * 0.5);
     }
   }
 
@@ -498,120 +504,169 @@ const HZ = -0.04;
     let w = 0.0045 - 0.0022 * clamp(along / L, 0.0, 1.0);
     let v = dot(p - b0, vec2f(-e.y, e.x) / L) / w;
     let d = sdSeg(p, b0, b1) - w;
-    if (d > px * 2.0) { continue; }
-    let side = sunSide();
-    let blit = (0.2 + 0.8 * lt) * clamp(0.5 + v * 0.5 * side, 0.0, 1.0);
+    if (d > px * 2.0 + DOT * 2.0) { continue; }
+    let perp = vec2f(-e.y, e.x) / L;
+    let blit = smoothstep(0.0, 0.7, lambert(roundN(perp * v * w, vec2f(w)), 0.35));
     var tc = barkTex(along, v, w, blit, px, mix(C(21), C(31), 0.3), C(21), C(22), fi * 3.0);
     let peel = step(0.55, vnoise(vec2f(along * 60.0, fi * 3.0 + floor(v * 1.5))));
-    tc = mix(tc, mix(C(22), vec3f(0.95, 0.93, 0.88), 0.4) * mix(0.55, 1.0, lt), peel * 0.7);
+    tc = mix(tc, mix(C(22), C(12), 0.2) * mix(0.6, 1.05, blit), peel * 0.7);
+    tc = moonCast(tc, blit);
     col = mix(col, tc, fillA(d, px));
-    col = mix(col, C(31), strokeA(d, px * 0.4, px) * 0.6);
+    col = mix(col, C(31), dotLine(d, along, DOT * 0.7, px, fi * 5.0 + sign(v)) * 0.6);
   }
   {
     let gd = groveD(p, t);
-    if (gd < px * 2.0) {
-      let side = sunSide();
+    if (gd < px * 2.0 + DOT * 2.0) {
       let n = groveN(p, t);
       let under = smoothstep(-0.28, -0.14, p.y);
-      let glit = (0.12 + 0.88 * lt) * clamp(0.45 - n.y * 0.55 + n.x * 0.35 * side - under * 0.5, 0.0, 1.0);
-      var gc = stippleBush(p, glit, 0.0042, px, C(18), C(19), C(20), mix(C(20), C(10), 0.35), C(10), 7.0);
+      let n3 = normalize(vec3f(n.x, -n.y, sqrt(max(1.0 - dot(n, n), 0.0)) + 0.2));
+      let glit = smoothstep(0.0, 0.62, lambert(n3, 0.35)) * (1.0 - under * 0.55);
+      var gc = stippleBush(p, 0.05 + 0.95 * glit, 0.0042, px, C(18), C(19), C(20), mix(C(20), C(10), 0.35), C(10), 7.0);
       gc = mix(gc, C(18) * 0.8, cloudShade(vec2f(p.x, 1.5), t) * 0.4);
+      gc = moonCast(gc, glit);
       col = mix(col, gc, fillA(gd, px));
-      col = mix(col, C(31), strokeA(gd, px * 0.5, px) * 0.55);
+      col = mix(col, C(31), dotLine(gd, p.x + p.y * 0.5, DOT * 0.85, px, 17.0) * 0.55);
     }
   }
 
   // ---- The field: drifts of poppies and lupine over green, scrub mounds,
-  // then big poppies in perspective rows that sway from their stems.
+  // then big poppies in perspective rows that sway from their stems. Its
+  // long swells are real slopes: they catch the light in rolling bands.
   let ft = fieldTop(p.x);
   if (p.y > ft - px * 2.0) {
     let dy = p.y - ft;
     let depth = clamp(dy / 0.45, 0.0, 1.0);
     let drift = vnoise(vec2f(p.x * 5.0, dy * 9.0 / (0.2 + depth)) + u.a.w);
     let pop = u.e.y;
-    var fc = mix(C(24), C(23), 0.55 + 0.45 * lt);
+    let z0 = fieldZ(p);
+    let ez = 0.006;
+    let fn3 = heightN((fieldZ(p + vec2f(ez, 0.0)) - z0) / ez, (fieldZ(p + vec2f(0.0, ez)) - z0) / ez, 1.4);
+    let fl = lambert(normalize(fn3 + vec3f(0.0, 0.0, 0.25)), 0.45);
+    let fls = post(fl * 1.1, 4.0);
+    var fc = mix(C(24), C(23), 0.25 + 0.75 * fls);
     fc = mix(fc, mix(C(25), C(26), 0.4), smoothstep(0.35, 0.55, drift + pop * 0.25) * 0.85);
-    // Fine flower stipple that grows with the foreground.
+    // Fine flower stipple that grows with the foreground, lit with the swell.
     let fcell = mix(0.0045, 0.012, depth);
     for (var L = 0; L < 2; L++) {
-      let fl = f32(L);
-      let g = vec2f(p.x, dy) / fcell + fl * 0.5;
+      let fl2 = f32(L);
+      let g = vec2f(p.x, dy) / fcell + fl2 * 0.5;
       let id = floor(g);
-      let h = hash21(id + fl * 3.1 + u.a.w);
+      let h = hash21(id + fl2 * 3.1 + u.a.w);
       let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3), hash21(id + 2.9)) - 0.5) * 0.5;
       let r = 0.28 + 0.12 * hash21(id + 4.4);
       var dc = select(select(C(25), C(27), h > 0.55), C(26), h > 0.85);
       if (vnoise(vec2f(p.x * 3.0 + 7.0, dy * 5.0)) > 0.68 && h < 0.4) { dc = C(30); }
       let on = step(h, 0.25 + 0.7 * smoothstep(0.3, 0.7, drift + pop * 0.3));
-      fc = mix(fc, mix(dc, dc * 0.55, (1.0 - lt) * 0.8), fillA((length(f) - r) * fcell, px) * on);
+      fc = mix(fc, mix(dc * 0.55, dc, clamp(0.3 + fls * 0.9, 0.0, 1.0)), fillA((length(f) - r) * fcell, px) * on);
     }
-    // Light and cloud shadows moving over the field.
+    // Cloud shadows moving over the field.
     fc = mix(fc, fc * 0.72, cloudShade(vec2f(p.x, 0.6 + dy * 3.0), t) * 0.6);
-    // Scrub mounds: near-black cores, stippled tops, shadows pooled beside them.
-    let sw = 0.1 + depth * 0.12;
-    let row = floor(dy / (0.05 + depth * 0.06));
-    for (var o = 0; o <= 1; o++) {
-      let rr = row - f32(o);
-      let si = floor(p.x / sw + rr * 0.37);
-      let id = vec2f(si, rr);
-      let h = hash21(id + u.a.w + 50.0);
-      if (h < 0.55) { continue; }
-      let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
-      let cy = ft + (rr + 0.8) * (0.05 + depth * 0.06);
-      let r = 0.014 + 0.03 * clamp((cy - ft) / 0.45, 0.0, 1.0) + 0.008 * h;
-      let v = p - vec2f(cx, cy);
-      let side = sunSide();
-      fc = mix(fc, mix(C(24), C(31), 0.55), groundShadow(liftShadow(p, fieldZ(p)), vec2f(cx, cy + r * 0.2), r * 1.1, side, lowSun(), px) * (0.18 + 0.3 * lt));
-      let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
-      let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
-      fc = mix(fc, stippleBush(p, blit, 0.0028 + r * 0.08, px, C(14), C(15), C(16), C(17), C(25), h * 13.0), fillA(sd, px));
-      fc = mix(fc, C(31), strokeA(sd, px * 0.45, px) * 0.5);
-    }
-    // Eucalyptus and cypress shadows lying across the field.
+    // Shadows fall on the swells: look them up where they'd land.
+    let ps = liftS(p, z0);
+    let pq = groundQ(ps, 0.016);
+    // The grove, the windbreak and the eucalyptus trunks throw their
+    // shadows down the field along the light.
     {
-      let side = sunSide();
-      let L = 0.05 + 0.25 * lowSun();
-      let q = liftShadow(p, fieldZ(p)) + drape(p, 0.06, 5.0);
-      let gsh = softA(groveD(vec2f(q.x + side * L * 0.6, ft - (q.y - ft) * 2.2 - 0.1), t), 0.02 + dy * 0.2) * smoothstep(0.15, 0.05, dy);
-      let csh = softA(cypressD(vec2f(q.x + side * L * 0.6, ft - (q.y - ft) * 2.2)), 0.015 + dy * 0.2) * smoothstep(0.13, 0.04, dy);
-      fc = mix(fc, fc * 0.62, max(gsh, csh) * lt * 0.7);
+      let gp = canopyAt(pq, ft + 0.008);
+      var tsh = softA(groveD(gp, t), 0.012 + dy * 0.15) * smoothstep(0.02, -0.03, gp.y - ft) * LI;
+      tsh = max(tsh, softA(cypressD(canopyAt(pq, ft - 0.004)), 0.01 + dy * 0.12) * LI);
+      for (var i = 0; i < 10; i++) {
+        let fi = f32(i);
+        let bx = 0.15 + fi * 0.068 + 0.02 * sin(fi * 3.1);
+        let b0 = vec2f(bx, fieldTop(bx) + 0.008);
+        let b1 = vec2f(bx + 0.03 * sin(fi * 1.7) + wind * 0.006 * sin(t * 0.9 + fi), -0.2 - 0.04 * hash1(fi));
+        tsh = max(tsh, stemShadow(ps, b0, b1, 0.004, px));
+      }
+      fc = mix(fc, fc * 0.6, tsh * 0.75);
     }
+    // Scrub mounds: near-black cores, stippled tops lit round their curve;
+    // gather the shadows of those up the slope and to the sides first.
+    var msh = 0.0;
+    // Rows of mounds spaced wider toward the viewer, on a fixed grid.
+    let rowG = 7.5 * log(1.0 + 2.667 * max(dy, 0.0));
+    for (var o = 0; o <= 2; o++) {
+      let rr = floor(rowG) - f32(o);
+      let rdy = (exp((rr + 0.8) / 7.5) - 1.0) / 2.667;
+      let sw = 0.1 + clamp(rdy / 0.45, 0.0, 1.0) * 0.12;
+      let si0 = floor(p.x / sw + rr * 0.37);
+      for (var co = -1; co <= 1; co++) {
+        let si = si0 + f32(co);
+        let id = vec2f(si, rr);
+        let h = hash21(id + u.a.w + 50.0);
+        if (h < 0.55) { continue; }
+        let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
+        let cy = ft + rdy;
+        let r = 0.014 + 0.03 * clamp(rdy / 0.45, 0.0, 1.0) + 0.008 * h;
+        msh = max(msh, blobShadowQ(pq, ps, vec2f(cx, cy - r * 0.1), r * 1.1, cy + r * 0.5, px));
+      }
+    }
+    fc = mix(fc, mix(C(24), C(31), 0.55), msh * 0.7);
+    for (var o = 1; o >= 0; o--) {
+      let rr = floor(rowG) - f32(o);
+      let rdy = (exp((rr + 0.8) / 7.5) - 1.0) / 2.667;
+      let sw = 0.1 + clamp(rdy / 0.45, 0.0, 1.0) * 0.12;
+      let si0 = floor(p.x / sw + rr * 0.37);
+      for (var co = -1; co <= 1; co++) {
+        let si = si0 + f32(co);
+        let id = vec2f(si, rr);
+        let h = hash21(id + u.a.w + 50.0);
+        if (h < 0.55) { continue; }
+        let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
+        let cy = ft + rdy;
+        let r = 0.014 + 0.03 * clamp(rdy / 0.45, 0.0, 1.0) + 0.008 * h;
+        let v = p - vec2f(cx, cy);
+        if (abs(v.x) > r * 1.8 || abs(v.y) > r * 1.3) { continue; }
+        let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
+        let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * 1.45, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.5, v.y) * 0.6);
+        fc = mix(fc, moonCast(stippleBush(p, 0.05 + 0.95 * blit, 0.0028 + r * 0.08, px, C(14), C(15), C(16), C(17), C(25), h * 13.0), blit), fillA(sd, px));
+        fc = mix(fc, C(31), dotRing(sd, v, r * 1.2, DOT * 0.8, px, h * 29.0) * 0.5);
+      }
+    }
+    fc = moonCast(fc, fl);
     col = mix(col, fc, fillA(ft - p.y, px));
-    col = mix(col, C(31), strokeA(p.y - ft, px * 0.6, px) * 0.6);
-    // Big poppies nearer in: two staggered layers of perspective rows.
-    if (dy > 0.05) {
-      let rowF = log(1.0 + dy / 0.1) / 0.16;
-      for (var L2 = 0; L2 <= 1; L2++) {
-      for (var j = 0; j <= 1; j++) {
-        let rr = floor(rowF - f32(L2) * 0.5) - f32(j) + f32(L2) * 0.5;
-        let y0 = 0.1 * (exp(0.16 * rr) - 1.0);
-        let pc = 0.1 * (exp(0.16 * (rr + 1.0)) - 1.0) - y0;
-        let xo = f32(L2) * 0.5;
-        let id = vec2f(floor(p.x / pc + xo), rr * 2.0 + f32(L2));
-        let h = hash21(id + u.a.w + 21.0);
-        if (h > 0.15 + 0.8 * pop) { continue; }
-        let c = vec2f((id.x - xo + 0.5 + (hash21(id + 1.1) - 0.5) * 0.3) * pc, ft + y0 + pc * (0.2 + 0.4 * hash21(id + 2.2)));
-        if (c.y - ft < 0.06) { continue; }
-        let rad = pc * (0.2 + 0.1 * h);
-        let sway = ((0.14 + 0.1 * h) * sin(t * 1.3 + c.x * 4.0 + h * 5.0) + 0.12 * sin(t * 0.5 - c.x * 2.5)) * wind;
-        let foot = c + vec2f(0.0, pc * 0.95);
-        let v = rot2(p - foot, -sway) + (foot - c);
-        let mid = vec2f(rad * 0.25 * sin(h * 9.0), pc * 0.5);
-        let stem = min(sdSeg(v, vec2f(0.0, rad * 0.4), mid), sdSeg(v, mid, vec2f(0.0, pc * 0.95))) - rad * 0.07;
-        col = mix(col, C(29) * mix(0.5, 1.0, lt), fillA(stem, px));
-        // Cups open by day and close into a bud at night.
-        let open = 0.35 + 0.65 * lt;
-        let q2 = v / vec2f(1.0 * mix(0.6, 1.0, open), 0.85);
-        let rim = -rad * 0.3 * open + rad * 0.12 * abs(sin(v.x / rad * 4.7 + h * 3.0));
-        let cup = max(length(q2) - rad, rim - v.y);
-        let pcol = select(C(25), C(27), h > 0.75 * pop + 0.1);
-        col = mix(col, pcol * mix(0.45, 1.0, lt), fillA(cup, px));
-        col = mix(col, C(26) * mix(0.45, 1.0, lt), (strokeA(v.x - rad * 0.35 * sin(h * 7.0), px * 0.4, px) + strokeA(v.x + rad * 0.45, px * 0.4, px)) * fillA(cup + px, px) * 0.6);
-        col = mix(col, C(26), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.35)) - rad * 0.55 * open, px) * fillA(cup, px) * 0.8);
-        col = mix(col, C(28), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.5)) - rad * 0.2 * open, px) * fillA(cup, px));
-        col = mix(col, C(31), strokeA(cup, px * 0.55, px) * 0.9);
-      }
-      }
+  }
+  col = mix(col, C(31), dotLine(p.y - ft, p.x, DOT, px, 6.0) * 0.6);
+  // Big poppies nearer in: two staggered layers of perspective rows. Each
+  // cup is a bowl lit round its curve; stems sway from their feet.
+  if (p.y - ft > 0.05) {
+    let dy = p.y - ft;
+    let pop = u.e.y;
+    let rowF = log(1.0 + dy / 0.1) / 0.16;
+    for (var L2 = 0; L2 <= 1; L2++) {
+    for (var j = 0; j <= 1; j++) {
+      let rr = floor(rowF - f32(L2) * 0.5) - f32(j) + f32(L2) * 0.5;
+      let y0 = 0.1 * (exp(0.16 * rr) - 1.0);
+      let pc = 0.1 * (exp(0.16 * (rr + 1.0)) - 1.0) - y0;
+      let xo = f32(L2) * 0.5;
+      let id = vec2f(floor(p.x / pc + xo), rr * 2.0 + f32(L2));
+      let h = hash21(id + u.a.w + 21.0);
+      if (h > 0.15 + 0.8 * pop) { continue; }
+      let c = vec2f((id.x - xo + 0.5 + (hash21(id + 1.1) - 0.5) * 0.3) * pc, ft + y0 + pc * (0.2 + 0.4 * hash21(id + 2.2)));
+      if (c.y - ft < 0.06) { continue; }
+      let rad = pc * (0.2 + 0.1 * h);
+      let sway = ((0.14 + 0.1 * h) * sin(t * 1.3 + c.x * 4.0 + h * 5.0) + 0.12 * sin(t * 0.5 - c.x * 2.5)) * wind;
+      let foot = c + vec2f(0.0, pc * 0.95);
+      let v = rot2(p - foot, -sway) + (foot - c);
+      let mid = vec2f(rad * 0.25 * sin(h * 9.0), pc * 0.5);
+      let stem = min(sdSeg(v, vec2f(0.0, rad * 0.4), mid), sdSeg(v, mid, vec2f(0.0, pc * 0.95))) - rad * 0.07;
+      let stl = lambert(roundN(vec2f(v.x - mid.x * smoothstep(rad * 0.4, pc * 0.5, v.y), 0.0), vec2f(rad * 0.07, 1.0)), 0.4);
+      col = mix(col, mix(C(29) * 0.55, C(29), stl * 1.2), fillA(stem, px));
+      // Cups open by day and close into a bud at night.
+      let open = 0.35 + 0.65 * lt;
+      let q2 = v / vec2f(1.0 * mix(0.6, 1.0, open), 0.85);
+      let rim = -rad * 0.3 * open + rad * 0.12 * abs(sin(v.x / rad * 4.7 + h * 3.0));
+      let cup = max(length(q2) - rad, rim - v.y);
+      // Petals are thin: lit from their curve, and glowing through when the
+      // light is behind them.
+      let cl = clamp(lambert(roundN(v, vec2f(rad * mix(0.6, 1.0, open), rad * 0.85)), 0.35) + 0.55 * LI * max(-LD.z, 0.0) * (1.0 - LMOON), 0.0, 1.0);
+      let pcol = select(C(25), C(27), h > 0.75 * pop + 0.1);
+      col = mix(col, moonCast(mix(pcol * 0.55, pcol * 1.05, post(cl * 1.15, 3.0)), cl), fillA(cup, px));
+      let petal = max(dotLine(v.x - rad * 0.35 * sin(h * 7.0), v.y, DOT * 0.55, px, h * 11.0), dotLine(v.x + rad * 0.45, v.y, DOT * 0.55, px, h * 13.0));
+      col = mix(col, C(26) * mix(0.55, 1.0, cl), petal * fillA(cup + px, px) * 0.6);
+      col = mix(col, C(26), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.35)) - rad * 0.55 * open, px) * fillA(cup, px) * 0.8);
+      col = mix(col, C(28), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.5)) - rad * 0.2 * open, px) * fillA(cup, px));
+      col = mix(col, C(31), dotRing(cup, v, rad, DOT * 0.8, px, h * 37.0) * 0.9);
+    }
     }
   }
   // Painted layers over everything, finer in the distance, faint in the sky.
@@ -620,58 +675,415 @@ const HZ = -0.04;
   return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 
-// Shared pieces for the day-cycle scenes. The page defines C(), post(),
-// light(), lowSun() and a uniform u with c = (sun x, y, height, dark) and
-// d = (moon x, y, height, _). Sky colours: C(0) top, C(1) mid, C(2)
-// horizon, C(3) sun, C(4) glow, C(5) cloud lit, C(6) cloud shade.
-@diagnostic(off, derivative_uniformity) fn skyCloud(p: vec2f, k: i32) -> vec2f {
-  let fk = f32(k);
-  let L = 0.16 + 0.18 * hash1(fk + u.a.w);
-  let cy = -1.0 + fk * 0.13;
-  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0016 * (1.0 + fk * 0.2)) * 2.6 - 1.3;
-  let dx = (p.x - cx) / L;
-  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
-  let th = (0.014 + 0.01 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
-  let sc = abs(sin(dx * (6.0 + fk) + fk));
-  let top = cy - th * (1.0 + 0.8 * sc);
-  let bot = cy + th * 0.4;
-  return vec2f(max(top - p.y, p.y - bot), clamp((p.y - top) / (bot - top), 0.0, 1.0));
+// ---- One light for the whole painting ----
+// The sun by day or the moon by night, far off in the sky. setLight() fixes
+// it once per pixel; after that every surface is shaded from its own 3D
+// normal and every shadow is thrown the same way, so light slides over the
+// whole scene together as the source moves. Axes: x right, y up, z toward
+// the viewer (screen y runs down). A source ahead in the sky lights from
+// behind, so crests and rims catch it and faces turned to us go into shade.
+var<private> LD: vec3f;     // unit vector toward the light
+var<private> LI: f32;       // strength: 1 full sun, about 0.5 moon, 0 in twilight
+var<private> LMOON: f32;    // 0 sunlight .. 1 moonlight
+var<private> LSRC: vec2f;   // where the source sits on screen
+
+// bearing: heading of the source in radians, 0 dead ahead, + to the right;
+// height: its angle above the horizon.
+@diagnostic(off, derivative_uniformity) fn setLight(src: vec2f, bearing: f32, height: f32, strength: f32, moon: f32) {
+  let az = clamp(bearing, -1.35, 1.35);
+  let el = clamp(height, 0.2, 1.25);
+  LD = normalize(vec3f(sin(az) * cos(el), sin(el), -cos(az) * cos(el) * 0.8));
+  LI = strength; LMOON = moon; LSRC = src;
 }
-// Stepped sky with glow, stars, sun, moon and banded clouds below cloudMax.
-@diagnostic(off, derivative_uniformity) fn daySky(p0: vec2f, hz: f32, px: f32, t: f32, lampC: vec3f, cloudMax: f32) -> vec3f {
+// Or give the direction straight, for a piece that sets its own.
+@diagnostic(off, derivative_uniformity) fn setLightDir(src: vec2f, dir: vec3f, strength: f32, moon: f32) {
+  LD = normalize(dir); LI = strength; LMOON = moon; LSRC = src;
+}
+// Wrapped Lambert: the share of light a surface with unit normal n gets,
+// easing round the terminator, scaled by the light's strength.
+@diagnostic(off, derivative_uniformity) fn lambert(n: vec3f, wrap: f32) -> f32 { return clamp((dot(n, LD) + wrap) / (1.0 + wrap), 0.0, 1.0) * LI; }
+// Ground: s is the slope of the surface line on screen (dy/dx, y down), so
+// land falling away to the right (s > 0) turns right; face tips it toward
+// the viewer (0 level .. 1 a bank facing us).
+@diagnostic(off, derivative_uniformity) fn groundN(s: f32, face: f32) -> vec3f { return normalize(vec3f(s, 1.0, face)); }
+// Round forms and tubes: v is the offset from the centre (or from the axis
+// of a trunk or stem) on screen, r the radius on each axis.
+@diagnostic(off, derivative_uniformity) fn roundN(v: vec2f, r: vec2f) -> vec3f {
+  let q = v / r;
+  let z = sqrt(max(1.0 - dot(q, q), 0.0));
+  return normalize(vec3f(q.x, -q.y, z + 0.2));
+}
+// Ground from a height field: hx, hy are its slopes across and toward the
+// viewer (screen units), k how strongly they tip the surface.
+@diagnostic(off, derivative_uniformity) fn heightN(hx: f32, hy: f32, k: f32) -> vec3f { return normalize(vec3f(-hx * k, 1.0, -hy * k)); }
+// Moonlit faces take a cool silver cast.
+@diagnostic(off, derivative_uniformity) fn moonCast(col: vec3f, lit: f32) -> vec3f {
+  return mix(col, col * vec3f(0.85, 1.0, 1.3) + vec3f(0.05, 0.075, 0.13), clamp(LMOON * lit * 1.7, 0.0, 1.0));
+}
+
+// ---- Shadows. FORE squashes ground depth onto the screen.
+const FORE = 0.45;
+// Where a shadow lands on level ground per unit of height (x across, y
+// toward the viewer): long when the light is low, capped to stay in frame.
+@diagnostic(off, derivative_uniformity) fn castG() -> vec2f {
+  let c = vec2f(-LD.x, -LD.z) / max(LD.y, 0.05);
+  return c * min(1.0, 3.2 / max(length(c), 1e-4));
+}
+// Screen offset of the shadow of a point h above the ground.
+@diagnostic(off, derivative_uniformity) fn castS(h: f32) -> vec2f { let c = castG(); return vec2f(c.x, c.y * FORE) * h; }
+// Where the shadow of screen point q falls, with level ground at gy below it.
+@diagnostic(off, derivative_uniformity) fn shadowAt(q: vec2f, gy: f32) -> vec2f { return vec2f(q.x, gy) + castS(max(gy - q.y, 0.0)); }
+// A point on raised ground (z above the reference level, on screen) catches
+// the shadow that would fall further from its caster on level ground; look
+// the shadow up there and it bends over terraces, mounds and domes.
+@diagnostic(off, derivative_uniformity) fn liftS(p: vec2f, z: f32) -> vec2f { return p + vec2f(0.0, z) + castS(z); }
+// Shadow of a round mass (bush, canopy, boulder) of radius r centred at c,
+// ground at gy beneath it: an ellipse thrown along the light, paler and
+// softer toward its tip, plus the dark pool of contact where it sits on the
+// ground. q is the lookup point already draped over the ground's small
+// bumps (groundQ), p the pixel itself. Coverage 0..1.
+@diagnostic(off, derivative_uniformity) fn groundQ(p: vec2f, scale: f32) -> vec2f { return p + drape(p, scale, 3.7); }
+@diagnostic(off, derivative_uniformity) fn blobShadowQ(q: vec2f, p: vec2f, c: vec2f, r: f32, gy: f32, px: f32) -> f32 {
+  let h = max(gy - c.y, 0.0);
+  let cg = castG();
+  let L = length(cg);
+  let dir = select(vec2f(0.0, 1.0), cg / max(L, 1e-4), L > 1e-3);
+  let g = vec2f(q.x - c.x, (q.y - gy) / FORE) - cg * h;
+  let a = vec2f(dot(g, dir), dot(g, vec2f(-dir.y, dir.x)));
+  let st = sqrt(1.0 + L * L);
+  let d = (length(a / vec2f(r * st, r)) - 1.0) * r;
+  let tipF = clamp(a.x / (r * st), -1.0, 1.0) * 0.5 + 0.5;
+  let pen = max(px, r * (0.1 + 0.04 * L * h / r + 0.25 * tipF));
+  let thrown = softA(d, pen) * (1.0 - 0.4 * tipF) * LI;
+  let cq = vec2f(p.x - c.x, p.y - gy) / vec2f(r, r * 0.3);
+  let contact = exp(-dot(cq, cq)) * (1.0 - smoothstep(r * 1.2, r * 3.0, h)) * (0.45 + 0.35 * LI);
+  return clamp(max(thrown, contact), 0.0, 1.0);
+}
+@diagnostic(off, derivative_uniformity) fn blobShadow(p: vec2f, c: vec2f, r: f32, gy: f32, px: f32) -> f32 {
+  return blobShadowQ(p + drape(p, r * 0.9, c.x * 17.0 + gy * 5.0), p, c, r, gy, px);
+}
+// The point up in a canopy whose shadow lands on ground point q, where the
+// canopy stands on ground at gy: test that point against the canopy's shape
+// to throw a whole grove's shadow along the light.
+@diagnostic(off, derivative_uniformity) fn canopyAt(q: vec2f, gy: f32) -> vec2f {
+  let cg = castG();
+  let hh = max((q.y - gy) / max(cg.y * FORE, 0.03), 0.0);
+  return vec2f(q.x - cg.x * hh, gy - hh);
+}
+// Shadow of an upright from its foot a (on the ground) to its top b: a
+// strip thrown along the light, widening and blurring toward its tip.
+@diagnostic(off, derivative_uniformity) fn stemShadow(p: vec2f, a: vec2f, b: vec2f, w: f32, px: f32) -> f32 {
+  let e = shadowAt(b, a.y);
+  let ba = e - a + vec2f(1e-5, 1e-5);
+  let h0 = clamp(dot(p - a, ba) / dot(ba, ba), 0.0, 1.0);
+  let q = p + drape(p, length(ba) * 0.35 + w, a.x * 11.0) * (0.2 + h0);
+  let hq = clamp(dot(q - a, ba) / dot(ba, ba), 0.0, 1.0);
+  let d = length(q - a - ba * hq) - w * (1.0 + 1.2 * hq);
+  return softA(d, max(px, w * (0.5 + 3.0 * hq))) * (1.0 - 0.5 * hq) * LI;
+}
+
+// Lay colour c at coverage a over a premultiplied layer (rgb * alpha, alpha),
+// so a figure built from fills and dotted outlines composites cleanly.
+@diagnostic(off, derivative_uniformity) fn over(acc: vec4f, c: vec3f, a: f32) -> vec4f { return vec4f(acc.rgb * (1.0 - a) + c * a, acc.a * (1.0 - a) + a); }
+@diagnostic(off, derivative_uniformity) fn unpremul(acc: vec4f) -> vec4f { return vec4f(acc.rgb / max(acc.a, 1e-4), acc.a); }
+// Signed distance to an ellipse of radii r (a close approximation).
+@diagnostic(off, derivative_uniformity) fn ellD(v: vec2f, r: vec2f) -> f32 {
+  let k0 = length(v / r);
+  let k1 = length(v / (r * r));
+  return k0 * (k0 - 1.0) / max(k1, 1e-6);
+}
+// Offset from segment a-b to q, and the distance to a tube of radius r
+// round it: (distance, offset x, offset y).
+@diagnostic(off, derivative_uniformity) fn tube(q: vec2f, a: vec2f, b: vec2f, r: f32) -> vec3f {
+  let ba = b - a;
+  let h = clamp(dot(q - a, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  let off = q - a - ba * h;
+  return vec3f(length(off) - r, off);
+}
+
+// ---- Lines as the paintings make them: chains of small dots.
+// d: signed distance across the line; g: position along it in dot spacings;
+// sp: that spacing; w: dot radius; per: dots round a closed loop (0 if open).
+// Dots sit a little over a diameter apart with slight scatter; in some
+// stretches they swell and double up so the line gains punch, and now and
+// then one strays just off it.
+@diagnostic(off, derivative_uniformity) fn dotChain(d: f32, g: f32, sp: f32, w: f32, px: f32, seed: f32, per: f32) -> f32 {
+  if (abs(d) > w * 5.0 + px * 2.0) { return 0.0; }
+  let heavy = smoothstep(0.5, 0.8, vnoise(vec2f(g * 0.11 + seed * 3.7, seed * 1.3)));
+  let i0 = floor(g);
+  var a = 0.0;
+  for (var j = -1; j <= 1; j++) {
+    let fid = i0 + f32(j);
+    var id = fid;
+    if (per > 0.0) { id = fid - per * floor(fid / per); }
+    let h1 = hash1(id * 1.731 + seed);
+    let h2 = hash1(id * 2.917 + seed * 1.37 + 5.1);
+    let r = w * (0.72 + 0.36 * h2 + 0.45 * heavy);
+    let off = (h1 - 0.5) * w * (0.45 + 1.1 * heavy);
+    let c = vec2f((fid + 0.5 + (h2 - 0.5) * 0.3 - g) * sp, off - d);
+    a = max(a, fillA(length(c) - r, px));
+    // The heavier stretches take a second dot beside the first.
+    if (heavy > 0.2 && h1 > 0.3) {
+      let c2 = vec2f((fid + (h1 - 0.5) * 0.5 - g) * sp, -off * 0.6 + select(-1.0, 1.0, h2 > 0.5) * w * 1.35 - d);
+      a = max(a, fillA(length(c2) - r * 0.78, px) * smoothstep(0.2, 0.55, heavy));
+    }
+    if (hash1(id * 4.13 + seed) > 0.92) {
+      let c3 = vec2f((fid + h2 - g) * sp, (h1 - 0.5) * w * 7.0 - d);
+      a = max(a, fillA(length(c3) - w * 0.55, px));
+    }
+  }
+  return a;
+}
+// An open line: d across it, s the distance along it.
+@diagnostic(off, derivative_uniformity) fn dotLine(d: f32, s: f32, w0: f32, px: f32, seed: f32) -> f32 {
+  let w = max(w0, px * 0.8);
+  let sp = w * 2.3;
+  return dotChain(d, s / sp, sp, w, px, seed, 0.0);
+}
+// A closed outline round a centre: v is the offset from it, R its mean radius.
+@diagnostic(off, derivative_uniformity) fn dotRing(d: f32, v: vec2f, R: f32, w0: f32, px: f32, seed: f32) -> f32 {
+  let w = max(w0, px * 0.8);
+  let N = max(round(6.2832 * R / (w * 2.3)), 5.0);
+  let g = (atan2(v.y, v.x) / 6.2832 + 0.5) * N;
+  return dotChain(d, g, 6.2832 * R / N, w, px, seed, N);
+}
+
+// ---- Halos: stepped bands whose edges wander, differ band to band and
+// drift, so the rings round a sun or moon breathe instead of sitting round.
+@diagnostic(off, derivative_uniformity) fn haloR(v: vec2f, t: f32, seed: f32) -> f32 {
+  let r = length(v);
+  let dir = v / max(r, 1e-4);
+  let n1 = vnoise(dir * 1.4 + vec2f(r * 7.0 + t * 0.05, seed));
+  let n2 = vnoise(dir * 2.9 + vec2f(seed * 1.7 - t * 0.07, r * 15.0));
+  return r * (1.0 + 0.3 * (n1 - 0.5) + 0.12 * (n2 - 0.5));
+}
+
+// ---- Painted clouds, three ways. Each composites over base and returns
+// the new colour. sun: the light's place on screen; low: 1 when it's near
+// the horizon; y0..y1 the band the clouds sit in; amt 0..1 how much cloud.
+// Stipple: small dots of a lighter or darker note, clustered.
+@diagnostic(off, derivative_uniformity) fn cloudDots(p: vec2f, cell: f32, px: f32, dens: f32, seed: f32) -> f32 {
+  let g = p / cell;
+  let id = floor(g);
+  let f = fract(g) - 0.5 - (vec2f(hash21(id + seed), hash21(id + seed + 3.1)) - 0.5) * 0.6;
+  let on = step(hash21(id + seed + 7.7), dens);
+  return fillA((length(f) - 0.2 - 0.12 * hash21(id + 1.3)) * cell, px) * on;
+}
+// Dabbed streaks: long horizontal brush dabs laid in two to four rows,
+// each shorter than the one below so the cloud domes; tapered ends, three
+// flat tones lit toward the light and along each dab's top edge, warm
+// undersides when it is low, and flecks of stipple through each dab.
+// xr: half the visible width, so every cloud drifts through the frame.
+@diagnostic(off, derivative_uniformity) fn streakClouds(base: vec3f, p: vec2f, sun: vec2f, low: f32, t: f32, px: f32, y0: f32, y1: f32, xr: f32, n: i32, amt: f32, cLit: vec3f, cShade: vec3f, cGlow: vec3f, seed: f32) -> vec3f {
+  var col = base;
+  let cell = max(0.0032, px * 2.4);
+  for (var k = 0; k < 10; k++) {
+    if (k >= n) { break; }
+    let fk = f32(k);
+    let cy = mix(y0, y1, (fk + 0.25 + 0.5 * hash1(fk * 7.13 + seed)) / f32(n));
+    let L = (0.16 + 0.22 * hash1(fk + seed * 1.7)) * (0.6 + 0.5 * amt);
+    let span = 2.0 * (xr + L);
+    let cx = fract(hash1(fk * 3.1 + seed) + t * 0.004 * (1.0 + fk * 0.25) / span) * span - (xr + L);
+    let rows = 2.0 + floor(hash1(fk * 2.3 + seed) * 2.99);
+    let rowH = (0.01 + 0.008 * hash1(fk * 5.0 + seed)) * (0.7 + 0.5 * amt);
+    if (abs(p.x - cx) > L * 1.2 || p.y > cy + rowH || p.y < cy - rowH * (rows + 1.0)) { continue; }
+    let rf = (cy - p.y) / (rowH * 0.85) - 0.5;
+    let r0 = floor(rf);
+    for (var j = 0; j <= 1; j++) {
+      let row = r0 + f32(j);
+      if (row < 0.0 || row >= rows) { continue; }
+      let rowW = L * sqrt(max(1.0 - pow((row + 0.3) / rows, 2.0), 0.0)) * (0.8 + 0.35 * hash1(row + fk * 9.0 + seed));
+      let rowX = cx + (hash1(row * 4.7 + fk + seed) - 0.5) * L * 0.3;
+      let dl = L * (0.3 + 0.15 * hash1(row * 3.0 + fk + seed));
+      let sh = hash1(row * 1.9 + fk * 2.3 + seed) * dl;
+      let gi = floor((p.x - rowX + sh) / dl);
+      for (var m = -1; m <= 1; m++) {
+        let di = gi + f32(m);
+        let h = hash21(vec2f(di, row + fk * 17.0) + seed);
+        let dcx = rowX - sh + (di + 0.5 + (h - 0.5) * 0.3) * dl;
+        if (abs(dcx - rowX) > rowW) { continue; }
+        let hl = dl * (0.85 + 0.5 * h) * (1.0 - 0.3 * row / rows);
+        let hh = rowH * (0.55 + 0.3 * hash1(di * 1.3 + row + fk));
+        let dcy = cy - (row + 0.5) * rowH * 0.85 + (hash1(di * 2.1 + row * 5.0 + fk) - 0.5) * rowH * 0.3;
+        let q = vec2f(p.x - dcx, p.y - dcy);
+        let tx = clamp(abs(q.x) / hl, 0.0, 1.0);
+        // Tapered stroke, a touch fuller along its top edge.
+        let hy = hh * (1.0 - 0.85 * pow(tx, 1.5)) * select(1.0, 0.8, q.y > 0.0);
+        let dd = (length(vec2f(q.x / hl, q.y / max(hy, 1e-5))) - 1.0) * hy;
+        // Solid body; the edge breaks up into a fringe of dots.
+        let solid = fillA(dd + hh * 0.2, px);
+        let fringe = cloudDots(p + vec2f(0.21, 0.47) * cell, cell * 0.72, px, smoothstep(hh * 0.25, -hh * 0.2, dd) * 0.6, fk * 5.0 + row) * step(dd, hh * 0.3);
+        let cov = max(solid, fringe);
+        if (cov <= 0.0) { continue; }
+        let toSun = sun - vec2f(dcx, dcy);
+        let facing = clamp((dcx - cx) / L * sign(toSun.x) * 0.5 + 0.5, 0.0, 1.0);
+        let up = (row + 0.5) / rows;
+        let topEdge = smoothstep(0.1, -0.7, q.y / hh);
+        var lit = mix(0.2 + 0.5 * up, 0.3 + 0.45 * (1.0 - up), low * 0.7) + 0.35 * (facing - 0.5) + 0.12 * topEdge * (1.0 - low * 0.5);
+        lit = post(clamp(lit + (h - 0.5) * 0.06, 0.0, 1.0), 3.0);
+        var cc = mix(cShade, cLit, lit);
+        cc = mix(cc, cGlow, low * (1.0 - up) * 0.65 * exp(-length(toSun) * 1.4) * (1.0 - topEdge * 0.6));
+        cc *= 0.985 + 0.03 * hash1(di * 7.7 + row);
+        cc = mix(cc, mix(cc, cLit * 1.06, 0.8), cloudDots(p, cell * 1.3, px, smoothstep(0.3, 1.0, lit) * 0.22, fk + row));
+        cc = mix(cc, mix(cc, cShade * 0.9, 0.6), cloudDots(p + 0.37 * cell, cell * 1.1, px, (1.0 - lit) * 0.12, fk * 3.0 + row));
+        col = mix(col, cc, cov);
+      }
+    }
+  }
+  return col;
+}
+// Stippled soft masses: heaps of rounded puffs on a soft base, shaded as one
+// continuous form (no facets) by the light's direction, the tone carried by
+// the density of light and dark dots, and edges that dissolve into dots.
+@diagnostic(off, derivative_uniformity) fn massD(q: vec2f, W: f32, fk: f32, seed: f32, t: f32) -> f32 {
+  var d = 1e3;
+  for (var i = 0; i < 6; i++) {
+    let fi = f32(i);
+    let x0 = (fi / 5.0 - 0.5) * W * 1.5 + (hash1(fi + fk * 5.0 + seed) - 0.5) * W * 0.22;
+    let pr = W * (0.2 + 0.2 * (1.0 - abs(fi - 2.5) / 2.5)) * (0.8 + 0.4 * hash1(fi * 3.0 + fk + seed));
+    let pc = vec2f(x0, -pr * (0.45 + 0.3 * hash1(fi * 7.0 + fk)));
+    let di = length(q - pc) - pr;
+    let hs = clamp(0.5 + 0.5 * (d - di) / (W * 0.12), 0.0, 1.0);
+    d = mix(d, di, hs) - W * 0.12 * hs * (1.0 - hs);
+  }
+  d = max(d, q.y + W * 0.02 * sin(q.x / W * 9.0 + fk));
+  return d + W * 0.06 * (vnoise(q / W * 6.0 + fk * 3.1 + vec2f(t * 0.02, 0.0)) - 0.5);
+}
+@diagnostic(off, derivative_uniformity) fn massClouds(base: vec3f, p: vec2f, sun: vec2f, low: f32, t: f32, px: f32, y0: f32, y1: f32, xr: f32, n: i32, amt: f32, cLit: vec3f, cShade: vec3f, cGlow: vec3f, seed: f32) -> vec3f {
+  var col = base;
+  let cell = max(0.0028, px * 2.2);
+  for (var k = 0; k < 8; k++) {
+    if (k >= n) { break; }
+    let fk = f32(k);
+    let cy = mix(y0, y1, (fk + 0.3 + 0.4 * hash1(fk * 7.13 + seed)) / f32(n));
+    let W = (0.08 + 0.1 * hash1(fk + seed * 1.7)) * (0.6 + 0.6 * amt);
+    let span = 2.0 * (xr + W * 1.3);
+    let cx = fract(hash1(fk * 3.1 + seed) + t * 0.003 * (1.0 + fk * 0.2) / span) * span - (xr + W * 1.3);
+    let q = p - vec2f(cx, cy);
+    if (abs(q.x) > W * 1.35 || q.y > W * 0.12 || q.y < -W * 1.0) { continue; }
+    let d = massD(q, W, fk, seed, t);
+    let edge = W * 0.09;
+    if (d > edge) { continue; }
+    // One continuous rounded surface: lateral at the rim, facing us inside.
+    let e = W * 0.04;
+    let g2 = normalize(vec2f(massD(q + vec2f(e, 0.0), W, fk, seed, t) - d, massD(q + vec2f(0.0, e), W, fk, seed, t) - d) + vec2f(1e-6));
+    let depth = clamp(-d / (W * 0.35), 0.0, 1.0);
+    let nv = normalize(vec3f(g2.x * (1.0 - depth * 0.6), -g2.y * (1.0 - depth * 0.6), 0.35 + depth));
+    let ts = normalize(sun - vec2f(cx, cy - W * 0.3));
+    let Lc = normalize(vec3f(ts.x, -ts.y, 0.3));
+    let lit = clamp(dot(nv, Lc) * 0.6 + 0.45 - smoothstep(-W * 0.3, 0.0, q.y) * 0.25, 0.0, 1.0);
+    var cc = mix(cShade, cLit, post(lit, 5.0));
+    cc = mix(cc, cGlow, low * smoothstep(-0.1, 0.7, -nv.y) * 0.55 * exp(-length(sun - vec2f(cx, cy)) * 1.3));
+    cc = mix(cc, mix(cLit, vec3f(1.0), 0.3), cloudDots(p, cell, px, smoothstep(0.35, 0.95, lit) * 0.7, fk));
+    cc = mix(cc, cShade * 0.86, cloudDots(p + 0.41 * cell, cell * 0.85, px, smoothstep(0.55, 0.1, lit) * 0.55, fk + 5.0));
+    let solid = fillA(d + edge * 0.6, px);
+    let rimDots = cloudDots(p + vec2f(0.13, 0.29) * cell, cell * 0.85, px, smoothstep(edge, -edge * 0.6, d) * 0.9, fk + 9.0);
+    col = mix(col, cc, max(solid, rimDots));
+  }
+  return col;
+}
+// Mottled patches with drips: flat blotches of two or three tones in an
+// irregular mottle, with runs of paint hanging from the undersides, each
+// a dotted trickle ending in a bead.
+@diagnostic(off, derivative_uniformity) fn dripClouds(base: vec3f, p: vec2f, sun: vec2f, low: f32, t: f32, px: f32, y0: f32, y1: f32, xr: f32, n: i32, amt: f32, cLit: vec3f, cShade: vec3f, cGlow: vec3f, seed: f32) -> vec3f {
+  var col = base;
+  let cell = max(0.003, px * 2.3);
+  for (var k = 0; k < 8; k++) {
+    if (k >= n) { break; }
+    let fk = f32(k);
+    let cy = mix(y0, y1, (fk + 0.3 + 0.4 * hash1(fk * 7.13 + seed)) / f32(n));
+    let W = (0.08 + 0.1 * hash1(fk + seed * 1.7)) * (0.6 + 0.6 * amt);
+    let H = W * (0.22 + 0.1 * hash1(fk * 4.1 + seed));
+    let span = 2.0 * (xr + W * 1.3);
+    let cx = fract(hash1(fk * 3.1 + seed) + t * 0.003 * (1.0 + fk * 0.2) / span) * span - (xr + W * 1.3);
+    let q = p - vec2f(cx, cy);
+    if (abs(q.x) > W * 1.2 || q.y < -H * 1.6 || q.y > H * 2.6) { continue; }
+    // Blotch: a wide lens, rounded on top, nearly flat below, ragged edge.
+    var d = (length(q / vec2f(W, select(H * 0.45, H, q.y < 0.0))) - 1.0) * H;
+    d += H * 0.35 * (fbm(q / W * vec2f(3.0, 6.0) + fk * 2.7 + seed) - 0.5);
+    let toSun = sun - vec2f(cx, cy);
+    let side = clamp(q.x / W * sign(toSun.x) * 0.5 + 0.5, 0.0, 1.0);
+    let up = clamp(-q.y / H * 0.5 + 0.5, 0.0, 1.0);
+    let lit = clamp(mix(up, 1.0 - up, low * 0.6) * 0.6 + side * 0.4, 0.0, 1.0);
+    // Mottle: the tone steps follow a slow noise, shifted toward the light.
+    let m = vnoise(q / W * vec2f(5.0, 9.0) + fk * 1.9 + seed + vec2f(t * 0.01, 0.0));
+    let tone = post(clamp(m * 0.55 + lit * 0.6 - 0.05, 0.0, 1.0), 3.0);
+    var cc = mix(cShade, cLit, tone);
+    cc = mix(cc, cGlow, low * (1.0 - up) * 0.5 * exp(-length(toSun) * 1.5));
+    cc = mix(cc, mix(cc, cLit * 1.05, 0.7), cloudDots(p, cell, px, lit * 0.4, fk));
+    cc = mix(cc, cShade * 0.88, cloudDots(p + 0.43 * cell, cell * 0.85, px, (1.0 - lit) * 0.35, fk + 4.0));
+    col = mix(col, cc, fillA(d, px));
+    // Drips: dotted trickles from the underside, each ending in a bead.
+    let dw = W * 0.09;
+    let di = floor(q.x / dw);
+    let hd = hash1(di * 1.37 + fk * 11.0 + seed);
+    if (hd > 0.45 && q.y > 0.0) {
+      let dx = (di + 0.5 + (hash1(di * 2.9 + fk) - 0.5) * 0.4) * dw;
+      let yb = H * 0.45 * sqrt(max(1.0 - pow(dx / W, 2.0), 0.0)) * 0.85;
+      if (abs(dx) < W * 0.85) {
+        let len = H * (0.5 + 1.8 * hash1(di * 5.3 + fk) * hash1(di * 1.1 + fk * 3.0)) * (0.7 + 0.3 * sin(t * 0.3 + di));
+        let wdt = max(0.0011, px * 0.8) * (1.0 + hash1(di * 3.3) * 0.5);
+        let along = q.y - yb;
+        let trick = dotLine(q.x - dx, along, wdt, px, di + fk * 7.0) * step(0.0, along) * step(along, len);
+        let bead = fillA(length(vec2f(q.x - dx, along - len)) - wdt * 1.9, px);
+        let dc = mix(cShade, cc, 0.3);
+        col = mix(col, dc, max(trick, bead));
+      }
+    }
+  }
+  return col;
+}
+
+// Light from the sun by day and the moon by night.
+@diagnostic(off, derivative_uniformity) fn dayLight() {
+  let sunA = smoothstep(-0.04, 0.2, u.c.z);
+  let moonA = smoothstep(-0.02, 0.22, u.d.z) * 0.5;
+  if (sunA >= moonA) { setLight(u.c.xy, u.c.x * 2.3, u.c.z * 1.15, sunA, 0.0); }
+  else { setLight(u.d.xy, u.d.x * 2.3, u.d.z * 1.15, moonA, 1.0); }
+}
+// Stepped sky: a halo whose rings wander, stars, the sun and moon, and
+// painted clouds in the scene's own style (0 dabbed streaks, 1 stippled
+// masses, 2 mottled drips) above cloudMax. Colours: C(0) top, C(1) mid,
+// C(2) horizon, C(3) sun, C(4) glow, C(5) cloud lit, C(6) cloud shade.
+@diagnostic(off, derivative_uniformity) fn paintSky(p0: vec2f, hz: f32, px: f32, t: f32, lampC: vec3f, cloudMax: f32, style: i32) -> vec3f {
   let sun = u.c.xy; let moon = u.d.xy; let dark = u.c.w;
   let g = clamp((p0.y - hz) / -1.0, 0.0, 1.0);
   var col = mix(C(2), C(1), post(smoothstep(0.0, 0.3, g), 5.0));
   col = mix(col, C(0), post(smoothstep(0.28, 0.9, g), 5.0));
-  let ds = length(p0 - sun);
-  col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+  let sv = p0 - sun;
+  let hr = haloR(sv, t, 1.3);
+  let sunUp = step(-0.2, u.c.z);
+  let gb = post(exp(-hr * 10.0) * 0.9 * sunUp, 5.0);
+  col = mix(col, C(4), gb * (0.35 + 0.65 * gb));
   let sg = p0 / 0.035;
   let sid = floor(sg);
   let sh = hash21(sid + 5.3);
   if (sh > 0.72) {
-    let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+    let sw = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
     let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
-    let sa = atan2(sv.y, sv.x);
-    let sdd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+    let sa = atan2(sw.y, sw.x);
+    let sdd = length(sw) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
     col = mix(col, lampC, fillA(sdd, px) * dark);
   }
-  col = mix(col, C(3), fillA(ds - 0.045, px));
-  col = mix(col, C(4), strokeA(ds - 0.058, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
-  let dm = length(p0 - moon);
+  col = mix(col, C(3), fillA(length(sv) - 0.045, px));
+  col = mix(col, C(4), dotRing(hr - 0.064, sv, 0.064, 0.0011, px, 3.0) * 0.75 * sunUp);
+  let mv = p0 - moon;
+  let mr = haloR(mv, t, 7.9);
   let mc = mix(lampC, vec3f(0.95, 0.94, 0.88), 0.6);
-  col = mix(col, mix(col, lampC, 0.25), post(exp(-dm * 8.0) * dark, 4.0));
-  col = mix(col, mc, fillA(dm - 0.032, px));
-  col = mix(col, mc * 0.82, fillA(length(p0 - moon - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(p0 - moon - vec2f(-0.008, 0.01)) - 0.006, px));
-  for (var i = 0; i < 9; i++) {
-    let cl = skyCloud(p0, i);
-    if (cl.x < px * 2.0 && p0.y < cloudMax) {
-      let under = mix(1.0 - cl.y, cl.y, lowSun());
-      var cc = mix(C(6), C(5), post(under, 3.0));
-      cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
-      cc = mix(cc, C(6) * 0.9, strokeA(fract(p0.x / 0.012 + cl.y * 2.0) - 0.5, 0.05, 0.08) * 0.25);
-      col = mix(col, cc, fillA(cl.x, px));
-      col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
-    }
+  // Moonglow: a cool light added to the sky in wandering steps.
+  col += vec3f(0.05, 0.07, 0.12) * post(exp(-mr * 12.0) * dark, 3.0);
+  col = mix(col, mc, fillA(length(mv) - 0.032, px));
+  col = mix(col, mc * 0.82, fillA(length(mv - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(mv - vec2f(-0.008, 0.01)) - 0.006, px));
+  col = mix(col, mix(col, mc, 0.6), dotRing(mr - 0.05, mv, 0.05, 0.0009, px, 5.0) * dark * 0.6);
+  // Clouds catch whichever light is up.
+  let src = select(moon, sun, u.c.z > -0.05);
+  let low = select(1.0, 1.0 - smoothstep(0.1, 0.5, u.c.z), u.c.z > -0.05);
+  if (p0.y < cloudMax + 0.03) {
+    let y0 = -0.5 * u.b.w - 0.02;
+    let xr = 0.5 * u.a.y * u.b.w;
+    if (style == 0) { col = streakClouds(col, p0, src, low, t, px, y0, cloudMax, xr, 7, 1.0, C(5), C(6), C(4), u.a.w); }
+    else if (style == 1) { col = massClouds(col, p0, src, low, t, px, y0 + 0.1, cloudMax, xr, 6, 1.0, C(5), C(6), C(4), u.a.w); }
+    else { col = dripClouds(col, p0, src, low, t, px, y0 + 0.04, cloudMax - 0.03, xr, 6, 1.0, C(5), C(6), C(4), u.a.w); }
   }
   return col;
 }
@@ -679,31 +1091,19 @@ const HZ = -0.04;
 // y into the distance). 0 in sun, up to 1 under a cloud; none after dusk.
 @diagnostic(off, derivative_uniformity) fn cloudShade(q: vec2f, t: f32) -> f32 {
   let n = fbm(vec2f(q.x * 1.1 - t * 0.012, q.y * 2.6 + u.a.w * 1.3));
-  return smoothstep(0.5, 0.64, n) * light() * (1.0 - 0.5 * lowSun());
-}
-// Terrain for cast shadows. A point on ground raised by z (screen units)
-// catches the shadow that would fall further from its caster on flat
-// ground, and sits higher on screen than its footprint; so a shadow is
-// looked up at the lifted point and bends over terraces and mounds.
-// The sun is far away, so its light comes from one direction across the
-// whole scene: -1 from the left .. 1 from the right, easing through 0 as it
-// passes overhead or straight ahead (never flipping at a line on screen).
-@diagnostic(off, derivative_uniformity) fn sunSide() -> f32 { return clamp(u.c.x / 0.35, -1.0, 1.0); }
-@diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
-  let side = sunSide();
-  return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
+  return smoothstep(0.5, 0.64, n) * LI * (1.0 - 0.5 * lowSun()) * (1.0 - 0.6 * LMOON);
 }
 // A terrace step inside one contour band: a flat tread, then a drop.
 // f is the position within the band 0..1; returns height about zero.
 @diagnostic(off, derivative_uniformity) fn terrace(f: f32) -> f32 { return smoothstep(0.55, 0.97, f) - f + 0.5; }
+// How much a terrace band faces the viewer at f: the drop between treads.
+@diagnostic(off, derivative_uniformity) fn terraceFace(f: f32) -> f32 { return smoothstep(0.5, 0.75, f) * smoothstep(1.0, 0.9, f); }
 // Aerial haze in flat steps: d 0 near .. 1 far.
 @diagnostic(off, derivative_uniformity) fn hazeStep(col: vec3f, d: f32, hz: vec3f) -> vec3f { return mix(col, hz, post(clamp(d, 0.0, 1.0), 4.0) * 0.75); }
-// Light raking across a slope: the terminator sits where the surface turns
-// from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
-// ground line; returns 0 shade .. 1 lit, in three flat steps.
+// Light over a slope in flat steps: s is the slope of the ground line
+// (dy/dx on screen), depth how far below the crest (turning to face us).
 @diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
-  let v = 0.5 - s * 3.5 * sunSide() - depth * 2.5 + 0.35 * (1.0 - lowSun());
-  return post(clamp(v, 0.0, 1.0) * light(), 3.0);
+  return post(lambert(groundN(s * 1.8, depth * 7.0 + 0.15), 0.4), 3.0);
 }
 `;
 const PIXEL_BUDGET = 3000000;
@@ -758,6 +1158,27 @@ function celestial(tau, hz) {
   sy = hz - elev * 0.55 + 0.02;
   return { sx, sy, elev, mx, my, mElev };
 }
+// Sky drag: a press in the sky takes hold of the sun, or the moon by night,
+// and the day follows the finger along their arcs; let go and the day turns
+// on by itself from there. q is in scene units.
+function bodyAt(tau, hz) {
+  const s = celestial(tau, hz);
+  return s.elev > -0.03 ? [s.sx, s.sy] : [s.mx, s.my];
+}
+function skyTau(q, hz, tau0) {
+  let best = tau0, bestD = Infinity;
+  for (let i = -160; i <= 160; i++) {
+    const tt = ((tau0 + i * 0.002) % 1 + 1) % 1;
+    const b = bodyAt(tt, hz);
+    const d = (b[0] - q[0]) ** 2 + (b[1] - q[1]) ** 2 + (i * 0.002) ** 2 * 0.04;
+    if (d < bestD) { bestD = d; best = tt; }
+  }
+  return best;
+}
+function inSky(q, hz, tau) {
+  const b = bodyAt(tau, hz);
+  return q[1] < hz - 0.01 || Math.hypot(q[0] - b[0], q[1] - b[1]) < 0.12;
+}
 
 // sky top, sky mid, horizon, sun, glow, cloud lit, cloud shade, mountains, mist, mist light
 const SKIES = {
@@ -789,7 +1210,8 @@ function readControls() {
   for (const id of ['wind', 'speed', 'poppies', 'fog', 'grain']) $(id + 'Val').textContent = $(id).value;
   if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
 }
-let gust = 0, gustGoal = 0, shown = -1;
+let gust = 0, gustGoal = 0, shown = -1, zoomNow = 1, skyHeld = false;
+const HZ = -0.04;
 function generate() {}
 // Mist in the hollow: thick at dawn, gathering again after sunset.
 function fogAt(tau) {
@@ -798,7 +1220,8 @@ function fogAt(tau) {
 }
 function uniforms() {
   const zoom = Math.max(1, 1.2 / aspect);
-  const s = celestial(tau, -0.04);
+  zoomNow = zoom;
+  const s = celestial(tau, HZ);
   const dark = 1 - Math.min(1, Math.max(0, (s.elev + 0.25) / 0.3));
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
@@ -810,16 +1233,26 @@ function uniforms() {
   };
 }
 function step(dt) {
-  tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
+  if (!skyHeld) tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
   gustGoal *= Math.exp(-dt * 1.2);
   gust += (gustGoal - gust) * (1 - Math.exp(-dt * 5));
   const v = Math.round(tau * 100);
   if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(tau).name; }
 }
+// Drag in the sky to move the sun (or the moon) and the time of day with
+// it; swipe across the land for a gust.
 let lastX = 0;
-function onDown(q) { lastX = q[0]; }
-function onMove(q) { gustGoal = Math.max(-1.5, Math.min(1.5, gustGoal + (q[0] - lastX) * 6)); lastX = q[0]; }
-function onUp() {}
+function onDown(q) {
+  const s = [q[0] * zoomNow, q[1] * zoomNow];
+  skyHeld = inSky(s, HZ, tau);
+  if (skyHeld) { tau = skyTau(s, HZ, tau); return; }
+  lastX = q[0];
+}
+function onMove(q) {
+  if (skyHeld) { tau = skyTau([q[0] * zoomNow, q[1] * zoomNow], HZ, tau); return; }
+  gustGoal = Math.max(-1.5, Math.min(1.5, gustGoal + (q[0] - lastX) * 6)); lastX = q[0];
+}
+function onUp() { skyHeld = false; }
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
@@ -840,7 +1273,7 @@ try {
 
 // Desktop renders above screen resolution within a pixel budget and lets the
 // browser scale down, for crisper edges and finer marks; phones stay light.
-const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(PIXEL_BUDGET) });
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 2e6 ? 1.25 : b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(PIXEL_BUDGET) });
 const clk = clock(gpu);
 const tl = tilt();
 let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
