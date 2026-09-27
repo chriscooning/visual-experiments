@@ -357,7 +357,7 @@ try {
 
 // Ray marching is the expensive part, so the scene renders at up to 1.5×
 // pixel density and the glow at a quarter of that.
-const surf = surface(gpu, canvas, { dpr: [1, 1.5] });
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(2.5e6) });
 const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
 const size = () => [Math.max(1, surf.size[0]), Math.max(1, surf.size[1])];
 const quarter = () => [Math.max(1, Math.round(surf.size[0] / 4)), Math.max(1, Math.round(surf.size[1] / 4))];

@@ -277,7 +277,7 @@ try {
   throw e;
 }
 
-const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(4.5e6) });
 const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
 const F = 'rgba16float';
 
