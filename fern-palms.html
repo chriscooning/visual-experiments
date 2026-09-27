@@ -390,6 +390,20 @@ const HZ = 0.02;
   return vec4f(max(leaflet, spine), bside, bs, leaflet);
 }
 
+// Palm shadows at a ground point: long bands away from the sun.
+@diagnostic(off, derivative_uniformity) fn palmShadeAt(q: vec2f, px: f32) -> f32 {
+  let side = sign(u.c.x + 1e-4);
+  let L = 0.06 + 0.3 * lowSun();
+  var s = 0.0;
+  for (var i = 0; i < 9; i++) {
+    if (i >= i32(u.e.x)) { break; }
+    let b = palmBase(i);
+    let e2 = b + vec2f(-side * L * palmP(i).z, 0.02 + L * 0.06);
+    s = max(s, softShadowSeg(q, b, e2, 0.005 * palmP(i).z, px));
+    s = max(s, groundShadow(q, e2, 0.05 * palmP(i).z, -side, 0.0, px));
+  }
+  return s * light() * 0.55;
+}
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
   let t = u.a.x; let asp = u.a.y; let k = u.b.w;
   let p0 = vec2f((uv.x - 0.5) * asp, uv.y - 0.5) * k;
@@ -463,20 +477,6 @@ const HZ = 0.02;
   }
 
   let n = i32(u.e.x);
-  // Palm shadows across the bushes: long bands away from the sun.
-  var palmShade = 0.0;
-  {
-    let side = sign(sun.x + 1e-4);
-    let L = 0.06 + 0.3 * lowSun();
-    for (var i = 0; i < 9; i++) {
-      if (i >= n) { break; }
-      let b = palmBase(i);
-      let e2 = b + vec2f(-side * L * palmP(i).z, 0.02 + L * 0.06);
-      palmShade = max(palmShade, softShadowSeg(p, b, e2, 0.005 * palmP(i).z, px));
-      palmShade = max(palmShade, groundShadow(p, e2, 0.05 * palmP(i).z, -side, 0.0, px));
-    }
-    palmShade *= lt * 0.55;
-  }
 
   // The canvas's wandering lines of cream dots: contours of a slow field
   // with dots spaced along them, worked out once for the nearer rows.
@@ -515,7 +515,10 @@ const HZ = 0.02;
         let dc = select(C(16), C(15), dotLid.y > 0.6);
         bc = mix(bc, mix(dc, dc * 0.55, 1.0 - lt * 0.8), dotLid.x * u.e.z);
       }
-      bc = mix(bc, bc * 0.6, palmShade);
+      // Shadows wrap over the dome of each bush: its surface stands higher
+      // toward the crown, so the shadow shifts along the light as it climbs.
+      let zb = clamp(br.w - p.y, 0.0, br.z) * 0.9;
+      bc = mix(bc, bc * 0.6, palmShadeAt(liftShadow(p, zb), px));
       bc = mix(bc, bc * 0.8, cloudShade(vec2f(p.x, 0.8 + fr * 0.3), t) * 0.5);
       bc = hazeStep(bc, 0.25 - fr * 0.06, hazeC);
       col = mix(col, bc, fillA(br.x - p.y, px));
@@ -676,6 +679,17 @@ const HZ = 0.02;
   let n = fbm(vec2f(q.x * 1.1 - t * 0.012, q.y * 2.6 + u.a.w * 1.3));
   return smoothstep(0.5, 0.64, n) * light() * (1.0 - 0.5 * lowSun());
 }
+// Terrain for cast shadows. A point on ground raised by z (screen units)
+// catches the shadow that would fall further from its caster on flat
+// ground, and sits higher on screen than its footprint; so a shadow is
+// looked up at the lifted point and bends over terraces and mounds.
+@diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
+  let side = sign(u.c.x - p.x + 1e-4);
+  return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
+}
+// A terrace step inside one contour band: a flat tread, then a drop.
+// f is the position within the band 0..1; returns height about zero.
+@diagnostic(off, derivative_uniformity) fn terrace(f: f32) -> f32 { return smoothstep(0.55, 0.97, f) - f + 0.5; }
 // Aerial haze in flat steps: d 0 near .. 1 far.
 @diagnostic(off, derivative_uniformity) fn hazeStep(col: vec3f, d: f32, hz: vec3f) -> vec3f { return mix(col, hz, post(clamp(d, 0.0, 1.0), 4.0) * 0.75); }
 // Light raking across a slope: the terminator sits where the surface turns
