@@ -343,13 +343,9 @@ const HY = -0.02;
   if (cd < px * 2.0) {
     let nrm = (q - cc) / cr;
     let L = dot(nrm, sunDir);
-    // Leaf dots on a staggered grid.
-    let g = q / (h * 0.085);
-    let row = floor(g.y);
-    let gx = g.x + 0.5 * (row - 2.0 * floor(row * 0.5));
-    let dotD = length(vec2f(fract(gx) - 0.5, fract(g.y) - 0.5)) - 0.36;
-    var fc = mix(C(13), mix(C(13), C(12), 0.5), post(L * 0.5 + 0.5, 2.0));
-    fc = mix(fc, select(mix(C(13), C(12), 0.6), C(12), L > 0.25), fillA(dotD * h * 0.085, px) * 0.9);
+    // Near-black core, stippled light thickening on the sunward side.
+    let olit = clamp(0.35 + L * 0.55 - nrm.y * 0.35, 0.0, 1.0);
+    var fc = stippleBush(q, olit, max(h * 0.07, px * 2.4), px, mix(C(13), vec3f(0.0), 0.25), C(13), C(12), mix(C(12), C(10), 0.4), C(14), sd * 5.0);
     // Deep shadow under the canopy.
     fc = mix(fc, C(13), smoothstep(0.35, 0.9, nrm.y) * 0.8);
     col = mix(col, fc, fillA(cd, px));
@@ -541,6 +537,8 @@ const HY = -0.02;
     col = mix(col, vec3f(0.55, 1.0, 0.45), fillA(fd - 0.006, px) * 0.85);
     col = mix(col, vec3f(0.6, 1.0, 0.6), strokeA(fd - 0.03, px * 0.8, px) * 0.25);
   }
+  let land = smoothstep(HY - 0.1, HY + 0.02, p.y);
+  col = layerTex(p, col, px, mix(0.12, 1.0, land), mix(0.006, 0.013, clamp((p.y + 0.05) * 1.6, 0.0, 1.0)), 13.0);
   return vec4f(paperize(col, pos.xy, u.c.w), 1.0);
 }
 `;

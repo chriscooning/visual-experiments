@@ -416,6 +416,26 @@ const HY = -0.12;
     col = mix(col, C(5), strokeA(p.x - ce, px * 0.8, px) * step(HY + 0.01, p.y) * u.b.y * 0.8 * step(0.5, fbm(vec2f(p.y * 60.0 - ft * 0.3, 1.0))));
   }
 
+  // Coastal scrub along the cliff crown: stippled clumps with dark cores.
+  {
+    let side = sign(u.d.z - p.x + 1e-4);
+    let cw = 0.03;
+    let ci = floor(p.x / cw);
+    for (var o = -1; o <= 1; o++) {
+      let id = ci + f32(o);
+      let h = hash1(id * 1.9 + u.a.w);
+      if (h < 0.35) { continue; }
+      let cx = (id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * cw;
+      if (cx > cliffEdge(headTop(cx)) - 0.02 || abs(cx + 0.1) < 0.02) { continue; }
+      let r = 0.008 + 0.007 * h;
+      let cy = headTop(cx) + r * 0.25;
+      let v = p - vec2f(cx, cy);
+      let sd = max(length(v / vec2f(1.35, 1.0)) - r * (1.0 + 0.14 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.3);
+      let blit = clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
+      let bc = stippleBush(p, blit, 0.0024, px, mix(C(17), C(12), 0.4), C(17), C(13), C(14), C(8), h * 17.0);
+      col = mix(col, bc, fillA(sd, px));
+    }
+  }
   // Lighthouse near the point, fence posts along the cliff top.
   {
     let lx = -0.1;
@@ -494,6 +514,8 @@ const HY = -0.12;
       col = mix(col, C(12), fillA(sdBox(pod, vec2f(0.009, 0.0035)) - 0.001, px));
     }
   }
+  let land = smoothstep(HY - 0.1, HY + 0.02, p0.y);
+  col = layerTex(p0, col, px, mix(0.12, 0.9, land), mix(0.006, 0.013, clamp((p0.y + 0.05) * 1.6, 0.0, 1.0)), 15.0);
   return vec4f(paperize(col, pos.xy, u.c.w), 1.0);
 }
 `;
