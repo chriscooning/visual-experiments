@@ -181,6 +181,58 @@ fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, 
   }
   return c;
 }
+// Painted layers over any surface: three scales of points in drifting
+// clusters, each a lighter or darker note of the colour beneath, so flat
+// fills read as built up from many small marks. amt 0..1 sets how much.
+fn layerTex(p: vec2f, col: vec3f, px: f32, amt: f32, scale: f32, seed: f32) -> vec3f {
+  var c = col;
+  let lum = dot(col, vec3f(0.3, 0.59, 0.11));
+  // Contrast grows with amt: soft tonal flecks at low amounts, crisp marks at full.
+  let ct = smoothstep(0.1, 0.9, amt);
+  let lightC = mix(col, min(col * 1.2 + vec3f(0.035, 0.03, 0.01), vec3f(1.0)), 0.45 + 0.55 * ct);
+  let darkC = mix(col, col * 0.7, 0.3 + 0.7 * ct);
+  var sc = array<f32, 3>(1.0, 0.55, 0.3);
+  for (var L = 0; L < 3; L++) {
+    let fl = f32(L);
+    let cell = max(scale * sc[L], px * 2.2);
+    let g = p / cell + vec2f(fl * 0.37, fl * 0.61);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 5.3);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.7 + fl), hash21(id + 4.9 + fl)) - 0.5) * 0.6;
+    let clump = vnoise(p / (cell * 3.1) + seed * 0.37 + fl * 7.0);
+    let r = 0.17 + 0.15 * hash21(id + 8.3);
+    let a = fillA((length(f) - r) * cell, px);
+    let on = step(h, amt * (0.12 + 0.55 * smoothstep(0.3, 0.8, clump)));
+    let k = hash21(id + 2.9 + fl);
+    // Dark ground takes more light marks, light ground more dark ones.
+    let dc = select(darkC, lightC, k < 0.35 + 0.35 * (1.0 - lum) + (1.0 - ct) * 0.3);
+    c = mix(c, dc, a * on * (0.75 - fl * 0.12));
+  }
+  return c;
+}
+// Bark: stippled light and shade plus fine strokes along the trunk.
+// u runs along the trunk, v across it (-1..1), lit is 0..1.
+fn barkTex(u: f32, v: f32, w: f32, lit: f32, px: f32, dark: vec3f, mid: vec3f, hi: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mid, smoothstep(-0.6, 0.4, v * 0.0 + l * 2.0 - 1.0));
+  let g = vec2f(u / (w * 0.55), v * 2.2);
+  let id = floor(g);
+  let f = fract(g) - 0.5;
+  let h = hash21(id + seed);
+  let stroke = strokeA(f.x * 0.4 + 0.15 * sin(u / w * 3.0 + id.y), 0.08, 0.1);
+  c = mix(c, select(dark * 0.85, hi, h > 0.5 - 0.3 * l), stroke * step(0.35, h) * 0.8);
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let cs = w * (0.42 - fl * 0.18);
+    let g2 = vec2f(u, v * w) / max(cs, px * 2.2) + fl * 0.5;
+    let id2 = floor(g2);
+    let f2 = fract(g2) - 0.5 - (vec2f(hash21(id2 + 3.1), hash21(id2 + 5.7)) - 0.5) * 0.5;
+    let h2 = hash21(id2 + seed + fl * 9.0);
+    let dc = select(dark * 0.8, mix(mid, hi, 0.7), h2 < l * 0.8);
+    c = mix(c, dc, fillA((length(f2) - 0.22) * max(cs, px * 2.2), px) * step(0.45, hash21(id2 + 7.7)));
+  }
+  return c;
+}
 // Shadow pooled on the ground under a clump: a flat ellipse pushed away
 // from the sun, longer when the sun is low. Returns coverage.
 fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
@@ -337,10 +389,11 @@ const HZ = 0.02;
   if (d > px * 2.0) { return vec4f(0.0); }
   let lt = light();
   let side = across / w * sign(u.c.x - p.x + 1e-4) * sign(nrm.x + 1e-4);
-  var col = mix(C(24), C(23), post(smoothstep(-0.2, 0.7, side) * lt, 2.0));
+  var col = barkTex(along, across / w, w, smoothstep(-0.2, 0.7, side) * lt, px, C(24) * 0.8, C(24), C(23), s * 7.0 + b.x * 13.0);
+  col = mix(col, mix(C(24), C(23), 0.5), post(smoothstep(0.1, 0.8, side) * lt, 2.0) * 0.45);
   // Rings, bowed a little, closer together near the top.
   let ring = fract(along / (0.007 * s) + abs(across / w) * 0.25);
-  col = mix(col, C(24) * 0.8, step(0.72, ring));
+  col = mix(col, C(24) * 0.72, step(0.74, ring) * 0.8);
   col = mix(col, C(27), strokeA(d, px * 0.45, px));
   return vec4f(col, fillA(d, px));
 }
@@ -649,6 +702,9 @@ const HZ = 0.02;
       col = mix(col, C(27), strokeA(bd, px * 0.6, px));
     }
   }
+  // Painted layers over everything, finer in the distance, faint in the sky.
+  let land = smoothstep(HZ - 0.12, HZ + 0.02, p0.y);
+  col = layerTex(p0, col, px, mix(0.12, 1.0, land), mix(0.006, 0.013, clamp((p0.y + 0.1) * 1.5, 0.0, 1.0)), 3.0);
   return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 `;
