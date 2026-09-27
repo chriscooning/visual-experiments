@@ -357,19 +357,40 @@ const HZ = 0.02;
   col = mix(col, C(24), strokeA(fract(v.x / (R * 0.09) + 0.3 * sin(v.y / R * 5.0)) - 0.5, 0.1, 0.12) * 0.6);
   var alpha = fillA(skirtD, px);
   col = mix(col, C(27), strokeA(skirtD, px * 0.5, px) * alpha);
-  if (d < px * 2.0) {
-    let odd = (i32(floor(seg)) % 2) == 0;
-    var fc = select(C(19), C(20), odd);
-    let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
-    fc = mix(fc, C(21), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.45, 0.9, r / rr), 2.0) * lt);
-    fc = mix(fc, C(19), smoothstep(0.3, 0.8, v.y / R) * 0.6);
-    // Leaf ribs and the pleats either side.
-    fc = mix(fc, C(19), strokeA((fs - 0.5) * r * 6.2832 / N, px * 0.45, px) * smoothstep(0.15, 0.4, r / R));
-    fc = mix(fc, mix(fc, C(21), 0.5), strokeA((fract(seg * 3.0) - 0.5) * r * 6.2832 / (N * 3.0), px * 0.3, px) * 0.5 * lt);
-    fc = mix(fc, C(19) * 0.7, smoothstep(0.22 * R, 0.1 * R, r));
-    fc = mix(fc, C(27), strokeA(d, px * 0.5, px));
-    col = mix(col, fc, fillA(d, px));
-    alpha = max(alpha, fillA(d, px));
+  // Three layers of leaves, back to front: long dark ones behind, a mid
+  // layer, and shorter lit leaves in front, each on its own spacing so the
+  // crown reads dense and overlapping.
+  for (var L = 0; L < 3; L++) {
+    let fl = f32(L);
+    let NL = 17.0 + fl * 7.0;
+    let sg = a * NL / 6.2832 + sd * (1.0 + fl * 0.37) + fl * 0.43;
+    let fsL = fract(sg);
+    let tipL = 1.0 - abs(fsL - 0.5) * 2.0;
+    let hL = hash1(floor(sg) * 1.37 + sd + fl * 11.0);
+    let lenL = (1.06 - fl * 0.14) * (1.0 + (0.34 - fl * 0.08) * down + 0.26 * (hL - 0.5));
+    let splitL = 1.0 - 0.2 * smoothstep(0.35, 0.0, abs(fsL - 0.5)) * step(0.45, hL);
+    let rrL = R * lenL * (0.55 + 0.45 * pow(tipL, 0.7)) * splitL;
+    // Front layers are gappy and sit toward the top, so leaves fan out
+    // over the ones behind instead of closing into a disc.
+    let keep = select(1.0, step(0.3, hL) * step(v.y / R, 0.45), L == 1) * select(1.0, step(0.45, hL) * step(v.y / R, 0.1), L == 2);
+    let dL = (r - rrL) * 0.8 + (1.0 - keep) * 1e3;
+    if (dL < px * 2.0) {
+      var fc = C(19) * 0.82;
+      if (L == 1) { fc = mix(C(19), C(20), select(0.45, 0.8, hL > 0.5)); }
+      if (L == 2) { fc = select(C(20), mix(C(20), C(21), 0.3), hL > 0.6); }
+      let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
+      fc = mix(fc, C(21), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.4, 0.9, r / rrL), 2.0) * lt * (0.35 + 0.3 * fl));
+      fc = mix(fc, C(19) * 0.75, smoothstep(0.3, 0.85, v.y / R) * (0.65 - fl * 0.15));
+      // A few tired leaves, yellowing toward their tips.
+      fc = mix(fc, mix(C(21), C(22), 0.55), smoothstep(0.7, 1.0, r / rrL) * step(0.84, hL) * 0.8);
+      // Rib down each leaf and the pleats either side.
+      fc = mix(fc, C(19) * 0.7, strokeA((fsL - 0.5) * r * 6.2832 / NL, px * 0.42, px) * smoothstep(0.15, 0.4, r / R));
+      fc = mix(fc, mix(fc, C(21), 0.55), strokeA((fract(sg * 3.0) - 0.5) * r * 6.2832 / (NL * 3.0), px * 0.3, px) * 0.45 * lt);
+      fc = mix(fc, C(27), strokeA(dL, px * 0.45, px) * (0.5 + 0.2 * fl));
+      fc = mix(fc, fc * 0.72, smoothstep(0.35, 0.1, r / R) * (1.0 - fl * 0.25));
+      col = mix(col, fc, fillA(dL, px));
+      alpha = max(alpha, fillA(dL, px));
+    }
   }
   return vec4f(col, alpha);
 }
@@ -548,13 +569,28 @@ const HZ = 0.02;
       let H = 0.1 + 0.07 * h;
       let c = b + vec2f(0.008 * sin(t * 0.8 + id) * u.b.x, -H);
       let td = sdSeg(pMid, b, c) - 0.0014;
-      let v = pMid - c;
-      let a = atan2(v.y, v.x);
-      let hr = 0.016 * (0.75 + 0.25 * pow(abs(sin(a * 5.0 + id)), 0.5)) * select(1.0, 1.2, v.y > 0.0);
-      let hd = length(v) - hr;
-      let fc = mix(mix(C(19), C(8), 0.45), mix(C(20), C(8), 0.35), step(0.0, -v.y));
       col = mix(col, mix(C(24), C(8), 0.45), fillA(td, px));
-      col = mix(col, fc, fillA(hd, px));
+      // Fronds: drooping tapered strokes in three greens, laid over one another.
+      let v = pMid - c;
+      if (dot(v, v) < 0.0016) {
+        for (var f = 0; f < 16; f++) {
+          let ff = f32(f);
+          let hf = hash1(ff * 3.7 + id * 5.1);
+          let ang = -1.5708 + (ff / 15.0 - 0.5) * 5.6 + 0.25 * (hf - 0.5) + 0.07 * sin(t * 1.1 + ff + id) * u.b.x;
+          let len = 0.021 * (0.75 + 0.45 * hash1(ff + id * 7.0));
+          let dir = vec2f(cos(ang), sin(ang));
+          let mid = dir * len * 0.5 + vec2f(0.0, len * 0.06);
+          let tipP = dir * len + vec2f(0.0, len * (0.25 + 0.35 * abs(dir.x)));
+          let sA = clamp(dot(v, dir) / len, 0.0, 1.0);
+          let wv = len * 0.1 * (1.0 - 0.8 * sA) * (0.7 + 0.3 * abs(sin(sA * 22.0)));
+          let fd = min(sdSeg(v, vec2f(0.0), mid), sdSeg(v, mid, tipP)) - wv;
+          var fcl = mix(mix(C(19), C(8), 0.4), mix(C(20), C(8), 0.35), step(0.35, hf));
+          fcl = mix(fcl, mix(C(21), C(8), 0.45), step(0.75, hf) * 0.8 * (0.4 + 0.6 * lt));
+          fcl = mix(fcl, mix(C(19), C(8), 0.5), smoothstep(0.0, 0.8, dir.y) * 0.5);
+          col = mix(col, fcl, fillA(fd, px));
+        }
+        col = mix(col, mix(C(19), C(8), 0.55), fillA(length(v) - 0.0025, px));
+      }
     }
   }
 
