@@ -468,9 +468,9 @@ function uniforms() {
     c: [p.glass, p.spread * (1 + 0.04 * Math.sin(t * 0.6)), 1.0, hue + t * 0.01],
     colA: [...A, 1],
     colB: [...B, 1],
-    r0: [m[0][0], m[1][0], m[2][0], 0],
-    r1: [m[0][1], m[1][1], m[2][1], 0],
-    r2: [m[0][2], m[1][2], m[2][2], 0],
+    r0: [...m[0], 0],
+    r1: [...m[1], 0],
+    r2: [...m[2], 0],
   };
 }
 function rotate(ax, ang) { if (ang) Q = qnorm(qmul(qaxis(ax, ang), Q)); }
@@ -486,22 +486,51 @@ function step(dt) {
   cpos += (ctarget - cpos) * (1 - Math.exp(-dt * 2.2));
 }
 
-// Touch: one finger turns it like a trackball, two fingers pinch to zoom and
+// Arcball: the pointer lands on a sphere wrapped round the object on screen.
+// Dragging a point on it turns the object so that point follows the pointer;
+// grabbing outside the sphere lands on its rim, so dragging there spins the
+// object about the view axis like a wheel. Two fingers pinch to zoom and
 // twist to roll; a tap moves the light on, a double tap resets the view.
+const CAM_FW = (() => { const l = Math.hypot(0, -0.35, 1); return [0, -0.35 / l, 1 / l]; })();
+const CAM_RT = [1, 0, 0];
+const CAM_UP = [0, CAM_FW[2], -CAM_FW[1]];
+function ballRadius() { const dist = 6.2 * Math.max(1, 0.9 / aspect) * zoom; return Math.max(0.12, 1.9 * 1.25 / dist); }
+function ballPoint(q) {
+  const r = ballRadius();
+  let x = q[0] / r, y = -q[1] / r, z;
+  const d2 = x * x + y * y;
+  if (d2 > 1) { const d = Math.sqrt(d2); x /= d; y /= d; z = 0; } else z = Math.sqrt(1 - d2);
+  // View coordinates to world: z points back toward the camera.
+  return [0, 1, 2].map((i) => CAM_RT[i] * x + CAM_UP[i] * y - CAM_FW[i] * z);
+}
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const pts = new Map();
-let lastT = 0, downAt = 0, moved = 0, tapTimer = 0, lastTap = 0, pinch = null;
+let lastT = 0, downAt = 0, moved = 0, tapTimer = 0, lastTap = 0, pinch = null, ballPrev = null;
 function pair() { const v = [...pts.values()]; return { d: Math.hypot(v[1][0] - v[0][0], v[1][1] - v[0][1]), a: Math.atan2(v[1][1] - v[0][1], v[1][0] - v[0][0]), m: [(v[0][0] + v[1][0]) / 2, (v[0][1] + v[1][1]) / 2] }; }
-function turnBy(dx, dy, dts) {
-  const k = 3.0, ax = [-dy, -dx, 0], ang = Math.hypot(dx, dy) * k;
-  rotate(ax, ang);
-  if (ang > 0 && dts > 0) { const s = ang / dts * 0.6 / Math.hypot(...ax); omega = ax.map((v) => v * s); }
+function dragBall(q, dts) {
+  const b = ballPoint(q);
+  if (ballPrev) {
+    const ax = cross3(ballPrev, b);
+    const s = Math.hypot(...ax), c = Math.max(-1, Math.min(1, dot3(ballPrev, b)));
+    const ang = Math.atan2(s, c);
+    if (ang > 1e-5) {
+      rotate(ax, ang);
+      const k = ang / Math.max(dts, 0.008) / s;
+      omega = omega.map((v, i) => v * 0.5 + ax[i] * k * 0.5);
+    }
+  }
+  ballPrev = b;
 }
 function hookInput() {
+  canvas.style.cursor = 'grab';
+  canvas.addEventListener('pointerdown', () => { canvas.style.cursor = 'grabbing'; });
+  canvas.addEventListener('pointerup', () => { canvas.style.cursor = 'grab'; });
   canvas.addEventListener('pointerdown', (e) => {
     pts.set(e.pointerId, toP(e));
     lastT = performance.now();
-    if (pts.size === 1) { downAt = lastT; moved = 0; omega = [0, 0, 0]; }
-    if (pts.size === 2) { pinch = pair(); moved = 1; }
+    if (pts.size === 1) { downAt = lastT; moved = 0; omega = [0, 0, 0]; ballPrev = ballPoint(toP(e)); }
+    if (pts.size === 2) { pinch = pair(); moved = 1; ballPrev = null; }
   });
   canvas.addEventListener('pointermove', (e) => {
     if (!pts.has(e.pointerId)) return;
@@ -511,15 +540,14 @@ function hookInput() {
     if (pts.size === 1) {
       const dx = q[0] - prev[0], dy = q[1] - prev[1];
       moved += Math.abs(dx) + Math.abs(dy);
-      turnBy(dx, dy, dts);
+      dragBall(q, dts);
     } else if (pts.size >= 2 && pinch) {
       const c = pair();
       zoom = Math.max(0.45, Math.min(2.2, zoom * pinch.d / Math.max(c.d, 1e-3)));
       let da = c.a - pinch.a;
       if (da > Math.PI) da -= 2 * Math.PI;
       if (da < -Math.PI) da += 2 * Math.PI;
-      rotate([0, 0, 1], da);
-      turnBy((c.m[0] - pinch.m[0]) * 0.6, (c.m[1] - pinch.m[1]) * 0.6, dts);
+      rotate(CAM_FW, da);
       pinch = c;
     }
     lastT = now;
@@ -528,6 +556,7 @@ function hookInput() {
     if (!pts.has(e.pointerId)) return;
     pts.delete(e.pointerId);
     if (pts.size < 2) pinch = null;
+    if (pts.size === 1) ballPrev = ballPoint([...pts.values()][0]);
     if (pts.size === 0 && performance.now() - lastT > 80) omega = [0, 0, 0];
     if (pts.size === 0 && moved < 0.01 && performance.now() - downAt < 300) {
       const now = performance.now();
