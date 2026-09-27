@@ -371,15 +371,34 @@ const HOUSE_Z = 5.5;
   var col = mix(C(30), C(20), 0.25);
   col = mix(col, C(30) * 0.75, strokeA(fract(v.x / (R * 0.09)) - 0.5, 0.1, 0.12) * 0.6);
   var alpha = fillA(skirtD, px);
-  if (d < px * 2.0) {
-    var fc = select(C(31), mix(C(31), C(32), 0.4), (i32(floor(seg)) % 2) == 0);
-    let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
-    fc = mix(fc, C(32), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.45, 0.9, r / rr), 2.0) * lt);
-    fc = mix(fc, C(31) * 0.7, smoothstep(0.3, 0.8, v.y / R) * 0.6 + smoothstep(0.22 * R, 0.1 * R, r));
-    fc = mix(fc, C(31) * 0.8, strokeA((fs - 0.5) * r * 6.2832 / N, px * 0.45, px) * smoothstep(0.15, 0.4, r / R));
-    fc = mix(fc, C(33), strokeA(d, px * 0.5, px));
-    col = mix(col, fc, fillA(d, px));
-    alpha = max(alpha, fillA(d, px));
+  // Three layers of leaves, back to front, each on its own spacing.
+  for (var L = 0; L < 3; L++) {
+    let fl = f32(L);
+    let NL = 17.0 + fl * 7.0;
+    let sg = a * NL / 6.2832 + sd * (1.0 + fl * 0.37) + fl * 0.43;
+    let fsL = fract(sg);
+    let tipL = 1.0 - abs(fsL - 0.5) * 2.0;
+    let hL = hash1(floor(sg) * 1.37 + sd + fl * 11.0);
+    let lenL = (1.06 - fl * 0.14) * (1.0 + (0.34 - fl * 0.08) * down + 0.26 * (hL - 0.5));
+    let rrL = R * lenL * (0.55 + 0.45 * pow(tipL, 0.7)) * (1.0 - 0.2 * smoothstep(0.35, 0.0, abs(fsL - 0.5)) * step(0.45, hL));
+    // Front layers are gappy and sit toward the top, so leaves fan out
+    // over the ones behind instead of closing into a disc.
+    let keep = select(1.0, step(0.3, hL) * step(v.y / R, 0.45), L == 1) * select(1.0, step(0.45, hL) * step(v.y / R, 0.1), L == 2);
+    let dL = (r - rrL) * 0.8 + (1.0 - keep) * 1e3;
+    if (dL < px * 2.0) {
+      var fc = C(31) * 0.8;
+      if (L == 1) { fc = mix(C(31), C(32), select(0.3, 0.55, hL > 0.5)); }
+      if (L == 2) { fc = mix(C(31), C(32), select(0.6, 0.85, hL > 0.6)); }
+      let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
+      fc = mix(fc, C(32), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.4, 0.9, r / rrL), 2.0) * lt * (0.35 + 0.3 * fl));
+      fc = mix(fc, C(31) * 0.7, smoothstep(0.3, 0.85, v.y / R) * (0.65 - fl * 0.15));
+      fc = mix(fc, mix(C(32), C(30), 0.5), smoothstep(0.7, 1.0, r / rrL) * step(0.84, hL) * 0.8);
+      fc = mix(fc, C(31) * 0.65, strokeA((fsL - 0.5) * r * 6.2832 / NL, px * 0.42, px) * smoothstep(0.15, 0.4, r / R));
+      fc = mix(fc, C(33), strokeA(dL, px * 0.45, px) * (0.5 + 0.2 * fl));
+      fc = mix(fc, fc * 0.72, smoothstep(0.35, 0.1, r / R) * (1.0 - fl * 0.25));
+      col = mix(col, fc, fillA(dL, px));
+      alpha = max(alpha, fillA(dL, px));
+    }
   }
   return vec4f(col, alpha);
 }
