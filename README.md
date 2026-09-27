@@ -6,6 +6,10 @@ Browser-based generative art: fractals, Perlin noise, swarm intelligence, reacti
 
 ## Experiments
 
+**Light & Glass · WebGPU**
+
+- **Sliced Light**: a glowing sphere built from stacked frosted discs inside dichroic glass panes; drag to turn, tap to change the light
+
 **Studio · WebGPU** (newest first)
 
 Animated versions of my own paintings. A brush layer rebuilds each scene from hundreds of painted marks laid along the scene's own stroke directions, with a second pass of fine strokes and pointillist dots.

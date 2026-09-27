@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Sliced Light — WebGPU</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="spectrum" selected>Spectrum</option>
+      <option value="ember">Ember</option>
+      <option value="ice">Ice</option>
+      <option value="neon">Neon</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Discs <span class="val" id="discsVal">50</span></label><input type="range" id="discs" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Spread <span class="val" id="spreadVal">40</span></label><input type="range" id="spread" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Glass <span class="val" id="glassVal">60</span></label><input type="range" id="glass" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Spin <span class="val" id="spinVal">30</span></label><input type="range" id="spin" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Colour cycle <span class="val" id="cycleVal">40</span></label><input type="range" id="cycle" min="0" max="100" value="40"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to turn it · Tap to change the light · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+const SHADER = /* wgsl */ `
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+fn fbm(p0: vec2f) -> f32 {
+  var p = p0; var a = 0.5; var s = 0.0;
+  for (var k = 0; k < 4; k++) { s += a * vnoise(p); p = p * 2.03 + vec2f(1.7, 9.2); a *= 0.5; }
+  return s / 0.9375;
+}
+// Coverage of a shape from its signed distance (negative inside), one pixel wide.
+fn fillA(d: f32, px: f32) -> f32 { return clamp(0.5 - d / px, 0.0, 1.0); }
+// Coverage of an outline of half-width w along the shape's edge.
+fn strokeA(d: f32, w: f32, px: f32) -> f32 { return clamp(0.5 - (abs(d) - w) / px, 0.0, 1.0); }
+fn sdBox(p: vec2f, b: vec2f) -> f32 { let d = abs(p) - b; return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0); }
+fn sdSeg(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let pa = p - a; let ba = b - a;
+  let h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  return length(pa - ba * h);
+}
+fn sdTri(p: vec2f, p0: vec2f, p1: vec2f, p2: vec2f) -> f32 {
+  let e0 = p1 - p0; let e1 = p2 - p1; let e2 = p0 - p2;
+  let v0 = p - p0; let v1 = p - p1; let v2 = p - p2;
+  let pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  let pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  let pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  let s = sign(e0.x * e2.y - e0.y * e2.x);
+  let d = min(min(vec2f(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+                  vec2f(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+                  vec2f(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+  return -sqrt(d.x) * sign(d.y);
+}
+fn rot2(p: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * p.x - s * p.y, s * p.x + c * p.y); }
+// Paper: a little fibre and grain, and ink that prints slightly unevenly.
+fn paperize(col: vec3f, pos: vec2f, grain: f32) -> vec3f {
+  let fibre = 0.965 + 0.035 * vnoise(pos * vec2f(0.02, 0.09));
+  let speck = hash21(floor(pos / 1.5)) - 0.5;
+  return col * fibre * (1.0 + speck * grain * 0.6) + (hash21(pos) - 0.5) * grain * 0.25;
+}
+// Registration mark: a ring with a cross through it.
+fn regMark(p: vec2f, c: vec2f, r: f32, px: f32) -> f32 {
+  let q = p - c;
+  let ring = strokeA(length(q) - r, px * 0.6, px);
+  let cross = max(strokeA(sdSeg(q, vec2f(-r * 1.7, 0.0), vec2f(r * 1.7, 0.0)), px * 0.5, px),
+                  strokeA(sdSeg(q, vec2f(0.0, -r * 1.7), vec2f(0.0, r * 1.7)), px * 0.5, px));
+  return max(ring, cross);
+}
+const INK = vec3f(0.07, 0.06, 0.08);
+const PAPER = vec3f(0.94, 0.91, 0.84);
+// Hairlines where a banding field crosses each whole number.
+fn bandLines(v: f32, px: f32) -> f32 {
+  let fw = max(fwidth(v), 1e-5);
+  let d = min(fract(v), 1.0 - fract(v)) / fw;
+  return (1.0 - smoothstep(0.35, 1.25, d)) * (1.0 - smoothstep(0.25, 0.5, fw));
+}
+// Paper margin with a keyline and registration marks at the edge midpoints.
+fn posterFrame(col: vec3f, uv: vec2f, asp: f32, px: f32) -> vec3f {
+  let p = vec2f((uv.x - 0.5) * asp, uv.y - 0.5);
+  let m = 0.024;
+  let d = sdBox(p, vec2f(asp * 0.5 - m, 0.5 - m));
+  var c = mix(PAPER, col, fillA(d, px));
+  c = mix(c, INK, strokeA(d, px * 0.9, px));
+  let r = m * 0.28;
+  var mk = max(regMark(p, vec2f(0.0, -0.5 + m * 0.5), r, px), regMark(p, vec2f(0.0, 0.5 - m * 0.5), r, px));
+  mk = max(mk, max(regMark(p, vec2f(-asp * 0.5 + m * 0.5, 0.0), r, px), regMark(p, vec2f(asp * 0.5 - m * 0.5, 0.0), r, px)));
+  return mix(c, INK, mk * step(0.0, d) * 0.8);
+}
+// The ink plate prints a hair off register from the colour.
+const MISREG = vec2f(0.0016, -0.0011);
+// Bushes after Chris's canvases: a near-black core with stippled highlights
+// that thicken toward the lit edge. lit runs 0 (deep shadow) to 1 (sunlit
+// rim); cell sets the stipple size. Two offset layers of jittered dots.
+fn stippleBush(p: vec2f, lit: f32, cell: f32, px: f32, dark: vec3f, mid: vec3f, hiA: vec3f, hiB: vec3f, warm: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mix(dark, mid, 0.55), smoothstep(0.35, 0.9, l));
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / cell + vec2f(fl * 0.5, fl * 0.37);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 7.1);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.3 + fl), hash21(id + 2.7 + fl)) - 0.5) * 0.55;
+    let dens = smoothstep(0.05, 0.85, l + (hash21(id + 5.9) - 0.5) * 0.45);
+    if (h < 0.4 + 0.6 * dens) {
+      let k = hash21(id + 9.1 + fl);
+      var dc = select(select(hiA, hiB, k > 0.55), warm, k > 0.95);
+      dc = mix(mix(dark, mid, 0.8), dc, smoothstep(0.15, 0.75, l + (h - 0.5) * 0.3));
+      let r = (0.24 + 0.2 * hash21(id + 3.3)) * mix(0.8, 1.0, l);
+      c = mix(c, dc, fillA((length(f) - r) * cell, px));
+    }
+  }
+  // Fine grain: small clusters of tiny points scattered over the big dots,
+  // light on the lit side, dark flecks breaking up the highlights.
+  let fcell = max(cell * 0.38, px * 2.2);
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let g = p / fcell + vec2f(fl * 0.31, fl * 0.57);
+    let id = floor(g);
+    let clump = vnoise(p / (cell * 2.3) + seed + fl * 4.0);
+    let h = hash21(id + seed * 1.7 + fl * 3.3);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 4.1 + fl), hash21(id + 6.3 + fl)) - 0.5) * 0.6;
+    let r = 0.16 + 0.14 * hash21(id + 8.8);
+    let a = fillA((length(f) - r) * fcell, px);
+    if (L == 0) {
+      let on = step(h, smoothstep(0.1, 0.9, l) * smoothstep(0.3, 0.7, clump) * 0.9);
+      let k = hash21(id + 2.2);
+      let dc = select(select(hiB, hiA, k > 0.5), warm, k > 0.9);
+      c = mix(c, mix(c, dc, 0.9), a * on);
+    } else {
+      let on = step(h, (0.25 + 0.35 * l) * smoothstep(0.45, 0.8, clump));
+      c = mix(c, dark, a * on * 0.85);
+    }
+  }
+  return c;
+}
+// Painted layers over any surface: three scales of points in drifting
+// clusters, each a lighter or darker note of the colour beneath, so flat
+// fills read as built up from many small marks. amt 0..1 sets how much.
+fn layerTex(p: vec2f, col: vec3f, px: f32, amt: f32, scale: f32, seed: f32) -> vec3f {
+  var c = col;
+  let lum = dot(col, vec3f(0.3, 0.59, 0.11));
+  // Contrast grows with amt: soft tonal flecks at low amounts, crisp marks at full.
+  let ct = smoothstep(0.1, 0.9, amt);
+  let lightC = mix(col, min(col * 1.2 + vec3f(0.035, 0.03, 0.01), vec3f(1.0)), 0.45 + 0.55 * ct);
+  let darkC = mix(col, col * 0.7, 0.3 + 0.7 * ct);
+  var sc = array<f32, 3>(1.0, 0.55, 0.3);
+  for (var L = 0; L < 3; L++) {
+    let fl = f32(L);
+    let cell = max(scale * sc[L], px * 2.2);
+    let g = p / cell + vec2f(fl * 0.37, fl * 0.61);
+    let id = floor(g);
+    let h = hash21(id + seed + fl * 5.3);
+    let f = fract(g) - 0.5 - (vec2f(hash21(id + 1.7 + fl), hash21(id + 4.9 + fl)) - 0.5) * 0.6;
+    let clump = vnoise(p / (cell * 3.1) + seed * 0.37 + fl * 7.0);
+    let r = 0.17 + 0.15 * hash21(id + 8.3);
+    let a = fillA((length(f) - r) * cell, px);
+    let on = step(h, amt * (0.12 + 0.55 * smoothstep(0.3, 0.8, clump)));
+    let k = hash21(id + 2.9 + fl);
+    // Dark ground takes more light marks, light ground more dark ones.
+    let dc = select(darkC, lightC, k < 0.35 + 0.35 * (1.0 - lum) + (1.0 - ct) * 0.3);
+    c = mix(c, dc, a * on * (0.75 - fl * 0.12));
+  }
+  return c;
+}
+// Bark: stippled light and shade plus fine strokes along the trunk.
+// u runs along the trunk, v across it (-1..1), lit is 0..1.
+fn barkTex(u: f32, v: f32, w: f32, lit: f32, px: f32, dark: vec3f, mid: vec3f, hi: vec3f, seed: f32) -> vec3f {
+  let l = clamp(lit, 0.0, 1.0);
+  var c = mix(dark, mid, smoothstep(-0.6, 0.4, v * 0.0 + l * 2.0 - 1.0));
+  let g = vec2f(u / (w * 0.55), v * 2.2);
+  let id = floor(g);
+  let f = fract(g) - 0.5;
+  let h = hash21(id + seed);
+  let stroke = strokeA(f.x * 0.4 + 0.15 * sin(u / w * 3.0 + id.y), 0.08, 0.1);
+  c = mix(c, select(dark * 0.85, hi, h > 0.5 - 0.3 * l), stroke * step(0.35, h) * 0.8);
+  for (var L = 0; L < 2; L++) {
+    let fl = f32(L);
+    let cs = w * (0.42 - fl * 0.18);
+    let g2 = vec2f(u, v * w) / max(cs, px * 2.2) + fl * 0.5;
+    let id2 = floor(g2);
+    let f2 = fract(g2) - 0.5 - (vec2f(hash21(id2 + 3.1), hash21(id2 + 5.7)) - 0.5) * 0.5;
+    let h2 = hash21(id2 + seed + fl * 9.0);
+    let dc = select(dark * 0.8, mix(mid, hi, 0.7), h2 < l * 0.8);
+    c = mix(c, dc, fillA((length(f2) - 0.22) * max(cs, px * 2.2), px) * step(0.45, hash21(id2 + 7.7)));
+  }
+  return c;
+}
+// Shadow pooled on the ground under a clump: a flat ellipse pushed away
+// from the sun, longer when the sun is low. Returns coverage.
+fn groundShadow(p: vec2f, foot: vec2f, r: f32, side: f32, low: f32, px: f32) -> f32 {
+  let len = r * (1.1 + 2.2 * low);
+  let c = foot + vec2f(-side * len * 0.55, r * 0.12);
+  return fillA((length((p - c) / vec2f(len, r * 0.32)) - 1.0) * r * 0.32, px);
+}
+// Halftone screen on a 45 degree grid; dots cover roughly 'amt' of the area.
+fn halftone(p: vec2f, cell: f32, amt: f32, px: f32) -> f32 {
+  let f = fract(rot2(p, 0.785) / cell) - 0.5;
+  let r = sqrt(clamp(amt, 0.0, 1.0) / 3.14159) * cell;
+  return fillA(length(f) * cell - r, px) * step(0.01, amt);
+}
+// Printed sun or moon: rings around a disc of radius r0.
+fn rings(p: vec2f, c: vec2f, r0: f32, gap: f32, n: f32, px: f32) -> f32 {
+  let d = length(p - c) - r0;
+  let on = step(gap * 0.5, d) * step(d, gap * (n + 0.5));
+  return strokeA((fract(d / gap + 0.5) - 0.5) * gap, px * 0.55, px) * on;
+}
+// Scalloped wave crests: a row of arcs along y = y0.
+fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
+  let f = (fract(p.x / w) - 0.5) * w;
+  let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
+  return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
+}
+// Small bird: two ink arcs.
+fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
+  let q = (p - c) / s;
+  let x = abs(q.x);
+  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
+  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
+}
+
+// Sliced Light: a sphere made from a stack of flat, frosted discs lit from
+// within, caged in sheets of dichroic glass. The discs are parallel slices,
+// each as wide as the sphere at that point; between and beyond them stand
+// square panes whose colour shifts with the angle you look through them.
+// Their edges catch the light as bright lines and they tint whatever glows
+// behind them. Every surface is a flat plane, so each ray visits them in
+// order along the stack.
+struct U {
+  a: vec4f,    // time, aspect, px, seed
+  b: vec4f,    // yaw, pitch, distance, disc count
+  c: vec4f,    // dichroic, spread, glow, hue shift
+  colA: vec4f, // light at one end of the stack
+  colB: vec4f, // light at the other end
+}
+@group(0) @binding(0) var<uniform> u: U;
+
+const R = 1.0;
+const S = 1.1;
+const EXTRA = 4;
+
+@diagnostic(off, derivative_uniformity) fn hsv(h: f32, s: f32, v: f32) -> vec3f {
+  let k = vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0);
+  let p = abs(fract(vec3f(h) + k) * 6.0 - 3.0);
+  return v * mix(vec3f(1.0), clamp(p - 1.0, vec3f(0.0), vec3f(1.0)), s);
+}
+@diagnostic(off, derivative_uniformity) fn lampAt(x: f32) -> vec3f {
+  let f = smoothstep(-R, R, x);
+  return mix(u.colA.rgb, u.colB.rgb, f);
+}
+@diagnostic(off, derivative_uniformity) fn line(d: f32, w: f32) -> f32 { return 1.0 - smoothstep(w * 0.5, w * 1.5, abs(d)); }
+
+@diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let t = u.a.x; let asp = u.a.y; let px = u.a.z;
+  let p = vec2f((uv.x - 0.5) * asp, 0.5 - uv.y);
+  let yaw = u.b.x; let pitch = u.b.y; let dist = u.b.z;
+  let N = i32(u.b.w);
+  let dich = u.c.x; let spread = u.c.y;
+
+  // Orbit camera around the stack, which runs along x.
+  let cp = cos(pitch);
+  let ro = vec3f(sin(yaw) * cp, sin(pitch), -cos(yaw) * cp) * dist;
+  let fw = normalize(-ro);
+  let rt = normalize(cross(vec3f(0.0, 1.0, 0.0), fw));
+  let up = cross(fw, rt);
+  let FOC = 1.9;
+  let rd = normalize(fw * FOC + rt * p.x + up * p.y);
+
+  let K = 2 * N - 1 + 2 * EXTRA;
+  let sp = 2.0 * R * 0.9 / f32(2 * N - 2) * spread;
+  var col = vec3f(0.0);
+  var T = vec3f(1.0);
+  let fwd = rd.x > 0.0;
+  if (abs(rd.x) > 1e-4) {
+    for (var j = 0; j < 64; j++) {
+      if (j >= K) { break; }
+      let k = select(K - 1 - j, j, fwd);
+      let ki = k - EXTRA;
+      let x = f32(ki - (N - 1)) * sp;
+      let tt = (x - ro.x) / rd.x;
+      if (tt <= 0.0) { continue; }
+      let h = ro + rd * tt;
+      let pw = px * tt / FOC * 1.3;
+      let isDisc = ki >= 0 && ki <= 2 * N - 2 && (ki % 2) == 0 && abs(x) < R * 0.97;
+      let rr = length(h.yz);
+      let lamp = lampAt(x);
+      if (isDisc) {
+        let rad = sqrt(max(R * R - x * x, 0.0));
+        if (rr < rad + pw) {
+          let f = rr / rad;
+          let cover = 1.0 - smoothstep(rad - pw, rad + pw, rr);
+          // Frosted glow, whiter at the heart, with two fine dark rings.
+          var e = lamp * (1.35 - 0.55 * f * f);
+          e = mix(e, vec3f(1.0), 0.12 * (1.0 - f) * (1.0 - f));
+          let rings = max(line(rr - rad + pw, pw), line(rr - rad * 0.64, pw) * 0.7);
+          e *= 1.0 - 0.85 * rings;
+          let a = 0.7 * cover;
+          col += T * e * a;
+          T *= 1.0 - a * 0.8;
+        }
+      } else if (((ki % 4) + 4) % 4 == 1 || ki < 0 || ki > 2 * N - 2) {
+        let m = max(abs(h.y), abs(h.z));
+        if (m < S + pw * 2.0) {
+          let inP = 1.0 - smoothstep(S - pw, S + pw, m);
+          let cosv = abs(rd.x);
+          // Dichroic film: the tint slides through the spectrum with angle.
+          let hue = fract(u.c.w + f32(k) * 0.035 + (1.0 - cosv) * 0.95 + h.y * 0.08);
+          let tint = hsv(hue, 0.8, 1.0);
+          let near = exp(-rr * rr / (R * R) * 1.1) * exp(-max(abs(x) - R, 0.0) * 1.5);
+          // Light from the lamp scattering in the sheet, and a sheen at grazing angles.
+          col += T * (lamp * 0.035 + tint * 0.025 * dich) * near * inP;
+          col += T * tint * dich * 0.1 * pow(1.0 - cosv, 3.0) * inP;
+          T *= mix(vec3f(1.0), tint * 0.95, dich * 0.14 * inP);
+          // Bright edges where the pane's cut faces catch the light.
+          let edge = line(m - S, pw * 1.1 + 0.002);
+          // Edges light up most where they pass nearest the lamp.
+          let ey = exp(-pow(length(h.yz) / (S * 1.3), 2.0) * 1.5);
+          let eg = (0.12 + 1.1 * ey) * exp(-max(abs(x) - R * 0.5, 0.0) * 1.4);
+          col += T * edge * (lamp * 1.1 + tint * 0.5 * dich) * eg;
+        }
+      }
+    }
+  }
+  // Halo round the whole lamp, and a dark studio behind.
+  let dd = length(ro - rd * dot(ro, rd));
+  let lampMid = (u.colA.rgb + u.colB.rgb) * 0.5;
+  var bg = vec3f(0.012, 0.012, 0.016) + lampMid * u.c.z * (0.28 * exp(-dd * dd * 1.2) + 0.06 * exp(-dd * 0.8));
+  // A glossy floor catching the glow.
+  if (rd.y < 0.0) {
+    let tf = (-S - 0.02 - ro.y) / rd.y;
+    let fp = ro + rd * tf;
+    let fd = length(fp.xz);
+    bg += lampMid * u.c.z * 0.25 * exp(-fd * fd * 0.6) * smoothstep(0.0, -0.2, rd.y);
+    bg += vec3f(0.02) * exp(-fd * 0.3);
+  }
+  col += T * bg;
+  col = 1.0 - exp(-col * 1.25);
+  col = pow(col, vec3f(0.92));
+  let vig = 1.0 - 0.35 * dot(uv - 0.5, uv - 0.5);
+  col *= vig;
+  col += (hash21(pos.xy + fract(t) * 91.0) - 0.5) * 0.02;
+  return vec4f(col, 1.0);
+}
+`;
+
+const NAME = 'sliced-light';
+// Each palette cycles through pairs: [one end of the stack, the other end].
+const PALETTES = {
+  spectrum: [['#ff4a12', '#ffa81c'], ['#1c8cff', '#38e6ff'], ['#16c95a', '#b8ff3a'], ['#ff1f5a', '#ff8a2a'], ['#7a3cff', '#ff3cd0'], ['#ffc21c', '#ff6a10']],
+  ember:    [['#ff3a0a', '#ffb02a'], ['#ff6a1a', '#ffd84a'], ['#e0201a', '#ff7a2a'], ['#ff9a2a', '#fff0a0']],
+  ice:      [['#1a6aff', '#3af0ff'], ['#3a3cff', '#a0e0ff'], ['#10b0c0', '#c8fff4'], ['#5a2aff', '#40c8ff']],
+  neon:     [['#ff2ad0', '#2af0ff'], ['#2aff6a', '#ff2a8a'], ['#ffe02a', '#2a6aff'], ['#ff5a1a', '#1aff9a']],
+};
+const hexv = (s) => hex(s).map((v) => Math.pow(v, 1.6) * 1.4);
+
+const p = {};
+let yaw = 0.7, pitch = 0.22, vyaw = 0, vpitch = 0;
+let cpos = 0, ctarget = 0, hue = Math.random();
+function readControls() {
+  p.pal = PALETTES[$('palette').value];
+  p.discs = 6 + Math.round(+$('discs').value / 100 * 10);
+  p.spread = 0.7 + +$('spread').value / 100 * 0.9;
+  p.glass = +$('glass').value / 100 * 1.4;
+  p.spin = +$('spin').value / 100 * 0.35;
+  p.cycle = +$('cycle').value / 100 * 0.12;
+  for (const id of ['discs', 'spread', 'glass', 'spin', 'cycle']) $(id + 'Val').textContent = $(id).value;
+}
+function generate() {
+  hue = Math.random();
+  ctarget = Math.floor(ctarget) + 1 + Math.floor(Math.random() * 3);
+  vyaw += (Math.random() - 0.5) * 0.08;
+}
+function colorAt(pos) {
+  const n = p.pal.length;
+  const i = ((Math.floor(pos) % n) + n) % n, j = (i + 1) % n;
+  let f = pos - Math.floor(pos);
+  f = f * f * (3 - 2 * f);
+  const a = p.pal[i], b = p.pal[j];
+  const mix = (x, y) => hexv(x).map((v, q) => v + (hexv(y)[q] - v) * f);
+  return [mix(a[0], b[0]), mix(a[1], b[1])];
+}
+function uniforms() {
+  const dist = 6.2 * Math.max(1, 0.9 / aspect);
+  const [A, B] = colorAt(cpos);
+  const ty = tl.active ? tl.x * 0.5 : 0, tp = tl.active ? (tl.y - 0.5) * 0.6 : 0;
+  return {
+    a: [t, aspect, 1 / Math.max(1, H), seed],
+    b: [yaw + ty, Math.max(-1.1, Math.min(1.1, pitch + tp)), dist, p.discs],
+    c: [p.glass, p.spread * (1 + 0.04 * Math.sin(t * 0.6)), 1.0, hue + t * 0.01],
+    colA: [...A, 1],
+    colB: [...B, 1],
+  };
+}
+function step(dt) {
+  if (!dragging) {
+    yaw += (p.spin + vyaw) * dt;
+    pitch += vpitch * dt;
+    vyaw *= Math.exp(-dt * 1.5);
+    vpitch *= Math.exp(-dt * 2.5);
+    pitch += (0.22 - pitch) * (1 - Math.exp(-dt * 0.3));
+  }
+  ctarget += dt * p.cycle;
+  cpos += (ctarget - cpos) * (1 - Math.exp(-dt * 2.2));
+}
+let last = [0, 0], downAt = 0, moved = 0, lastT = 0;
+function onDown(q) { last = q; moved = 0; downAt = performance.now(); lastT = downAt; vyaw = 0; vpitch = 0; }
+function onMove(q) {
+  const now = performance.now(), dts = Math.max(0.001, (now - lastT) / 1000);
+  const dx = q[0] - last[0], dy = q[1] - last[1];
+  yaw += dx * 3.2;
+  pitch = Math.max(-1.1, Math.min(1.1, pitch + dy * 2.4));
+  vyaw = dx * 3.2 / dts * 0.5; vpitch = dy * 2.4 / dts * 0.5;
+  moved += Math.abs(dx) + Math.abs(dy);
+  last = q; lastT = now;
+}
+// A tap moves the light on to its next colour.
+function onUp() { if (moved < 0.01 && performance.now() - downAt < 350) ctarget = Math.floor(ctarget) + 1; }
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+const colsOf = (name) => PALETTES[name].map((h) => [...hex(h), 1]);
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: [1, 2] });
+const clk = clock(gpu);
+const tl = tilt();
+let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
+let seed = Math.random() * 100;
+
+function toP(e) {
+  const r = canvas.getBoundingClientRect();
+  return [((e.clientX - r.left) / r.width - 0.5) * aspect, (e.clientY - r.top) / r.height - 0.5];
+}
+let dragging = false, pointer = [0, 0];
+canvas.addEventListener('pointerdown', (e) => { dragging = true; pointer = toP(e); canvas.setPointerCapture(e.pointerId); onDown(pointer); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) { pointer = toP(e); onMove(pointer); } });
+const release = () => { if (dragging) { dragging = false; onUp(); } };
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+
+readControls();
+generate();
+const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
+
+function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
+let fpsCount = 0, fpsAt = performance.now();
+let loop = null, playing = false;
+function tick(f) {
+  const dt = Math.min(clk.deltaTime, 0.1);
+  t += dt;
+  step(dt);
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const el of document.querySelectorAll('#panel input[type=range]')) el.addEventListener('input', readControls);
+for (const el of document.querySelectorAll('#panel select')) el.addEventListener('change', readControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', () => { seed = Math.random() * 100; generate(); if (!playing) frame(gpu, render); });
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = NAME + '-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+// The viewer may already have pressed Play while WebGPU was starting up.
+if (!playing) togglePlay();
+</script>
+</body>
+</html>
