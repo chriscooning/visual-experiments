@@ -363,7 +363,7 @@ const HY = 0.06;   // horizon
     pad -= step(c.y, q.y) * step(abs(q.x - c.x), r.x * 0.9) * 0.45 * r.y * abs(sin((q.x - c.x) / r.x * 7.0 + sd));
     let inPad = fillA(pad, px);
     // Near-black underside, stippled light thickening toward the top rim.
-    let side = sign(u.d.z - q.x + 1e-4);
+    let side = clamp(u.d.z / 0.35, -1.0, 1.0);
     let plit = clamp(0.45 - (q.y - c.y) / r.y * 0.55 + (q.x - c.x) / r.x * 0.25 * side, 0.0, 1.0);
     var fc = stippleBush(q, plit, max(0.0024 * s, px * 2.4), px, mix(C(11), C(12), 0.15), C(12), C(13), mix(C(13), C(12), 0.45), C(10), sd * 3.0 + fk);
     // Sunward rim along the top of each pad.
@@ -540,7 +540,7 @@ const HY = 0.06;   // horizon
   if (p.y > ht - 0.2) {
     var hc = C(11);
     // Chaparral: stippled clumps with dark cores and shadows, thinning down the slope.
-    let side = sign(u.d.z - p.x + 1e-4);
+    let side = clamp(u.d.z / 0.35, -1.0, 1.0);
     let cw = 0.026;
     for (var rr = 0; rr < 4; rr++) {
       let fr = f32(rr);

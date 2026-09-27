@@ -385,7 +385,14 @@ const HY = -0.02;
   let X0 = p.x / (0.5 * asp);
   let tilt = u.d.xy;
   let sun = u.d.zw;
-  let sunDir = normalize(vec2f(sign(sun.x - p.x + 1e-4) * 0.8, -0.6));
+  // The sun is far off, so one light direction lights the whole scene: from
+  // the side it sits on, from behind the hills toward us, and from higher up
+  // the higher it stands. Dragging it slides the light smoothly over every
+  // slope; nothing flips at the line beneath it.
+  let lx = clamp(sun.x / (0.3 * asp), -1.2, 1.2);
+  let elev = clamp((HY - sun.y) * 2.2, 0.04, 1.0);
+  let Ld = normalize(vec3f(lx, 0.25 + elev, -0.55));
+  let sunDir = normalize(vec2f(lx * 0.8, -0.6 - 0.2 * elev));
   let wind = u.b.x;
   var col: vec3f;
 
@@ -442,8 +449,10 @@ const HY = -0.02;
   let Xr = X0 + tilt.x * 0.02;
   let rt = ridgeTop(Xr);
   if (p.y > rt - px * 2.0) {
+    let rsx = (ridgeTop(Xr + 0.02) - ridgeTop(Xr - 0.02)) / 0.04 / (0.5 * asp);
+    let rn = normalize(vec3f(rsx * 1.6, 1.0, (p.y - rt) * 9.0 + 0.2));
     var rc = C(7);
-    rc = mix(rc, mix(C(7), C(8), 0.35), post(clamp(0.7 - (p.y - rt) * 6.0, 0.0, 1.0), 3.0) * 0.6);
+    rc = mix(rc, mix(C(7), C(8), 0.35), post(clamp(dot(rn, Ld) * 0.9 + 0.3, 0.0, 1.0), 3.0) * 0.6);
     rc = mix(rc, C(5), 0.25);
     col = mix(col, rc, fillA(rt - p.y, px));
     col = mix(col, C(2), strokeA(p.y - rt, px * 0.5, px) * 0.5);
@@ -463,8 +472,12 @@ const HY = -0.02;
   if (p.y > mt - px * 2.0) {
     // Light from the smooth hill shape, sloping with depth so the terminator
     // curves down the hill instead of falling in vertical stripes.
-    let s = (hillShape(Xm + 0.06) - hillShape(Xm - 0.06)) / 0.12;
-    let lit = clamp(0.5 + s * 2.4 * sign(sun.x - p.x + 1e-4) - (p.y - mt) * 3.0, 0.0, 1.0);
+    // Surface normal: tipped across the slope by its side gradient, and
+    // turning to face us further down from the crest.
+    let sx = (hillShape(Xm + 0.03) - hillShape(Xm - 0.03)) / 0.06 / (0.5 * asp);
+    let dz = p.y - mt;
+    let nrm = normalize(vec3f(sx * 1.6, 1.0, dz * 7.0 + 0.15));
+    let lit = clamp(dot(nrm, Ld) * 0.85 + 0.35, 0.0, 1.0);
     var hc = mix(C(9), C(8), post(lit, 4.0));
     hc = mix(hc, C(9), smoothstep(0.0, 0.25, p.y - mt) * 0.3);
     // Combed strokes following the crest.
@@ -472,7 +485,7 @@ const HY = -0.02;
     hc = mix(hc, hc * 0.9, step(0.78, comb));
     // Cloud shadows sliding over the slopes.
     let cs = fbm(vec2f(Xm * 2.2 - ft * 0.03, p.y * 5.0 + u.a.w));
-    hc = mix(hc, C(9), step(0.6, cs) * 0.4);
+    hc = mix(hc, C(9), smoothstep(0.54, 0.68, cs) * 0.4);
     // Trail: a pale path switchbacking up the slope.
     if (u.e.y > 0.5) {
       let tx = (-0.15 + 0.12 * sin(p.y * 16.0 + u.a.w) - tilt.x * 0.04) * 0.5 * asp;
@@ -509,7 +522,9 @@ const HY = -0.02;
   let gt = fgTop(Xg);
   let d = p.y - gt;
   if (d > -0.01) {
-    var gc = mix(C(10), C(11), post(smoothstep(0.0, 0.3, d), 4.0));
+    let fsx = (fgTop(Xg + 0.02) - fgTop(Xg - 0.02)) / 0.04 / (0.5 * asp);
+    let fn3 = normalize(vec3f(fsx * 1.6, 1.0, d * 3.0 + 0.1));
+    var gc = mix(C(10), C(11), post(smoothstep(0.0, 0.3, d) * 0.7 + (1.0 - clamp(dot(fn3, Ld) * 0.9 + 0.35, 0.0, 1.0)) * 0.5, 4.0));
     // Grass in rows that widen toward the viewer; each cell holds one blade.
     let rr = sqrt(max(d, 0.0)) * 46.0;
     let rowId = floor(rr);

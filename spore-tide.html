@@ -454,7 +454,7 @@ const HZ = -0.04;
         let cy = groundTop(cx) + (rr + 0.8) * 0.07;
         let r = 0.014 + 0.025 * clamp((cy - groundTop(cx)) / 0.4, 0.0, 1.0) + 0.006 * h;
         let v = p - vec2f(cx, cy);
-        let side = sign(sun.x - cx + 1e-4);
+        let side = sunSide();
         gc = mix(gc, C(16) * 0.7, groundShadow(liftShadow(p, groundZ(p)), vec2f(cx, cy + r * 0.2), r * 1.1, side, lowSun(), px) * (0.18 + 0.3 * lt));
         let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
         let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
@@ -464,7 +464,7 @@ const HZ = -0.04;
     }
     // Mushroom shadows lying across the ground, longer as the sun drops.
     {
-      let side = sign(sun.x + 1e-4);
+      let side = sunSide();
       let L = 0.4 + 2.2 * lowSun();
       var sh = 0.0;
       let ps = liftShadow(p, groundZ(p));
@@ -498,7 +498,7 @@ const HZ = -0.04;
       let r = 0.012 + 0.012 * h;
       let cy = groundTop(cx) + r * 0.3;
       let v = p - vec2f(cx, cy);
-      let side = sign(sun.x - cx + 1e-4);
+      let side = sunSide();
       let sd = max(length(v / vec2f(1.35, 1.0)) - r * (1.0 + 0.14 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.3);
       let blit = (0.12 + 0.88 * lt) * clamp(0.3 - v.y / r * 0.95 + v.x / r * 0.3 * side, 0.0, 1.0);
       col = mix(col, stippleBush(p, blit, 0.0026, px, C(25), C(26), C(27), C(28), C(18), h * 17.0), fillA(sd, px));
@@ -524,7 +524,7 @@ const HZ = -0.04;
     let w = R * (0.2 - 0.07 * sAt) * (1.0 + 0.4 * smoothstep(0.15, 0.0, sAt));
     if (dmin < w + px * 2.0) {
       let tip = stemAt(i, 1.0);
-      let side = sign(sun.x - m.x + 1e-4);
+      let side = sunSide();
       let across = (p.x - mix(m.x, tip.x, sAt)) / w;
       var sc = mix(C(23), C(22), post(clamp(0.5 + across * 0.6 * side, 0.0, 1.0) * lt + (1.0 - lt) * 0.2, 2.0));
       // The painting's dotted outline down each side, and a sheen.
@@ -545,7 +545,7 @@ const HZ = -0.04;
       let gill = length((q - vec2f(0.0, R * 0.02)) / vec2f(1.0, 0.1 + 0.3 * gv)) - R * 0.98;
       let capD = min(dome, gill);
       let isGill = gill < 0.0 && q.y > 0.0;
-      let side = sign(sun.x - tip.x + 1e-4);
+      let side = sunSide();
       var cc: vec3f;
       if (isGill) {
         let ga = atan2(q.y / (0.1 + 0.3 * gv), q.x);
@@ -660,8 +660,12 @@ const HZ = -0.04;
 // catches the shadow that would fall further from its caster on flat
 // ground, and sits higher on screen than its footprint; so a shadow is
 // looked up at the lifted point and bends over terraces and mounds.
+// The sun is far away, so its light comes from one direction across the
+// whole scene: -1 from the left .. 1 from the right, easing through 0 as it
+// passes overhead or straight ahead (never flipping at a line on screen).
+@diagnostic(off, derivative_uniformity) fn sunSide() -> f32 { return clamp(u.c.x / 0.35, -1.0, 1.0); }
 @diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
-  let side = sign(u.c.x - p.x + 1e-4);
+  let side = sunSide();
   return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
 }
 // A terrace step inside one contour band: a flat tread, then a drop.
@@ -673,9 +677,7 @@ const HZ = -0.04;
 // from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
 // ground line; returns 0 shade .. 1 lit, in three flat steps.
 @diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
-  let side = sign(u.c.x - x + 1e-4);
-  let az = clamp(abs(u.c.x - x) * 1.2, 0.2, 1.0);
-  let v = 0.5 - s * 3.5 * side * az - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  let v = 0.5 - s * 3.5 * sunSide() - depth * 2.5 + 0.35 * (1.0 - lowSun());
   return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;

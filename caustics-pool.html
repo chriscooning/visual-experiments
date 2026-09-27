@@ -438,7 +438,7 @@ const HOUSE_Z = 5.5;
   let across = dot(rel, nrm) - sin(tt * 3.14159) * 0.015;
   let w = w0 * (1.0 - 0.4 * tt);
   let d = abs(across) - w;
-  let bl = smoothstep(-0.3, 0.7, across / w * sign(u.c.x - p.x + 1e-4)) * light();
+  let bl = smoothstep(-0.3, 0.7, across / w * sunSide()) * light();
   var col = barkTex(along, across / w, w, bl, px, C(30) * 0.55, C(30) * 0.8, C(30), b.x * 11.0);
   col = mix(col, C(30), post(bl, 2.0) * 0.4);
   col = mix(col, C(30) * 0.6, step(0.72, fract(along / (w0 * 0.85) + abs(across / w) * 0.25)));
@@ -455,7 +455,7 @@ const HOUSE_Z = 5.5;
   let sun = u.c.xy;
   let moon = u.d.xy;
   let tilt = u.d.w;
-  let side = sign(sun.x + 1e-4);
+  let side = sunSide();
   let pFar = p0 + vec2f(tilt * 0.008, 0.0);
   let p = p0;
 
@@ -703,6 +703,92 @@ const HOUSE_Z = 5.5;
   let land = smoothstep(Y0 - 0.12, Y0 + 0.02, p0.y);
   col = layerTex(p0, col, px, mix(0.12, 0.85, land) * (1.0 - inW * 0.8), mix(0.006, 0.013, clamp((p0.y + 0.05) * 1.6, 0.0, 1.0)), 9.0);
   return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
+}
+
+// Shared pieces for the day-cycle scenes. The page defines C(), post(),
+// light(), lowSun() and a uniform u with c = (sun x, y, height, dark) and
+// d = (moon x, y, height, _). Sky colours: C(0) top, C(1) mid, C(2)
+// horizon, C(3) sun, C(4) glow, C(5) cloud lit, C(6) cloud shade.
+@diagnostic(off, derivative_uniformity) fn skyCloud(p: vec2f, k: i32) -> vec2f {
+  let fk = f32(k);
+  let L = 0.16 + 0.18 * hash1(fk + u.a.w);
+  let cy = -1.0 + fk * 0.13;
+  let cx = fract(hash1(fk * 3.1 + u.a.w) + u.a.x * 0.0016 * (1.0 + fk * 0.2)) * 2.6 - 1.3;
+  let dx = (p.x - cx) / L;
+  if (abs(dx) > 1.0) { return vec2f(1e3, 0.0); }
+  let th = (0.014 + 0.01 * hash1(fk * 5.0)) * sqrt(1.0 - dx * dx);
+  let sc = abs(sin(dx * (6.0 + fk) + fk));
+  let top = cy - th * (1.0 + 0.8 * sc);
+  let bot = cy + th * 0.4;
+  return vec2f(max(top - p.y, p.y - bot), clamp((p.y - top) / (bot - top), 0.0, 1.0));
+}
+// Stepped sky with glow, stars, sun, moon and banded clouds below cloudMax.
+@diagnostic(off, derivative_uniformity) fn daySky(p0: vec2f, hz: f32, px: f32, t: f32, lampC: vec3f, cloudMax: f32) -> vec3f {
+  let sun = u.c.xy; let moon = u.d.xy; let dark = u.c.w;
+  let g = clamp((p0.y - hz) / -1.0, 0.0, 1.0);
+  var col = mix(C(2), C(1), post(smoothstep(0.0, 0.3, g), 5.0));
+  col = mix(col, C(0), post(smoothstep(0.28, 0.9, g), 5.0));
+  let ds = length(p0 - sun);
+  col = mix(col, C(4), post(exp(-ds * 9.0) * 0.9 * step(-0.2, u.c.z), 5.0));
+  let sg = p0 / 0.035;
+  let sid = floor(sg);
+  let sh = hash21(sid + 5.3);
+  if (sh > 0.72) {
+    let sv = p0 - (sid + 0.5 + (vec2f(hash21(sid + 1.7), hash21(sid + 8.1)) - 0.5) * 0.7) * 0.035;
+    let tw = 0.55 + 0.45 * sin(t * 1.6 + sh * 60.0);
+    let sa = atan2(sv.y, sv.x);
+    let sdd = length(sv) - 0.0035 * (0.5 + sh) * tw * (0.2 + 0.8 * pow(abs(cos(sa * 2.0)), 12.0));
+    col = mix(col, lampC, fillA(sdd, px) * dark);
+  }
+  col = mix(col, C(3), fillA(ds - 0.045, px));
+  col = mix(col, C(4), strokeA(ds - 0.058, px * 0.5, px) * 0.6 * step(-0.2, u.c.z));
+  let dm = length(p0 - moon);
+  let mc = mix(lampC, vec3f(0.95, 0.94, 0.88), 0.6);
+  col = mix(col, mix(col, lampC, 0.25), post(exp(-dm * 8.0) * dark, 4.0));
+  col = mix(col, mc, fillA(dm - 0.032, px));
+  col = mix(col, mc * 0.82, fillA(length(p0 - moon - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(p0 - moon - vec2f(-0.008, 0.01)) - 0.006, px));
+  for (var i = 0; i < 9; i++) {
+    let cl = skyCloud(p0, i);
+    if (cl.x < px * 2.0 && p0.y < cloudMax) {
+      let under = mix(1.0 - cl.y, cl.y, lowSun());
+      var cc = mix(C(6), C(5), post(under, 3.0));
+      cc = mix(cc, C(4), exp(-length(p0 - sun) * 3.0) * lowSun() * 0.5);
+      cc = mix(cc, C(6) * 0.9, strokeA(fract(p0.x / 0.012 + cl.y * 2.0) - 0.5, 0.05, 0.08) * 0.25);
+      col = mix(col, cc, fillA(cl.x, px));
+      col = mix(col, C(6) * 0.85, strokeA(cl.x, px * 0.5, px) * 0.7);
+    }
+  }
+  return col;
+}
+// Cloud shadows sliding over the land: q is a ground position (x across,
+// y into the distance). 0 in sun, up to 1 under a cloud; none after dusk.
+@diagnostic(off, derivative_uniformity) fn cloudShade(q: vec2f, t: f32) -> f32 {
+  let n = fbm(vec2f(q.x * 1.1 - t * 0.012, q.y * 2.6 + u.a.w * 1.3));
+  return smoothstep(0.5, 0.64, n) * light() * (1.0 - 0.5 * lowSun());
+}
+// Terrain for cast shadows. A point on ground raised by z (screen units)
+// catches the shadow that would fall further from its caster on flat
+// ground, and sits higher on screen than its footprint; so a shadow is
+// looked up at the lifted point and bends over terraces and mounds.
+// The sun is far away, so its light comes from one direction across the
+// whole scene: -1 from the left .. 1 from the right, easing through 0 as it
+// passes overhead or straight ahead (never flipping at a line on screen).
+@diagnostic(off, derivative_uniformity) fn sunSide() -> f32 { return clamp(u.c.x / 0.35, -1.0, 1.0); }
+@diagnostic(off, derivative_uniformity) fn liftShadow(p: vec2f, z: f32) -> vec2f {
+  let side = sunSide();
+  return p + vec2f(-side * z * (0.6 + 2.8 * lowSun()), z);
+}
+// A terrace step inside one contour band: a flat tread, then a drop.
+// f is the position within the band 0..1; returns height about zero.
+@diagnostic(off, derivative_uniformity) fn terrace(f: f32) -> f32 { return smoothstep(0.55, 0.97, f) - f + 0.5; }
+// Aerial haze in flat steps: d 0 near .. 1 far.
+@diagnostic(off, derivative_uniformity) fn hazeStep(col: vec3f, d: f32, hz: vec3f) -> vec3f { return mix(col, hz, post(clamp(d, 0.0, 1.0), 4.0) * 0.75); }
+// Light raking across a slope: the terminator sits where the surface turns
+// from the sun, and slides as the sun moves. s is the slope (dy/dx) of the
+// ground line; returns 0 shade .. 1 lit, in three flat steps.
+@diagnostic(off, derivative_uniformity) fn slopeLight(s: f32, x: f32, depth: f32) -> f32 {
+  let v = 0.5 - s * 3.5 * sunSide() - depth * 2.5 + 0.35 * (1.0 - lowSun());
+  return post(clamp(v, 0.0, 1.0) * light(), 3.0);
 }
 `;
 const PIXEL_BUDGET = 4500000;
