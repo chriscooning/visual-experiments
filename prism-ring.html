@@ -50,8 +50,9 @@
   <div class="control-group"><label>Tile length <span class="val" id="lenVal">45</span></label><input type="range" id="len" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Light height <span class="val" id="elevVal">30</span></label><input type="range" id="elev" min="0" max="100" value="30"></div>
   <div class="control-group"><label>Light speed <span class="val" id="speedVal">35</span></label><input type="range" id="speed" min="0" max="100" value="35"></div>
-  <div class="control-group"><label>Glass colour <span class="val" id="glassVal">80</span></label><input type="range" id="glass" min="0" max="100" value="80"></div>
-  <div class="control-group"><label>Reflections <span class="val" id="reflVal">60</span></label><input type="range" id="refl" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Glass colour <span class="val" id="glassVal">85</span></label><input type="range" id="glass" min="0" max="100" value="85"></div>
+  <div class="control-group"><label>Reflections <span class="val" id="reflVal">70</span></label><input type="range" id="refl" min="0" max="100" value="70"></div>
+  <div class="control-group"><label>Dispersion <span class="val" id="dispVal">60</span></label><input type="range" id="disp" min="0" max="100" value="60"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
     <button class="btn primary" id="generate">Generate</button>
@@ -304,7 +305,7 @@ struct U {
   a: vec4f,   // time, aspect, px, seed
   b: vec4f,   // yaw, pitch, distance, rings
   c: vec4f,   // light azimuth, light elevation, twist, hue
-  d: vec4f,   // glass tint, reflections, tile length, _
+  d: vec4f,   // glass tint, reflections, tile length, dispersion
 }
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -383,7 +384,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
 // Glass colour. Dichroic film transmits one hue and reflects its
 // complement; both slide through the spectrum with the angle of incidence.
 @diagnostic(off, derivative_uniformity) fn dHue(cosI: f32, r: f32) -> f32 { return fract(u.c.w + 0.55 * (1.0 - cosI) + r * 0.13); }
-@diagnostic(off, derivative_uniformity) fn transC(cosI: f32, r: f32) -> vec3f { return hsv(dHue(cosI, r), 0.72, 1.0); }
+@diagnostic(off, derivative_uniformity) fn transC(cosI: f32, r: f32) -> vec3f { return hsv(dHue(cosI, r), 0.88, 1.0); }
 @diagnostic(off, derivative_uniformity) fn reflC(cosI: f32, r: f32) -> vec3f { return hsv(fract(dHue(cosI, r) + 0.5), 0.8, 1.0); }
 
 @diagnostic(off, derivative_uniformity) fn lightDir() -> vec3f {
@@ -391,6 +392,53 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   return normalize(vec3f(cos(az) * cos(el), sin(az) * cos(el), sin(el)));
 }
 
+// The tiles a short wall-level segment q0 -> q1 can touch, for one of the
+// (at most two) rings it spans: (ring, first index, count).
+@diagnostic(off, derivative_uniformity) fn span(q0: vec2f, q1: vec2f, w: i32) -> vec3f {
+  let a0 = tileNear(q0);
+  let a1 = tileNear(q1);
+  if (w == 1 && a1.x == a0.x) { return vec3f(0.0); }
+  let r = select(i32(a0.x), i32(a1.x), w == 1);
+  let N = ringN(r);
+  let off = f32(r) * 0.37;
+  let i0 = fract((atan2(q0.y, q0.x) - off) / 6.2832) * N;
+  let i1 = fract((atan2(q1.y, q1.x) - off) / 6.2832) * N;
+  var d = i1 - i0;
+  d -= N * round(d / N);
+  let lo = floor(min(i0, i0 + d)) - 1.0;
+  let cnt = min(floor(max(i0, i0 + d)) + 1.0 - lo + 1.0, 7.0);
+  return vec3f(f32(r), lo, cnt);
+}
+// Light reaching the wall at P from direction L through the tile layer.
+// Glass bends red, green and blue slightly differently, so each channel is
+// tested along its own direction; rgb is the tint each picked up and
+// edges (bent light at the tile outlines) darken per channel too.
+@diagnostic(off, derivative_uniformity) fn shadowTrace(P: vec2f, L: vec3f, LR: vec3f, LB: vec3f) -> vec3f {
+  let glass = u.d.x;
+  let ro = vec3f(P, 0.0005);
+  let far = P + L.xy * (H / max(L.z, 0.05));
+  var Tr = vec3f(1.0);
+  for (var w = 0; w < 2; w++) {
+    let sp = span(P, far, w);
+    let r = i32(sp.x);
+    let N = ringN(r);
+    for (var k = 0; k < 7; k++) {
+      if (f32(k) >= sp.z) { break; }
+      let tl = tileOf(r, (sp.y + f32(k) + N * 2.0) % N);
+      let tc = transC(abs(dot(L.xy, tl.n)), f32(r));
+      let hR = hitTile(ro, LR, tl);
+      let hG = hitTile(ro, L, tl);
+      let hB = hitTile(ro, LB, tl);
+      let eR = smoothstep(0.84, 0.98, max(abs(hR.uv.x), abs(hR.uv.y)));
+      let eG = smoothstep(0.84, 0.98, max(abs(hG.uv.x), abs(hG.uv.y)));
+      let eB = smoothstep(0.84, 0.98, max(abs(hB.uv.x), abs(hB.uv.y)));
+      let hit = vec3f(step(0.5, hR.face), step(0.5, hG.face), step(0.5, hB.face));
+      let tint = mix(vec3f(0.85), tc * 0.95, glass) * (vec3f(1.0) - vec3f(eR, eG, eB) * 0.85);
+      Tr *= mix(vec3f(1.0), tint, hit);
+    }
+  }
+  return Tr;
+}
 // Light on the wall at P: direct light filtered through any tiles between
 // P and the light, reflected streaks from nearby tiles, contact lines.
 @diagnostic(off, derivative_uniformity) fn wallShade(P: vec2f) -> vec3f {
@@ -398,37 +446,14 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   let glass = u.d.x;
   let ro = vec3f(P, 0.0005);
   let spot = 0.55 + 0.45 * exp(-dot(P, P) * 0.5);
-  // Shadows: walk the light's path through the tile layer.
-  let far = P + Ls.xy * (H / max(Ls.z, 0.05));
-  var Tr = vec3f(1.0);
-  var edge = 0.0;
-  var seen = array<f32, 10>(-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0);
-  var ns = 0;
-  for (var s = 0; s < 4; s++) {
-    let q = mix(P, far, (f32(s) + 0.25) / 4.0);
-    let ri = tileNear(q);
-    for (var o = -1; o <= 1; o++) {
-      let r = i32(ri.x);
-      let N = ringN(r);
-      let i = (ri.y + f32(o) + N) % N;
-      let key = f32(r) * 1000.0 + i;
-      var dup = false;
-      for (var k = 0; k < 10; k++) { if (k < ns && seen[k] == key) { dup = true; } }
-      if (dup) { continue; }
-      if (ns < 10) { seen[ns] = key; ns++; }
-      let tl = tileOf(r, i);
-      let h = hitTile(ro, Ls, tl);
-      if (h.face > 0.0) {
-        let cosI = abs(dot(Ls.xy, tl.n));
-        Tr *= mix(vec3f(0.9), transC(cosI, f32(r)) * 0.9, glass);
-        // Light bends at the glass edges: dark lines along each tile's outline.
-        let e = max(abs(h.uv.x), abs(h.uv.y));
-        edge = max(edge, smoothstep(0.86, 0.98, e) * select(0.6, 0.9, h.face > 1.5));
-      }
-    }
-  }
+  // Shadows, split into a spectrum at every glass edge.
+  let dsp = 0.05 * u.d.w;
+  let rot = vec2f(cos(dsp), sin(dsp));
+  let LsR = normalize(vec3f(Ls.x * rot.x - Ls.y * rot.y, Ls.x * rot.y + Ls.y * rot.x, Ls.z * (1.0 - dsp * 0.3)));
+  let LsB = normalize(vec3f(Ls.x * rot.x + Ls.y * rot.y, -Ls.x * rot.y + Ls.y * rot.x, Ls.z * (1.0 + dsp * 0.3)));
+  let Tr = shadowTrace(P, Ls, LsR, LsB);
   let direct = max(Ls.z, 0.0) * 1.35 * spot;
-  var light = vec3f(0.38) + direct * 1.2 * Tr * (1.0 - edge * 0.8);
+  var light = vec3f(0.3) + direct * 1.1 * Tr;
   // Reflections: each nearby tile mirrors the light onto the wall.
   let refl = u.d.y;
   if (refl > 0.01) {
@@ -436,28 +461,22 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
     let tl0 = tileOf(i32(ri0.x), ri0.y);
     let m0 = Ls - 2.0 * dot(Ls, vec3f(tl0.n, 0.0)) * vec3f(tl0.n, 0.0);
     let far2 = P + m0.xy * (H / max(m0.z, 0.05));
-    var seen2 = array<f32, 10>(-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0);
-    var ns2 = 0;
-    for (var s = 0; s < 4; s++) {
-      let q = mix(P, far2, (f32(s) + 0.25) / 4.0);
-      let ri = tileNear(q);
-      for (var o = -1; o <= 1; o++) {
-        let r = i32(ri.x);
-        let N = ringN(r);
-        let i = (ri.y + f32(o) + N) % N;
-        let key = f32(r) * 1000.0 + i;
-        var dup = false;
-        for (var k = 0; k < 10; k++) { if (k < ns2 && seen2[k] == key) { dup = true; } }
-        if (dup) { continue; }
-        if (ns2 < 10) { seen2[ns2] = key; ns2++; }
-        let tl = tileOf(r, i);
+    for (var w = 0; w < 2; w++) {
+      let sp = span(P, far2, w);
+      let r = i32(sp.x);
+      let N = ringN(r);
+      for (var k = 0; k < 7; k++) {
+        if (f32(k) >= sp.z) { break; }
+        let tl = tileOf(r, (sp.y + f32(k) + N * 2.0) % N);
         let n3 = vec3f(tl.n, 0.0);
         let m = Ls - 2.0 * dot(Ls, n3) * n3;
         let h = hitTile(ro, m, tl);
         if (h.face == 1.0) {
           let cosI = abs(dot(Ls.xy, tl.n));
           let fall = smoothstep(1.0, 0.7, abs(h.uv.x)) * smoothstep(1.0, 0.8, abs(h.uv.y));
-          light += reflC(cosI, f32(r)) * refl * 0.8 * direct * fall * (0.4 + 0.6 * (1.0 - cosI));
+          // Dispersion fans the reflected beam into a spectrum across its width.
+          let spec = hsv(fract(dHue(cosI, f32(r)) + 0.5 + h.uv.y * 0.22 * u.d.w + h.uv.x * 0.08), 0.9, 1.0);
+          light += mix(reflC(cosI, f32(r)), spec, 0.7) * refl * 1.1 * direct * fall * (0.4 + 0.6 * (1.0 - cosI));
         }
       }
     }
@@ -502,7 +521,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
     var Tv = vec3f(1.0);
     var seen = array<f32, 14>(-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -1.0);
     var ns = 0;
-    let steps = 5;
+    let steps = 4;
     for (var s = 0; s < steps; s++) {
       let q = mix(A.xy, B.xy, (f32(s) + 0.5) / f32(steps));
       let ri = tileNear(q);
@@ -556,7 +575,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   return vec4f(col, 1.0);
 }
 `;
-const PIXEL_BUDGET = 2500000;
+const PIXEL_BUDGET = 1800000;
 
 const NAME = 'prism-ring';
 const p = {};
@@ -570,7 +589,8 @@ function readControls() {
   p.glass = +$('glass').value / 100;
   p.refl = +$('refl').value / 100 * 1.4;
   p.len = 0.05 + +$('len').value / 100 * 0.08;
-  for (const id of ['rings', 'twist', 'elev', 'speed', 'glass', 'refl', 'len']) $(id + 'Val').textContent = $(id).value;
+  p.disp = +$('disp').value / 100 * 1.6;
+  for (const id of ['rings', 'twist', 'elev', 'speed', 'glass', 'refl', 'len', 'disp']) $(id + 'Val').textContent = $(id).value;
   if (!inputHooked) { inputHooked = true; hookInput(); }
 }
 function generate() { hueGoal += 0.2 + Math.random() * 0.4; }
@@ -580,7 +600,7 @@ function uniforms() {
     a: [t, aspect, 1 / Math.max(1, H), seed],
     b: [yaw + (tl.active ? tl.x * 0.4 : 0), pitch + (tl.active ? (tl.y - 0.5) * 0.4 : 0), z, p.rings],
     c: [lightAz, p.elev, p.twist, hue],
-    d: [p.glass, p.refl, p.len, 0],
+    d: [p.glass, p.refl, p.len, p.disp],
   };
 }
 function step(dt) {
@@ -662,7 +682,7 @@ try {
 
 // Desktop renders above screen resolution within a pixel budget and lets the
 // browser scale down, for crisper edges and finer marks; phones stay light.
-const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(PIXEL_BUDGET) });
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 2e6 ? 1.25 : b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(PIXEL_BUDGET) });
 const clk = clock(gpu);
 const tl = tilt();
 let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
