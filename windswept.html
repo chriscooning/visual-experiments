@@ -446,77 +446,161 @@ const DOT = 0.0011;
 // ones and every face, top and cove sits where perspective puts it.
 const EYE = 1.0;
 const PLAT = 0.6;
-// The broad line the coast follows at depth Z, headlands aside: out from
-// near us toward the point, then turning back behind the bluff.
-@diagnostic(off, derivative_uniformity) fn coastBase(Z: f32) -> f32 {
-  let v = Z - (4.55 + 0.2 * hash1(u.a.w * 1.9));
-  return 0.32 * (Z - 1.14) + 0.25 - 1.1 * (v + sqrt(v * v + 0.02));
-}
-// The waterline where the coast passes depth Z, as (its X, the X of the
-// broad line, the width of the cliffs there, how steeply the headland there
-// falls toward its tip). The line is pushed out in blocky headlands of
-// different sizes with coves between; land lies to its left. Some headlands
-// are long ridges falling to the sea, some hold their height out to a sheer
-// end.
-@diagnostic(off, derivative_uniformity) fn coastAt(Z: f32) -> vec4f {
-  let c = coastBare(Z);
-  return vec4f(c.x + 0.04 * (vnoise(vec2f(Z * 5.0, u.a.w)) - 0.5), c.yzw);
-}
-// The waterline without its wobble (never more than 0.02 off it).
-@diagnostic(off, derivative_uniformity) fn coastBare(Z: f32) -> vec4f {
+// The coast where it passes depth Z: its waterline's x, the x of the broad
+// line it follows without its headlands, the width of the cliffs there
+// measured square to the coast, how far a headland there falls toward its
+// tip, and the waterline's slope dx/dz with k = sqrt(1 + slope^2), which
+// turns distances along x into distances square to the coast.
+struct Coast { x: f32, base: f32, w: f32, fall: f32, slope: f32, k: f32 }
+// The coast's shape for this seed, worked out once per pixel: where it
+// turns back behind the bluff and how far out it lies there, and for each
+// headland the depth of its middle, half its length, how far it reaches
+// out and how far it falls.
+var<private> CTURN: f32;
+var<private> CTURNX: f32;
+var<private> HLAND: array<vec4f, 3>;
+@diagnostic(off, derivative_uniformity) fn coastSetup() {
   let sd = u.a.w;
-  let base = coastBase(Z);
-  var x = base;
+  CTURN = 4.55 + 0.2 * hash1(sd * 1.9);
+  var hl = array<vec3f, 3>(vec3f(3.25, 0.3, 0.38), vec3f(3.95, 0.2, 0.34), vec3f(4.4, 0.14, 0.26));
+  for (var k = 0; k < 3; k++) {
+    let fi = f32(k);
+    HLAND[k] = vec4f(hl[k].x + (hash1(fi * 3.1 + sd) - 0.5) * 0.12, hl[k].y * (0.85 + 0.3 * hash1(fi * 5.3 + sd)),
+                     hl[k].z * (0.85 + 0.3 * hash1(fi * 7.7 + sd)), 0.05 + 0.3 * hash1(fi * 9.1 + sd));
+  }
+  CTURNX = coastBare(CTURN).x;
+}
+// The broad line the coast follows at depth Z, headlands aside, and its
+// slope: out from near us toward the point, swinging out to sea in the
+// distance, then turning back behind the bluff.
+@diagnostic(off, derivative_uniformity) fn coastBase(Z: f32) -> vec2f {
+  let v = Z - CTURN;
+  let r = sqrt(v * v + 0.02);
+  let sw = clamp(Z - 3.0, 0.0, 1.5);
+  return vec2f(0.32 * (Z - 1.14) + 0.25 + 0.35 * sw * sw - 1.1 * (v + r),
+               0.32 + select(0.0, 0.7 * sw, Z - 3.0 < 1.5) - 1.1 * (1.0 + v / r));
+}
+// The waterline without its slow waver: below the bluff it bends back into
+// a cove; across the cove a big headland stands out toward the sea, its
+// whole face in view, and smaller ones recede beyond it.
+@diagnostic(off, derivative_uniformity) fn coastBare(Z: f32) -> Coast {
+  let sd = u.a.w;
+  let bs = coastBase(Z);
+  var x = bs.x;
+  var dx = bs.y;
+  // The cove.
+  let cv = (Z - 2.45) / 0.3;
+  let ce = 0.08 * exp(-cv * cv);
+  x -= ce;
+  dx += ce * 2.0 * cv / 0.3;
   var fall = 0.0;
   var fw = 1e-3;
-  // Headlands every 0.8 or so in depth, each reaching barely half that way
-  // to the next, so only the two either side of Z count.
-  let i0 = clamp(floor((Z - 1.7) / 0.8), 0.0, 3.0);
-  for (var k = 0; k < 2; k++) {
-    let fi = i0 + f32(k);
-    if (fi > 3.0) { break; }
-    let q = (Z - 1.7 - fi * 0.8 - (hash1(fi * 3.1 + sd) - 0.5) * 0.25) / (0.2 + 0.12 * hash1(fi * 5.3 + sd));
+  // The headlands, each one's near side a little shorter than its far side.
+  for (var k = 0; k < 3; k++) {
+    let hk = HLAND[k];
+    var q = (Z - hk.x) / hk.y;
+    var dq = 1.0 / hk.y;
+    if (q < 0.0) { q *= 1.2; dq *= 1.2; }
+    // (Past half again its length a headland is all but gone.)
+    if (abs(q) > 1.7) { continue; }
     let b = exp(-q * q * q * q);
-    x += (0.12 + 0.25 * hash1(fi * 7.7 + sd)) * b;
-    fall += (0.15 + 0.8 * hash1(fi * 9.1 + sd)) * b;
+    x += hk.z * b;
+    dx -= hk.z * b * 4.0 * q * q * q * dq;
+    fall += hk.w * b;
     fw += b;
   }
-  return vec4f(x, base, 0.26 + 0.12 * (0.5 + 0.5 * sin(Z * 2.3 + sd * 5.0)), mix(0.6, fall / fw, min(fw, 1.0)));
+  var c: Coast;
+  c.x = x;
+  c.base = bs.x;
+  c.w = 0.11 + 0.04 * (0.5 + 0.5 * sin(Z * 2.3 + sd * 5.0));
+  c.fall = mix(0.3, fall / fw, min(fw, 1.0));
+  c.slope = dx;
+  c.k = sqrt(1.0 + dx * dx);
+  return c;
 }
-// How far inland of the waterline (X, Z) lies, its line roughened; negative
-// out over the water.
-@diagnostic(off, derivative_uniformity) fn landIn(X: f32, Z: f32, c: vec4f) -> f32 {
-  return c.x - X + 0.05 * (vnoise(vec2f(X * 5.0, Z * 5.0) + u.a.w) - 0.5);
+// The waterline with its slow waver (never more than 0.02 in x); the land
+// never reaches more than 0.039 past it square to the coast.
+@diagnostic(off, derivative_uniformity) fn waver(c0: Coast, Z: f32) -> Coast {
+  var c = c0;
+  c.x += 0.04 * (vnoise(vec2f(Z * 5.0, u.a.w)) - 0.5);
+  return c;
+}
+@diagnostic(off, derivative_uniformity) fn coastAt(Z: f32) -> Coast { return waver(coastBare(Z), Z); }
+// Whether (X, Z) lies well out to sea of the coast c0 (before its waver).
+@diagnostic(off, derivative_uniformity) fn offshore(X: f32, c0: Coast) -> bool { return X > c0.x + 0.025 + 0.04 * c0.k; }
+// The point of the waterline square to the coast from (X, Z): the foot of
+// the cliff there.
+@diagnostic(off, derivative_uniformity) fn footOf(X: f32, Z: f32, c: Coast) -> vec2f {
+  let dl = (c.x - X) / (c.k * c.k);
+  return vec2f(X + dl, Z - c.slope * dl);
+}
+// Buttresses along the cliffs: each a column standing out from the face,
+// its front rounded and its edges cut sharp by the gullies either side;
+// some wide, some narrow, some standing further out, the big ones split by
+// lesser gullies. Looked up at the foot of the cliff F, so they run straight
+// up the face: 0 in a gully's crease, rising quickly across a buttress's
+// front. butCell gives the big buttress F belongs to, as two random numbers
+// and how far F lies from the gully at its edge (one row of cells does, laid
+// along the coastline F follows); the shading reuses it.
+@diagnostic(off, derivative_uniformity) fn butCell(F: vec2f) -> vec3f {
+  let uu = (F.x + F.y) / 0.2;
+  let g = floor(uu);
+  let f = uu - g;
+  var d1 = 9.0; var d2 = 9.0; var id = 0.0;
+  for (var j = -1; j <= 1; j++) {
+    let cj = g + f32(j);
+    let d = abs(f32(j) + 0.15 + 0.7 * hash1(cj * 1.37 + u.a.w * 3.1) - f);
+    if (d < d1) { d2 = d1; d1 = d; id = cj; } else if (d < d2) { d2 = d; }
+  }
+  return vec3f(hash1(id * 2.13 + u.a.w), hash1(id * 5.71 + u.a.w + 3.0), 0.5 * (d2 - d1));
+}
+@diagnostic(off, derivative_uniformity) fn butOf(F: vec2f, v: vec3f) -> f32 {
+  let big = sqrt(clamp(v.z * 2.2, 0.0, 1.0)) * (0.5 + 0.5 * v.x);
+  // The lesser gullies: sharp creases at a wavering spacing along the coast.
+  let small = pow(abs(sin((F.x + F.y) * 36.0 + 2.5 * vnoise(F * 9.0 + u.a.w))), 0.35);
+  return big * (0.62 + 0.38 * small);
+}
+@diagnostic(off, derivative_uniformity) fn buttress(F: vec2f) -> f32 { return butOf(F, butCell(F)); }
+// How far inland of the waterline (X, Z) lies, square to the coast, its line
+// roughened and carved into buttresses and gullies; negative out at sea.
+@diagnostic(off, derivative_uniformity) fn landIn(X: f32, Z: f32, c: Coast) -> f32 {
+  let F = footOf(X, Z, c);
+  return (c.x - X) / c.k + 0.03 * (vnoise(F * 5.0 + u.a.w) - 0.5) + 0.06 * (buttress(F) - 0.6);
 }
 // Height of the land at (X, Z): the bluff's flat top, each headland a ridge
-// falling away steeply toward its tip, and cliffs dropping to the sea, rounding over
-// only near the top; on some stretches a steep lower cliff and a scrubby
-// slope above it. Below zero out over the water.
+// falling a little toward its tip, and cliffs of bare rock dropping sheer to
+// the sea for most of their height under a steep, scrubby shoulder that
+// rounds over onto the top. Below zero out over the water.
 @diagnostic(off, derivative_uniformity) fn landH(X: f32, Z: f32) -> f32 { return landHc(X, Z, coastAt(Z)); }
-// Width of the beach at the foot of the cliff at depth Z: in some coves,
-// none out on the headlands.
-@diagnostic(off, derivative_uniformity) fn beachW(Z: f32, c: vec4f) -> f32 {
-  return 0.07 * (1.0 - smoothstep(0.02, 0.12, c.x - c.y)) * smoothstep(0.45, 0.7, vnoise(vec2f(Z * 1.6, 11.0 + u.a.w)));
+// Width of the beach at the foot of the cliff at depth Z: in the cove under
+// the big headland and in some others nearby, none out on the headlands.
+@diagnostic(off, derivative_uniformity) fn beachW(Z: f32, c: Coast) -> f32 {
+  let cove = exp(-pow((Z - 2.8) / 0.28, 2.0));
+  return 0.07 * (1.0 - smoothstep(0.02, 0.12, c.x - c.base)) * max(smoothstep(0.45, 0.7, vnoise(vec2f(Z * 1.6, 11.0 + u.a.w))) * (1.0 - smoothstep(3.6, 4.0, Z)), cove);
 }
-@diagnostic(off, derivative_uniformity) fn landHc(X: f32, Z: f32, c: vec4f) -> f32 {
+// How high the top of the land stands at (X, Z): out along a headland its
+// crest falls toward the tip, rising in knobs.
+@diagnostic(off, derivative_uniformity) fn landTop(X: f32, Z: f32, c: Coast) -> f32 {
+  let out = max(X - (c.base - 0.32), 0.0);
+  if (out <= 0.0) { return PLAT; }
+  return PLAT + 0.08 * (vnoise(vec2f(X * 7.0, Z * 7.0) + u.a.w * 3.0) - 0.5) * smoothstep(0.0, 0.12, out) - c.fall * out;
+}
+@diagnostic(off, derivative_uniformity) fn landHc(X: f32, Z: f32, c: Coast) -> f32 {
+  // Well inland the land stands at its full height, well out it's the sea:
+  // no need to carve the cliffs there.
+  let dB = (c.x - X) / c.k;
+  if (dB > c.w + 0.125) { return landTop(X, Z, c); }
+  if (dB < -0.04) { return dB + 0.04; }
   let d0 = landIn(X, Z, c);
   if (d0 <= 0.0) { return d0; }
   // Sand rising gently from the water to the foot of the cliff.
   let bw = beachW(Z, c);
   if (d0 < bw) { return 0.008 * d0 / bw; }
-  let d = d0 - bw;
-  // Out along a headland its crest falls toward the tip, rising in knobs.
-  let out = max(X - (c.y - c.z), 0.0);
-  var top = PLAT;
-  if (out > 0.0) { top += 0.08 * (vnoise(vec2f(X * 7.0, Z * 7.0) + u.a.w * 3.0) - 0.5) * smoothstep(0.0, 0.12, out) - c.w * out; }
-  let s = clamp(d / c.z, 0.0, 1.0);
-  let k = 2.0 + 0.8 * (0.5 + 0.5 * sin(Z * 2.9 + u.a.w * 4.0));
-  let steep = 1.0 - pow(1.0 - s, k);
-  // The lower cliff and the slope above it.
-  let lo = 0.5 + 0.2 * sin(Z * 1.7 + u.a.w * 9.0);
-  let tiered = lo * (1.0 - pow(1.0 - clamp(s / 0.3, 0.0, 1.0), 2.5)) + (1.0 - lo) * smoothstep(0.25, 1.0, s);
-  let tw = smoothstep(0.2, 0.7, 0.5 + 0.5 * sin(Z * 3.7 + u.a.w * 2.0));
-  return max(top * mix(steep, tiered, tw), 0.008 * step(0.0, bw - 1e-4));
+  let s = (d0 - bw) / c.w;
+  let lo = 0.74 + 0.08 * sin(Z * 1.7 + u.a.w * 9.0);
+  let sheer = 1.0 - pow(1.0 - min(s / 0.28, 1.0), 2.2);
+  let shoulder = smoothstep(0.15, 1.0, s);
+  return max(landTop(X, Z, c) * (lo * sheer + (1.0 - lo) * shoulder), 0.008 * step(0.0, bw - 1e-4));
 }
 // March out along the ray through screen point p to the first land it
 // meets: (the depth it met it at, or -1 if it met only the sea, the depth
@@ -524,21 +608,47 @@ const PLAT = 0.6;
 @diagnostic(off, derivative_uniformity) fn traceLand(p: vec2f) -> vec2f {
   let dy = p.y - HZ;
   let z0 = (EYE - PLAT) / dy;
-  let z1 = EYE / dy;
+  // (Past where the coast turns back it runs in at least 0.78 for every
+  // unit further out, so beyond that a ray soon lies out past it and all its
+  // breaks for good: march no further.)
+  let zc = max((CTURNX + 0.13 + 0.78 * CTURN) / max(p.x + 0.78, 0.05), CTURN + 0.05);
+  let z1 = min(EYE / dy, max(zc, z0 + 0.05));
   var za = z0;
   var zb = -1.0;
-  for (var i = 0; i <= 22; i++) {
-    let z = mix(z0, z1, f32(i) / 22.0);
-    // (Out past the waterline and its wobble there is only sea.)
+  let dz = (z1 - z0) / 30.0;
+  // Whether the last step skimmed low over the land, or ran over the water
+  // within reach of a cliff: then the ray may pass through a rounded top or
+  // the side of a headland before this step, so look there more finely,
+  // always after skimming the land (whatever lies beyond, the first land
+  // met is wanted) and after the water only if this step misses.
+  var nearLand = false;
+  var nearSea = false;
+  for (var i = 0; i <= 30; i++) {
+    let z = z0 + dz * f32(i);
+    // (Well out past the waterline there is only sea.)
     let cb = coastBare(z);
-    if (p.x * z < cb.x + 0.046) {
-      let c = vec4f(cb.x + 0.04 * (vnoise(vec2f(z * 5.0, u.a.w)) - 0.5), cb.yzw);
-      if (EYE - dy * z - landHc(p.x * z, z, c) <= 1e-5) { zb = z; break; }
+    let off = offshore(p.x * z, cb);
+    var h = -1.0;
+    var hit = false;
+    if (!off) {
+      h = landHc(p.x * z, z, waver(cb, z));
+      hit = EYE - dy * z - h <= 1e-5;
     }
+    if (nearLand || (nearSea && !hit)) {
+      for (var j = 1; j < 7; j++) {
+        let zj = z - dz + dz * f32(j) / 7.0;
+        if (EYE - dy * zj - landH(p.x * zj, zj) <= 1e-5) { zb = zj; break; }
+        za = zj;
+      }
+      if (zb > 0.0) { break; }
+    }
+    if (hit) { zb = z; break; }
     za = z;
+    nearLand = !off && h > 0.0 && EYE - dy * z - h < 0.12;
+    nearSea = !off && h <= 0.0;
   }
   if (zb > z0) {
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 6; i++) {
       let z = 0.5 * (za + zb);
       if (EYE - dy * z - landH(p.x * z, z) <= 1e-5) { zb = z; } else { za = z; }
     }
@@ -551,12 +661,12 @@ const PLAT = 0.6;
   let L = normalize(vec3f(LD.x, LD.y, -LD.z));
   var sh = 0.0;
   var t = 0.015;
-  for (var i = 0; i < 7; i++) {
+  for (var i = 0; i < 5; i++) {
     let q = P + L * t;
     if (q.y > PLAT) { break; }
     let cb = coastBare(q.z);
-    if (q.x < cb.x + 0.046) { sh = max(sh, smoothstep(0.0, 0.015, landHc(q.x, q.z, vec4f(cb.x + 0.04 * (vnoise(vec2f(q.z * 5.0, u.a.w)) - 0.5), cb.yzw)) - q.y)); }
-    t *= 1.8;
+    if (!offshore(q.x, cb)) { sh = max(sh, smoothstep(0.0, 0.015, landHc(q.x, q.z, waver(cb, q.z)) - q.y)); }
+    t *= 2.1;
   }
   return sh;
 }
@@ -650,13 +760,15 @@ const PLAT = 0.6;
   let rim = (1.0 - smoothstep(0.0, 0.0018, -sd)) * smoothstep(0.4, 0.75, lit);
   return moonCast(mix(c, mix(hi, C(5), 0.25), rim * 0.3), lit);
 }
-// The cliff's stone; the same stone in full light and deep in shadow, a
-// little of the sky in it; and how far a face of it at a given light has
+// The cliff's stone, weathered grey-brown; the same stone pale grey-cream in
+// full light and charcoal deep in shadow, a little of the sky in it; and how
+// far a face of it at a given light has
 // turned from the one to the other, a firm edge between them. Shared by
 // the masses, the face between them and the stacks.
-@diagnostic(off, derivative_uniformity) fn rockStone() -> vec3f { return mix(C(13), vec3f(dot(C(13), vec3f(0.3, 0.59, 0.11))), 0.35) * 0.95; }
-@diagnostic(off, derivative_uniformity) fn rockLight() -> vec3f { return mix(rockStone(), mix(C(12), C(5), 0.4), 0.5); }
-@diagnostic(off, derivative_uniformity) fn rockShade() -> vec3f { return mix(rockStone() * 0.52, C(1) * 0.36, 0.25); }
+@diagnostic(off, derivative_uniformity) fn grey(c: vec3f, k: f32) -> vec3f { return mix(c, vec3f(dot(c, vec3f(0.3, 0.59, 0.11))), k); }
+@diagnostic(off, derivative_uniformity) fn rockStone() -> vec3f { return grey(mix(C(13), C(12), 0.35), 0.5) * 0.92; }
+@diagnostic(off, derivative_uniformity) fn rockLight() -> vec3f { return grey(mix(C(12), C(23), 0.45), 0.35); }
+@diagnostic(off, derivative_uniformity) fn rockShade() -> vec3f { return mix(rockStone() * 0.4, C(1) * 0.28, 0.22); }
 @diagnostic(off, derivative_uniformity) fn rockLit(lit: f32) -> f32 { return smoothstep(0.04, 0.5, lit / max(LI, 0.05)) * LI; }
 // Three flat tones with a narrow, soft step between each.
 @diagnostic(off, derivative_uniformity) fn rockTone(l: f32) -> f32 {
@@ -684,7 +796,8 @@ const PLAT = 0.6;
   if (b.x < -0.1) { return true; }
   let z = (EYE - PLAT) / max(b.y - HZ, 0.02);
   let c = coastAt(z);
-  return landIn(b.x * z, z, c) > c.z + 0.05 + b.z * z;
+  // (The buttresses reach no more than 0.051 inland of the line.)
+  return (c.x - b.x * z) / c.k > c.w + 0.1 + b.z * z;
 }
 // Everything the cypresses throw across the bluff: trunks and canopies.
 @diagnostic(off, derivative_uniformity) fn treeShade(ps: vec2f, pq: vec2f, px: f32) -> f32 {
@@ -842,6 +955,9 @@ const PLAT = 0.6;
   // ---- The bluff and its headland. The bluff's flat top is drawn as
   // before; at its seaward end each pixel traces the headland in the round.
   let bt = bluffTop(p.x);
+  // (Only here, from just above the bluff's far edge down to the bank in
+  // front, does anything need the coast's shape.)
+  if (p.y > bt - 0.03 && p.y < fgTop(p.x) + 0.05) { coastSetup(); }
   // (No headland reaches past x = 0.5 on the screen, and the bank in front
   // hides everything below its top.)
   let nearBluff = p.y > bt - 0.012 && p.y < fgTop(p.x) + 0.03 && p.x < 0.5;
@@ -951,48 +1067,78 @@ const PLAT = 0.6;
     }
     var lc = gc;
     if (grassW < 1.0) {
-      // The cliffs: rock broken into blocks and those into facets, each a
-      // flat face tipped its own way and lit from the one light in a few
-      // flat tones, with dark joints between the blocks.
-      // (Across the face: x where it looks toward us, z where it looks
-      // along the coast; where it turns from one to the other the blocks
-      // meet at an edge.)
-      let across = select(P.x, P.z, abs(nW.x) > abs(nW.z));
-      let cq = vec2f(across / 0.07, P.y / 0.16);
+      // The cliffs: buttresses of rock broken into blocks and those into
+      // facets, each a flat face tipped its own way and lit from the one
+      // light in a few flat tones, cracked down their faces.
+      // (Across the face: how far along the coast its foot lies.)
+      let cP = coastAt(P.z);
+      let FP = footOf(P.x, P.z, cP);
+      let across = (FP.x * cP.slope + FP.y) / cP.k;
+      let cq = vec2f(across / 0.045, P.y / 0.08);
       let big = rockCells(cq, 7.0 + u.a.w);
       let small = rockCells(cq * vec2f(2.3, 2.6) + 0.37, 3.0 + u.a.w);
       // How much ground a pixel covers here, foreshortened where the face is
       // seen edge on: blocks and joints finer than that fade into the face.
       let vd = normalize(vec3f(P.x, P.y - EYE, P.z));
       let fpt = px * P.z / max(abs(dot(nW, vd)), 0.12);
-      let bigD = 1.0 - smoothstep(0.012, 0.035, fpt);
-      let smallD = 1.0 - smoothstep(0.005, 0.015, fpt);
+      let bigD = 1.0 - smoothstep(0.008, 0.024, fpt);
+      let smallD = 1.0 - smoothstep(0.004, 0.012, fpt);
       let b3 = fract(big.x * 7.31 + big.y * 3.17);
-      let nf = normalize(nW + vec3f(big.x - 0.5, (big.y - 0.5) * 0.7, b3 - 0.5) * 1.3 * bigD
-                            + vec3f(small.x - 0.5, (small.y - 0.5) * 0.5, small.y - small.x) * 0.35 * smallD);
-      let lit = rockTone(smoothstep(0.06, 0.34, lambert(vec3f(nf.x, nf.y, -nf.z), 0.1) * (1.0 - shade) / max(LI, 0.05)) * LI);
-      var rc = mix(rockShade(), mix(rockStone(), rockLight(), 0.65), lit);
-      rc *= 1.0 + 0.2 * (big.y - 0.5) * bigD;
-      // Stains down the faces and a fine grit, and dark joints between the
-      // blocks, open here and closed there.
+      let nf = normalize(nW + vec3f(big.x - 0.5, (big.y - 0.5) * 0.7, b3 - 0.5) * 0.8 * bigD
+                            + vec3f(small.x - 0.5, (small.y - 0.5) * 0.5, small.y - small.x) * 0.3 * smallD);
+      let nfS = vec3f(nf.x, nf.y, -nf.z);
+      let lit = rockTone(smoothstep(0.06, 0.34, lambert(nfS, 0.1) * (1.0 - shade) / max(LI, 0.05)) * LI);
+      // Where the sun doesn't reach, the sky and the sea light the rock from
+      // in front, so the fronts of the buttresses stand out pale from their
+      // sides, in flat steps.
+      let sky = post(clamp(0.5 + 0.5 * dot(nfS, vec3f(0.45, 0.4, 0.8)), 0.0, 1.0), 4.0);
+      let inShade = mix(rockShade(), grey(mix(rockStone(), C(1), 0.12), 0.35) * 0.8, sky * (0.5 + 0.5 * lt));
+      // Weathered stone: bleached pale in places, rusty in others.
+      let wx = vnoise(vec2f(across * 9.0, P.y * 4.0) + u.a.w * 1.7);
+      let stone = mix(mix(rockStone(), rockLight(), smoothstep(0.55, 0.8, wx) * 0.5), rockStone() * vec3f(1.1, 0.88, 0.74), smoothstep(0.35, 0.15, wx) * 0.6);
+      var rc = mix(inShade * mix(vec3f(1.0), stone / max(rockStone(), vec3f(0.01)), 0.6), mix(stone, rockLight(), 0.6), lit);
+      rc *= 1.0 + 0.16 * (big.y - 0.5) * bigD;
+      // Stains down the faces and a fine grit.
       let streak = smoothstep(0.55, 0.85, vnoise(vec2f(across * 22.0, u.a.w * 3.0))) * smoothstep(0.3, 0.7, vnoise(vec2f(across * 6.0, P.y * 5.0 + u.a.w)));
       rc *= 1.0 - 0.16 * streak * (1.0 - smoothstep(0.008, 0.025, fpt));
       let grit = hash21(floor(p / max(px * 1.4, 0.0012)) + 3.0);
       rc *= 1.0 + step(0.9, grit) * 0.12 - step(grit, 0.08) * 0.14;
-      let jOpen = smoothstep(0.42, 0.6, vnoise(cq * 1.3 + 5.0 + u.a.w));
-      rc = mix(rc, rockShade() * 0.6, (1.0 - smoothstep(0.02, 0.06, big.z)) * 0.75 * jOpen * bigD);
-      // Scrub draped over the less steep rock, patchy; ice plant spilling
-      // over the tops of the cliffs.
-      let scrubW = smoothstep(0.55, 0.7, nW.y + 0.4 * (vnoise(P.xz * 5.0 - P.y * 3.0 + u.a.w * 2.0) - 0.5));
+      // Cracks: the joints between the blocks, open here and closed there.
+      let jOpen = smoothstep(0.45, 0.6, vnoise(cq * 0.9 + 5.0 + u.a.w));
+      rc = mix(rc, rockShade() * 0.55, (1.0 - smoothstep(0.03, 0.08, big.z)) * 0.8 * jOpen * bigD);
+      // Deep in the creases of the gullies the light hardly reaches.
+      let bid = butCell(FP);
+      let g = butOf(FP, bid);
+      rc *= mix(0.35, 1.0, smoothstep(0.0, 0.25, g));
+      // Scrub hangs from the brink down over the face, reaching lowest in
+      // the gullies, its lower edge ragged, the rock just under it in its
+      // shade; and it holds on the less steep rock, in patches.
+      let hf = P.y / max(landTop(P.x, P.z, cP), 0.06);
+      let tongue = smoothstep(0.62, 0.8, vnoise(vec2f(across * 26.0, P.y * 1.2 + 3.0 + u.a.w))) * (0.6 + 0.4 * vnoise(vec2f(across * 90.0, P.y * 30.0) + u.a.w));
+      let dl = 0.7 + 0.22 * (bid.y - 0.5) + 0.1 * (vnoise(vec2f(across * 30.0, 4.0 + u.a.w)) - 0.5)
+             - 0.55 * (1.0 - smoothstep(0.02, 0.08, g)) - 0.3 * tongue;
+      let hr = hf + 0.05 * (vnoise(vec2f(across * 25.0, P.y * 20.0) + u.a.w) - 0.5);
+      let drape = smoothstep(dl - 0.015, dl + 0.015, hr);
+      // (The scrub's shadow falls under its main edge, not its tongues.)
+      let dMain = dl + 0.3 * tongue;
+      rc *= 1.0 - 0.3 * smoothstep(dMain - 0.08, dMain - 0.01, hr) * (1.0 - smoothstep(dMain - 0.01, dMain + 0.02, hr)) * (1.0 - drape);
+      // Tufts along the odd ledge: thin runs, much wider than tall.
+      let ledgeTuft = smoothstep(0.76, 0.82, vnoise(vec2f(across * 14.0, P.y * 40.0) + u.a.w * 4.0)) * smoothstep(0.1, 0.3, hf) * smoothstep(0.45, 0.6, vnoise(vec2f(across * 50.0, P.y * 9.0) + 2.0));
+      let scrubW = max(max(drape, ledgeTuft), smoothstep(0.55, 0.7, nW.y + 0.4 * (vnoise(P.xz * 5.0 - P.y * 3.0 + u.a.w * 2.0) - 0.5)));
       let sl = lambert(nS, 0.3) * (1.0 - shade);
       if (scrubW > 0.0) {
-        let scrub = stippleBush(p, 0.08 + 0.7 * sl, 0.0026, px, mix(C(17), C(24), 0.45), mix(C(18), C(17), 0.3), mix(C(19), C(18), 0.35), mix(C(19), C(14), 0.35), C(21), 11.0);
+        // Olive: the greens of the grass, dulled toward the stone.
+        let oD = mix(mix(C(16), C(13), 0.25), C(24), 0.55);
+        let oM = mix(C(16), C(13), 0.3) * 0.85;
+        let oL = mix(C(15), C(13), 0.25);
+        let oH = mix(C(14), C(12), 0.3);
+        let scrub = stippleBush(p, 0.08 + 0.75 * sl, 0.0026, px, oD, oM, oL, oH, C(21), 11.0);
         rc = mix(rc, scrub, scrubW);
       }
       let ice = smoothstep(0.66, 0.78, vnoise(P.xz * 7.0 + u.a.w * 3.0)) * smoothstep(0.62, 0.74, nW.y) * smoothstep(PLAT * 0.5, PLAT * 0.75, P.y);
       rc = mix(rc, mix(mix(C(22), C(21), 0.55) * (0.55 + 0.45 * sl), C(22), step(0.5, fract(p.x / 0.003)) * 0.2), ice * 0.6);
       // Dark and wet at the foot, where the swell washes it white.
-      rc = mix(rc, mix(rc * 0.45, C(8) * 0.35, 0.3), smoothstep(0.05, 0.0, P.y));
+      rc = mix(rc, mix(rc * 0.55, C(8) * 0.4, 0.3), smoothstep(0.035, 0.0, P.y) * 0.8);
       // The beach: pale sand, darker where the swash has wet it.
       let beach = smoothstep(0.011, 0.008, P.y) * smoothstep(0.8, 0.95, nW.y);
       if (beach > 0.0) {
@@ -1019,14 +1165,43 @@ const PLAT = 0.6;
       let lump = fbm(p * vec2f(70.0, 140.0) + vec2f(-t * 0.2, t * 0.05) + u.a.w);
       let wash = smoothstep(0.45, 0.5, exp(-ds / reach) * (0.6 + 0.8 * lump));
       let lace = cloudDots(p + vec2f(t * 0.003, 0.0), 0.0028, px, smoothstep(0.4, 0.6, fbm(p * vec2f(40.0, 90.0) - vec2f(t * 0.1, 0.0))) * (1.0 - smoothstep(reach, reach * 5.0, ds)), 17.0);
-      col = mix(col, C(23), max(wash, lace * 0.9) * (1.0 - hide));
+      // Lines of breakers rolling in toward the shore, broken into runs.
+      let Wx = p.x * zs;
+      let fb = fract(ds / 0.1 + t * 0.12 + 0.3 * vnoise(vec2f(Wx * 4.0, zs * 4.0)));
+      let runs = smoothstep(0.35, 0.55, vnoise(vec2f(Wx * 9.0, zs * 9.0 - t * 0.3)));
+      let breakers = smoothstep(0.84, 0.9, fb) * (1.0 - smoothstep(0.93, 0.99, fb)) * runs * (1.0 - smoothstep(0.12, 0.38, ds)) * smoothstep(0.02, 0.05, ds);
+      col = mix(col, C(23), max(max(wash, lace * 0.9), breakers * 0.85) * (1.0 - hide));
+      // Rocks in the surf at the feet of the cliffs, dark and wet, the
+      // water breaking white round them; farther ones first.
+      if (ds < 0.14) {
+        let cell = 0.05;
+        let g0 = floor(vec2f(Wx, zs) / cell);
+        for (var j = 1; j >= -1; j--) {
+          for (var i = -1; i <= 1; i++) {
+            let id = g0 + vec2f(f32(i), f32(j));
+            if (hash21(id + 17.3 + u.a.w) < 0.72) { continue; }
+            let cw = (id + 0.5 + (vec2f(hash21(id + 3.1), hash21(id + 8.7)) - 0.5) * 0.5) * cell;
+            let r = cell * (0.15 + 0.2 * hash21(id + 5.5));
+            // Its foot on the screen, and this pixel in rock radii from it.
+            let v = (p - vec2f(cw.x / cw.y, HZ + EYE / cw.y)) * cw.y / r;
+            if (abs(v.x) > 2.2 || v.y < -1.2 || v.y > 0.6) { continue; }
+            let an = atan2(v.y, v.x);
+            let rd = (length(v / vec2f(1.0, 0.8)) - 1.0 - 0.12 * sin(an * 3.0 + id.x * 7.0)) * r / cw.y;
+            let ring = (length(v / vec2f(1.0, 0.3)) - 1.35 - 0.25 * sin(t * 1.3 + id.x * 5.0 + id.y)) * r / cw.y;
+            col = mix(col, C(23), dotLine(ring, v.x * r / cw.y, DOT * 0.9, px, id.x + id.y * 7.0) * step(0.0, v.y) * 0.8 * (1.0 - hide));
+            let rl = rockTone(rockLit(lambert(roundN(v * vec2f(1.0, 1.25), vec2f(1.0)), 0.2)));
+            let rk = mix(rockShade() * 0.8, mix(rockStone(), rockLight(), 0.4), rl * 0.8);
+            col = mix(col, moonCast(rk, rl), fillA(max(rd, v.y * r / cw.y), px) * (1.0 - hide));
+          }
+        }
+      }
     }
   }
   // The far edge of the bluff's top, where there is land to have one.
-  {
+  if (abs(p.y - bt) < 0.012) {
     let ze = (EYE - PLAT) / max(bt - HZ, 0.01);
     let ce = coastAt(ze);
-    col = mix(col, C(24), dotLine(p.y - bt, p.x, DOT, px, 7.0) * step(0.0, landIn(p.x * ze, ze, ce) - ce.z * 0.5) * 0.75);
+    col = mix(col, C(24), dotLine(p.y - bt, p.x, DOT, px, 7.0) * step(0.0, landIn(p.x * ze, ze, ce) - ce.w) * 0.75);
   }
   // Ink where land stands in front of what lies behind it.
   let jump = fwidth(invZ) / max(invZ, 1e-3);
