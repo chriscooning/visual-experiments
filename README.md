@@ -17,7 +17,7 @@ Animated versions of my own paintings. A brush layer rebuilds each scene from hu
 
 - **Poppy Hill**: poppies and lupine under a eucalyptus grove, cypress windbreak, conifer ridge and golden hill; a slow day-to-night cycle
 - **Fern Palms**: feather palms over rows of dark bushes traced with dotted lines, hills in haze, ferns; a slow day-to-night cycle
-- **Spore Tide**: from a painted surfboard; giant mushrooms on a red bluff over a sea of dashes, glowing and shedding spores at night
+- **Cypress Grove** (spore-tide.html): Point Lobos cypresses in the colours of a painted surfboard; crooked, wind-bent limbs and foliage streaming downwind in sprays of long triangles, on a red bluff over a sea of dashes; the surf glows after dark
 - **Vineyard Night**: dripping blue sky with speckle and trails of white dots, sage hills, a dotted vineyard, luminous currents flowing through the dark brush, lit by a drifting moon you can drag
 - **Palm Row**: fan palms on a flower-patterned hill over hillside houses, valley mist, soft stippled clouds and mountains; a slow day-to-night cycle
 - **Windswept**: a wind-bent cypress on a Big Sur bluff with cliff, surf, lighthouse, dabbed streaks of cloud and visible wind; a slow day-to-night cycle
