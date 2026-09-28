@@ -293,18 +293,21 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 }
 
 // Cypress Grove: the old Monterey cypresses of Point Lobos on white dunes,
-// drawn crisp in the manner of Eyvind Earle. Slender, weathered trunks rise
-// with a gentle lean, often forking, with branches in tiers that dip and
-// curl up at their tips, some bare and dead. The foliage grows in flat pads
-// built from long, thin diamonds of many sizes pointing different ways.
-// Shrubs, spiky, rounded or both, and mats of creeping cover dot the sand
-// and thicken over the dunes on the right. Everything stands at its true
-// size on sand whose rows close up toward its edge, over a sea of short
-// lavender and blue dashes, granite rocks ringed in surf and a headland
-// with its own grove stepping into haze. The day turns slowly; after dark
-// the surf glows. One light, the sun or the moon, shades every branch, pad
-// and shrub from its own form and throws every shadow the same way; lines
-// are laid in dots.
+// drawn crisp in the manner of Eyvind Earle. Slender, weathered trunks,
+// each with bark of its own, rise with a gentle lean, often forking, with
+// branches in tiers that dip and curl up at their tips, every one ending in
+// a flat pad of foliage built from long, thin diamonds of many sizes
+// pointing different ways. Underbrush, spiky, rounded or both, and mats of
+// creeping cover grow in bands along the rolling swells of sand with open
+// sand between, each bush tilted and curved to the slope under it; it
+// frames the scene on both sides, over the dunes on the right and in a bank
+// of big bushes in the near left corner. Everything stands at its true size
+// on sand whose rows close up toward its edge, over a sea of short lavender
+// and blue dashes, granite rocks ringed in surf and a headland with its own
+// grove stepping into haze. The day turns slowly; after dark the surf
+// glows. One light, the sun or the moon, shades every branch, pad and bush
+// from its own form and throws every shadow the same way; lines are laid in
+// dots.
 struct U {
   a: vec4f,   // time, aspect, px, seed
   b: vec4f,   // wind, gust, grain, zoom
@@ -314,13 +317,15 @@ struct U {
   cols: array<vec4f, 33>,
   tr: array<vec4f, 10>,    // per tree: foot x, foot y, height, haze
   tk: array<vec4f, 10>,    // top of its trunk x, y, radius there, sway phase (tree units)
+  tv: array<vec4f, 10>,    // its bark: tone (dark .. pale), warmth, algae, grain
   tb: array<vec4f, 10>,    // its bounds in tree units: min x, min y, max x, max y
   tsh: array<vec4f, 60>,   // six pads of its crown for shadows: centre x, y, radius
   seg: array<vec4f, 360>,  // trunk and branch pieces, SEG per tree: from x, y, to x, y
   sr: array<vec4f, 360>,   // their radius at each end, bare (0/1), distance along the limb
-  pad: array<vec4f, 120>,  // pads of foliage, PAD per tree: centre x, y, reach, _
-  padP: array<vec4f, 120>, // their seed, tilt, number of lobes, sway phase
-  dune: array<vec4f, 4>,   // dunes far to near: x of the middle, depth of the foot, half width, height
+  pad: array<vec4f, 160>,  // pads of foliage, PAD per tree: centre x, y, reach, _
+  padP: array<vec4f, 160>, // their seed, tilt, number of lobes, sway phase
+  dune: array<vec4f, 6>,   // dunes far to near: x of the middle, depth of the foot, half width, height
+  fg: array<vec4f, 12>,    // bushes in the foreground, far to near: foot x, y, size, seed
 }
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -337,7 +342,10 @@ struct U {
 const HZ = -0.04;
 const DOT = 0.0011;
 const SEG = 36;
-const PAD = 12;
+const PAD = 16;
+// A loop bound read through the uniforms (always n), so the compiler keeps
+// the loop rolled instead of copying its body once per pass.
+@diagnostic(off, derivative_uniformity) fn loopN(n: i32) -> i32 { return select(n, 0, u.a.x < -1e30); }
 @diagnostic(off, derivative_uniformity) fn groundTop(x: f32) -> f32 { return 0.07 + 0.035 * sin(x * 2.3 + u.a.w) - 0.03 * smoothstep(0.2, 0.9, x) + 0.006 * sin(x * 13.0); }
 @diagnostic(off, derivative_uniformity) fn headTop(x: f32) -> f32 { return HZ + 0.004 - 0.09 * smoothstep(0.25, 0.75, x) + 0.01 * sin(x * 11.0 + u.a.w) - 0.02 * smoothstep(0.8, 1.2, x); }
 
@@ -352,8 +360,15 @@ const PAD = 12;
 @diagnostic(off, derivative_uniformity) fn groundZ(p: vec2f) -> f32 {
   let dz = max(p.y - HZ, 0.0);
   let rowV = landRows(p, 9.0);
-  let swell = sin(rowV * 0.8 + 1.4 * sin(p.x / (dz + 0.05) * 0.8 + u.a.w));
-  return dz * (0.07 * swell + 0.1 * (fbm(vec2f(p.x / (dz + 0.05) * 0.9, rowV * 0.35) + u.a.w) - 0.5));
+  return dz * (0.11 * swell(p.x, rowV, dz) + 0.1 * (fbm(vec2f(p.x / (dz + 0.05) * 0.9, rowV * 0.35) + u.a.w) - 0.5));
+}
+// The phase of the dunes' swells at x, rowV rows back, dz below the
+// horizon: its sine is the swell, and the scrub follows its lines.
+@diagnostic(off, derivative_uniformity) fn swellPh(x: f32, rowV: f32, dz: f32) -> f32 {
+  return rowV * 0.8 + 1.4 * sin(x / (dz + 0.05) * 0.8 + u.a.w);
+}
+@diagnostic(off, derivative_uniformity) fn swell(x: f32, rowV: f32, dz: f32) -> f32 {
+  return sin(swellPh(x, rowV, dz));
 }
 
 // ---- Cypresses. Each is laid out in JS in its own units: foot at the
@@ -366,6 +381,13 @@ const PAD = 12;
 // and they run from large at the back of the pad (m 0) to small at its
 // front. Ls is the pad's reach, sd a seed, fl a flutter from the wind.
 struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
+// Where lobe m sits in its pad, and how far from there it can reach at most:
+// enough to pass over the lobes a pixel can't touch before building them.
+@diagnostic(off, derivative_uniformity) fn kiteNear(m: i32, n: i32, Ls: f32, sd: f32) -> vec3f {
+  let fm = f32(m);
+  let c0 = (vec2f(hash21(vec2f(fm * 9.1, sd + 6.7)), hash21(vec2f(fm * 4.7, sd + 7.9))) - 0.5) * vec2f(Ls * 0.8, Ls * 0.22);
+  return vec3f(c0, Ls * mix(0.45, 1.0, hash21(vec2f(fm * 7.1, sd + 2.7))) * mix(1.0, 0.55, fm / f32(max(n - 1, 1))) * 1.12);
+}
 @diagnostic(off, derivative_uniformity) fn kite(m: i32, n: i32, Ls: f32, sd: f32, fl: f32) -> Kite {
   let fm = f32(m);
   let h1 = hash21(vec2f(fm * 3.7, sd));
@@ -477,10 +499,22 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
       let gv = across * 2.5 + 0.4 * sin(bu * 30.0 + f32(bk));
       bc = mix(bc, mix(C(23), C(30), 0.3), dotLine((fract(gv) - 0.5) * br * 0.4, bu, dotW * 0.6, pl, floor(gv) + f32(bk) * 7.0) * 0.6);
     } else {
-      bc = barkTex(bu, across, br * 1.4, bl, pl, mix(C(23), C(30), 0.45), C(23), mix(C(23), C(22), 0.5), f32(bk) + K.w * 7.0);
+      // Each tree's bark is its own: darker or paler, warmer or cooler,
+      // coarser or finer, more or less rusted with algae, and grown in
+      // fine fissures, long peeling strips or mottled plates.
+      let V = u.tv[i];
+      let bark = mix(mix(C(23) * 0.6, mix(C(23), C(22), 0.65), V.x), mix(C(23), C(18), 0.45), V.y * 0.7);
+      let bDark = mix(bark, C(30), 0.45);
+      bc = barkTex(bu, across, br * mix(0.9, 2.2, V.w), bl, pl, bDark, bark, mix(bark, C(22), 0.5), f32(bk) + K.w * 7.0);
+      let pat = fract(K.w * 1.618);
+      let sv = across * mix(2.0, 3.5, V.w) + 0.6 * sin(bu * 7.0 + K.w * 3.0);
+      let strip = smoothstep(0.3, 0.45, abs(fract(sv) - 0.5));
+      bc = mix(bc, mix(bDark, bark, 0.3), strip * 0.65 * smoothstep(0.3, 0.4, pat) * smoothstep(0.7, 0.6, pat));
+      let pm = vnoise(vec2f(bu * mix(14.0, 26.0, V.w), across * 1.6 + f32(bk) * 2.3) + K.w);
+      bc = mix(bc, select(mix(bark, C(22), 0.45) * mix(0.7, 1.1, bl), bDark, pm < 0.5), smoothstep(0.12, 0.3, abs(pm - 0.5)) * 0.6 * smoothstep(0.62, 0.72, pat));
       // Patches of rust-orange algae, as on the old trees at Point Lobos.
-      let alg = smoothstep(0.6, 0.74, vnoise(vec2f(bu * 16.0, across * 1.2 + f32(bk) * 3.1 + K.w)));
-      bc = mix(bc, C(18) * mix(0.55, 1.1, bl), alg * 0.45);
+      let alg = smoothstep(0.6, 0.74, vnoise(vec2f(bu * mix(10.0, 22.0, V.w), across * 1.2 + f32(bk) * 3.1 + K.w)));
+      bc = mix(bc, C(18) * mix(0.55, 1.1, bl), alg * V.z);
     }
     bc = moonCast(bc, bl);
     acc = over(acc, bc, fillA(bd, pl));
@@ -505,17 +539,19 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
     let nK = i32(Q.z);
     for (var j = 0; j < 12; j++) {
       if (j >= nK) { break; }
+      let kn = kiteNear(j, nK, Ls, Q.x);
+      if (length(v - kn.xy) > kn.z + mg) { continue; }
       let K = kite(j, nK, Ls, Q.x, fl);
       let lq = vec2f(dot(v - K.c, K.dir), dot(v - K.c, vec2f(-K.dir.y, K.dir.x)));
       if (lq.x < -K.lw - mg || lq.x > K.ld + mg || abs(lq.y) > K.hw + mg) { continue; }
       let d = kiteD(lq, K);
+      if (d > mg) { continue; }
       // The heart of the pad sits in its own shade; lobes that stand up
       // catch more light than the ones that hang.
       let lit = kiteLit(lq, K) * mix(0.7, 1.0, K.f) * mix(0.85, 1.1, smoothstep(-0.7, 0.7, -K.dir.y));
-      let gr = sprayGrain(lq, cell, pl, Q.x + f32(j) * 13.0);
-      let fc = moonCast(foliage(lit, gr, C(20), C(21), C(24), C(19)), lit);
+      let fc = moonCast(foliage(lit, sprayGrain(lq, cell, pl, Q.x + f32(j) * 13.0), C(20), C(21), C(24), C(19)), lit);
       acc = over(acc, fc, fillA(d, pl));
-      acc = over(acc, C(30), dotLine(d, lq.x, dotW * 0.8, pl, Q.x * 3.0 + f32(j)) * 0.5);
+      acc = over(acc, C(30), evenDots(d, lq.x, dotW * 0.8, pl) * 0.5);
     }
   }
   let res = unpremul(acc);
@@ -546,58 +582,90 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
 // kind 0 is a spiky pad of diamonds, 1 a rounded mound, 2 a rounded mound
 // crowned with spiky sprays, 3 a low mat of creeping cover. r is its
 // height, w its half width, ht how tall it stands for its shadow.
-struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f32 }
+struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f32, tilt: f32, bend: f32 }
 // The spacing of the shrubs along row rr of the dunes.
 @diagnostic(off, derivative_uniformity) fn bushW(rr: f32, KM: f32) -> f32 { return 0.063 * exp((rr + 0.8) / KM); }
 // Shrub n (0 or 1) in cell si of row rr: sizes run from low tufts to big
-// bushes, most of them small, all scaled by their distance. The scrub
-// thickens toward the dunes on the right and gathers in patches, where a
-// cell can hold a second shrub.
-@diagnostic(off, derivative_uniformity) fn bushAt(si: f32, rr: f32, KM: f32, n: i32) -> Bush {
+// bushes, most of them small, all scaled by their distance. The scrub is
+// thickest toward both sides of the frame, grows in bands that follow the
+// swells of the dunes with open sand between, and gathers in patches where
+// a cell can hold a second shrub. Each sits along the slope under it,
+// tilted and curved with the swell.
+// q is the pixel and reach how far from a shrub's foot, in its depths below
+// the horizon, it can still touch the pixel (its own size, or its shadow):
+// shrubs out of reach are passed over before the costly part.
+@diagnostic(off, derivative_uniformity) fn bushAt(si: f32, rr: f32, KM: f32, n: i32, q: vec2f, reach: vec2f, dz0: f32) -> Bush {
   var b: Bush;
+  b.on = false;
   let id = vec2f(si, rr) + f32(n) * vec2f(31.7, 17.3);
-  let h = hash21(id + u.a.w + 50.0);
   let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * select(0.5, 0.9, n == 1)) * bushW(rr, KM);
-  let xr = 0.5 * u.a.y * u.b.w;
-  let thin = mix(0.62, 0.15, smoothstep(-0.3, 0.6, cx / xr)) - 0.35 * (vnoise(vec2f(cx * 4.0, rr * 0.8) + u.a.w) - 0.5);
-  b.on = h > thin + select(0.0, 0.35, n == 1);
+  if (abs(q.x - cx) > dz0 * reach.x) { return b; }
   let cy = HZ + (groundTop(cx) - HZ) * exp((rr + 0.8 + (hash21(id + 4.0) - 0.5) * 0.4) / KM);
+  let dz = cy - HZ;
+  if (q.y > cy + dz * reach.y || q.y < cy - dz * 0.5) { return b; }
+  let h = hash21(id + u.a.w + 50.0);
+  let xr = 0.5 * u.a.y * u.b.w;
+  let ph = swellPh(cx, (rr + 0.8) * 9.0 / KM, dz);
+  let sw = sin(ph);
+  var thin = mix(0.52, 0.12, smoothstep(0.2, 0.85, abs(cx / xr)));
+  thin -= 0.28 * smoothstep(0.1, -0.7, sw) - 0.18 * smoothstep(0.3, 0.9, sw);
+  thin -= 0.3 * (vnoise(vec2f(cx * 4.0, rr * 0.8) + u.a.w) - 0.5);
+  // Thicker still toward the viewer on the left, framing the scene.
+  thin -= 0.18 * smoothstep(0.25, 0.5, cy) * smoothstep(0.0, -0.6, cx / xr);
+  b.on = h > thin + select(0.0, 0.35, n == 1);
+  if (!b.on) { return b; }
   // None where a dune stands: the dunes carry their own.
-  for (var k = 0; k < 4; k++) {
+  for (var k = 0; k < 6; k++) {
     if (k >= i32(u.e.w)) { break; }
     let D = u.dune[k];
-    if (abs(cx - D.x) < D.z && cy > duneTop(D, cx) - (cy - HZ) * 0.05 && cy < duneFoot(D, cx) + (cy - HZ) * 0.03) { b.on = false; }
+    if (abs(cx - D.x) < D.z && cy > duneTop(D, cx) - (cy - HZ) * 0.05 && cy < duneFoot(D, cx) + (cy - HZ) * 0.03) { b.on = false; return b; }
   }
   b.foot = vec2f(cx, cy);
-  shape(&b, cy - HZ, hash21(id + 6.1), hash21(id + 8.3), hash21(id + 9.7), h * 13.0);
+  shape(&b, dz, hash21(id + 6.1) * mix(1.0, 1.25, smoothstep(0.1, -0.8, sw)), hash21(id + 8.3), hash21(id + 9.7), h * 13.0);
+  // Lie along the swell's line: its slope on screen, and bowed over its
+  // crests or cupped in its troughs.
+  let lean = -0.156 * cos(cx / (dz + 0.05) * 0.8 + u.a.w) * dz / (dz + 0.05);
+  b.tilt = clamp(lean * 1.5 + (hash21(id + 11.3) - 0.5) * 0.3, -0.4, 0.4);
+  b.bend = clamp(0.22 * sw + (hash21(id + 12.7) - 0.5) * 0.2, -0.06, 0.3);
   return b;
 }
 // Size and kind for a shrub dz below the horizon, from three hashes.
 @diagnostic(off, derivative_uniformity) fn shape(b: ptr<function, Bush>, dz: f32, hs: f32, hk: f32, hw: f32, seed: f32) {
   let r = dz * (0.035 + 0.12 * hs * hs);
   (*b).kind = select(select(select(3, 2, hk < 0.82), 1, hk < 0.62), 0, hk < 0.3);
-  (*b).r = select(r, r * 0.45, (*b).kind == 3);
-  (*b).w = r * select(select(1.2 + 0.6 * hw, 1.6, (*b).kind == 0), 1.8 + 0.8 * hw, (*b).kind == 3);
+  (*b).r = select(r * (0.8 + 0.4 * fract(hw * 7.3)), r * 0.55, (*b).kind == 3);
+  (*b).w = r * select(select(1.0 + 1.4 * hw, 1.6, (*b).kind == 0), 1.4 + 0.8 * hw, (*b).kind == 3);
   (*b).ht = (*b).r * select(1.0, 1.3, (*b).kind == 2);
   (*b).seed = seed + hk * 7.0;
+  (*b).tilt = 0.0; (*b).bend = 0.0;
 }
 // A rounded shrub: a low dome, dark in its core and stippled with light
 // round its curve from the one light. foot is where it meets the ground,
-// r its height and w its half width.
-@diagnostic(off, derivative_uniformity) fn mound(col: vec3f, p: vec2f, foot: vec2f, r: f32, w: f32, seed: f32, px: f32) -> vec3f {
-  let v = p - foot + vec2f(0.0, r * 0.5);
+// r its height and w its half width; it leans with the slope by tilt and
+// bows over a crest (bend > 0) or cups in a hollow (bend < 0).
+@diagnostic(off, derivative_uniformity) fn mound(col: vec3f, p: vec2f, foot: vec2f, r: f32, w: f32, tilt: f32, bend: f32, seed: f32, px: f32) -> vec3f {
+  var v = rot2(p - foot, -tilt);
+  v.y -= bend * v.x * v.x / max(w, 1e-4);
+  v.y += r * 0.5;
   if (abs(v.x) > w * 1.25 + px * 3.0 || abs(v.y) > r * 0.75 + px * 3.0) { return col; }
   let sd = max(length(v / vec2f(w / (r * 0.62), 1.0)) - r * 0.62 * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + seed * 9.0)), v.y - r * 0.5);
+  if (sd > DOT * 4.0 + px * 2.0) { return col; }
   let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(w, r * 0.62)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.5, v.y) * 0.6);
   var c = mix(col, moonCast(stippleBush(p, 0.05 + 0.95 * blit, max(0.0024 + r * 0.06, px * 2.2), px, C(25), C(26), C(27), C(28), C(18), seed), blit), fillA(sd, px));
-  return mix(c, C(30), dotRing(sd, v, r * 0.7, DOT * 0.8, px, seed * 29.0) * 0.5);
+  // Its rim in round dots, evenly spaced.
+  let rN = max(round(6.2832 * r * 0.7 / (max(DOT * 0.8, px * 0.8) * 2.3)), 5.0);
+  return mix(c, C(30), evenDots(sd, (atan2(v.y, v.x) / 6.2832 + 0.5) * 6.2832 * r * 0.7, 6.2832 * r * 0.7 / rN / 2.3, px) * 0.5);
 }
 // Draw shrub b over col.
 @diagnostic(off, derivative_uniformity) fn bush(col: vec3f, p: vec2f, b: Bush, px: f32) -> vec3f {
-  if (b.kind == 0) { return shrub(col, p, b.foot, b.r, b.seed, px); }
+  var c = col;
   // Mounds and mats: a mat is just a very low, wide mound.
-  var c = mound(col, p, b.foot, b.r, b.w, b.seed, px);
-  if (b.kind == 2) { c = shrub(c, p, b.foot - vec2f(0.0, b.r * 0.55), b.r * 0.75, b.seed + 3.0, px); }
+  if (b.kind != 0) { c = mound(c, p, b.foot, b.r, b.w, b.tilt, b.bend, b.seed, px); }
+  // Spiky ones, and the spiky crown on a mound.
+  if (b.kind == 0 || b.kind == 2) {
+    let crown = b.kind == 2;
+    c = shrub(c, p, select(b.foot, b.foot + rot2(vec2f(0.0, -b.r * 0.55), b.tilt), crown), select(b.r, b.r * 0.75, crown), b.tilt, b.seed + select(0.0, 3.0, crown), px);
+  }
   return c;
 }
 // Foliage in three flat tones, shade, mid and the lit tops, with the grain
@@ -611,24 +679,27 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
 // A low cypress shrub: a small pad of long, thin diamonds pointing different
 // ways, sitting on the ground, now and then with a rusty one among them.
 // c is its foot, r its size.
-@diagnostic(off, derivative_uniformity) fn shrub(col: vec3f, p: vec2f, c: vec2f, r: f32, seed: f32, px: f32) -> vec3f {
+@diagnostic(off, derivative_uniformity) fn shrub(col: vec3f, p: vec2f, c: vec2f, r: f32, tilt: f32, seed: f32, px: f32) -> vec3f {
   let Ls = r * 1.4;
-  let v = p - c - vec2f(0.0, -r * 0.5);
+  let v = rot2(p - c, -tilt) + vec2f(0.0, r * 0.5);
   if (v.x < -Ls * 1.35 - px * 2.0 || v.x > Ls * 1.55 + px * 2.0 || v.y < -Ls * 0.85 - px * 2.0 || v.y > r * 0.5 + px * 2.0) { return col; }
   var acc = vec4f(0.0);
   let cell = max(r * 0.12, px * 2.4);
   for (var m = 0; m < 9; m++) {
+    let kn = kiteNear(m, 9, Ls, seed);
+    if (length(v - kn.xy) > kn.z + px * 2.0) { continue; }
     let K = kite(m, 9, Ls, seed, 0.0);
     let lq = vec2f(dot(v - K.c, K.dir), dot(v - K.c, vec2f(-K.dir.y, K.dir.x)));
     if (lq.x < -K.lw - px * 2.0 || lq.x > K.ld + px * 2.0 || abs(lq.y) > K.hw + px * 2.0) { continue; }
     // Cut off where it meets the ground.
     let d = max(kiteD(lq, K), v.y - r * 0.5);
+    if (d > DOT * 3.0 + px * 2.0) { continue; }
     let lit = kiteLit(lq, K) * mix(0.7, 1.0, K.f);
     var fc = foliage(lit, sprayGrain(lq, cell, px, seed + f32(m) * 13.0), C(25), C(26), C(27), C(28));
     fc = mix(fc, C(18) * mix(0.6, 1.0, lit), step(0.92, hash21(vec2f(f32(m) * 3.3, seed + 8.1))));
     fc = moonCast(fc, lit);
     acc = over(acc, fc, fillA(d, px));
-    acc = over(acc, C(30), dotLine(d, lq.x, DOT * 0.7, px, seed + f32(m)) * 0.4);
+    acc = over(acc, C(30), evenDots(d, lq.x, DOT * 0.7, px) * 0.4);
   }
   let res = unpremul(acc);
   return mix(col, res.rgb, res.a);
@@ -648,11 +719,16 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
   let q = (x - D.x) / D.z;
   return D.y + D.w * 0.3 * max(1.0 - q * q, 0.0);
 }
-@diagnostic(off, derivative_uniformity) fn dune(col: vec3f, p: vec2f, k: i32, px: f32) -> vec3f {
+// Whether dune k, or its scrub, can reach pixel p.
+@diagnostic(off, derivative_uniformity) fn duneNear(k: i32, p: vec2f) -> bool {
+  let D = u.dune[k];
+  let mgn = (D.y - HZ) * 0.32;
+  return D.w > 0.0 && abs(p.x - D.x) <= D.z + mgn && p.y >= D.y - D.w * 1.1 - mgn && p.y <= D.y + D.w * 0.4;
+}
+// The face of dune k over col.
+@diagnostic(off, derivative_uniformity) fn duneFace(col: vec3f, p: vec2f, k: i32, px: f32) -> vec3f {
   let D = u.dune[k];
   let dz = D.y - HZ;
-  let mgn = dz * 0.32;
-  if (D.w <= 0.0 || abs(p.x - D.x) > D.z + mgn || p.y < D.y - D.w * 1.1 - mgn || p.y > D.y + D.w * 0.4) { return col; }
   var c = col;
   let top = duneTop(D, p.x);
   let foot = duneFoot(D, p.x);
@@ -673,21 +749,60 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
     c = mix(c, dc, fillA(top - p.y, px) * (1.0 - smoothstep(0.7, 1.0, f)));
     c = mix(c, C(30), dotLine(p.y - top, p.x, DOT, px, f32(k) * 7.0 + 3.0) * 0.6 * smoothstep(1.0, 0.9, abs(p.x - D.x) / D.z));
   }
-  // Its own scrub in patches, from the crest down: shrubs, and mats of
-  // creeping cover spread among them.
-  for (var j = 0; j < 24; j++) {
-    let fj = f32(j);
-    let h = hash21(vec2f(fj * 1.7, f32(k) * 3.1 + u.a.w));
-    let clump = (f32(j % 4) + 0.5) / 4.0 * 1.6 - 0.8 + (hash21(vec2f(f32(j % 4) * 4.3, f32(k) + u.a.w + 9.0)) - 0.5) * 0.3;
-    let x = D.x + D.z * clamp(clump + (hash21(vec2f(fj * 2.3, f32(k) + u.a.w + 5.0)) - 0.5) * 0.55, -0.92, 0.92);
-    var b: Bush;
+  return c;
+}
+// Shrub j of the scrub on dune k, in patches from the crest down: shrubs,
+// and mats of creeping cover spread among them. Off if it can't reach p.
+@diagnostic(off, derivative_uniformity) fn duneBush(k: i32, j: i32, p: vec2f, px: f32) -> Bush {
+  let D = u.dune[k];
+  let dz = D.y - HZ;
+  var b: Bush;
+  b.on = false;
+  let fj = f32(j);
+  let h = hash21(vec2f(fj * 1.7, f32(k) * 3.1 + u.a.w));
+  let clump = (f32(j % 4) + 0.5) / 4.0 * 1.6 - 0.8 + (hash21(vec2f(f32(j % 4) * 4.3, f32(k) + u.a.w + 9.0)) - 0.5) * 0.3;
+  let x = D.x + D.z * clamp(clump + (hash21(vec2f(fj * 2.3, f32(k) + u.a.w + 5.0)) - 0.5) * 0.55, -0.92, 0.92);
+  // No shrub here is wider than about two-thirds of the dune's depth.
+  if (abs(p.x - x) <= dz * 0.62 + px * 3.0) {
     b.on = true;
     b.foot = vec2f(x, mix(duneTop(D, x), duneFoot(D, x), 0.05 + 0.65 * (fj + h) / 25.0));
     let hk = select(hash21(vec2f(fj * 5.1, f32(k) + 4.0 + u.a.w)), 0.95, (j % 5) == 1);
     shape(&b, dz, 0.25 + 0.75 * hash21(vec2f(fj * 3.9, f32(k) + 2.0 + u.a.w)), hk, h, h * 13.0 + f32(k));
-    c = bush(c, p, b, px);
+    let e = D.z * 0.02;
+    b.tilt = clamp(atan((duneTop(D, x + e) - duneTop(D, x - e)) / (2.0 * e)) * 0.7, -0.45, 0.45);
+    b.bend = clamp(0.25 - 0.35 * (b.foot.y - duneTop(D, x)) / max(duneFoot(D, x) - duneTop(D, x), 1e-4), -0.05, 0.3);
   }
-  return c;
+  return b;
+}
+// Scrub along the lip, in cells of 0.05 across.
+@diagnostic(off, derivative_uniformity) fn lipBush(id: f32) -> Bush {
+  var b: Bush;
+  let h = hash1(id * 1.9 + u.a.w);
+  b.on = h >= 0.4;
+  b.r = 0.008 + 0.012 * h * h;
+  b.foot = vec2f((id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * 0.05, 0.0);
+  b.foot.y = groundTop(b.foot.x) + b.r * 0.3;
+  b.kind = i32(hash1(id * 7.3 + u.a.w) * 2.99);
+  b.w = b.r * (1.3 + 0.5 * hash1(id * 2.2));
+  b.ht = b.r;
+  b.seed = h * 17.0;
+  return b;
+}
+// Brush in the foreground, nearest of all, laid out in JS.
+@diagnostic(off, derivative_uniformity) fn fgBush(k: i32) -> Bush {
+  let F = u.fg[k];
+  var b: Bush;
+  b.on = F.z > 0.0;
+  b.foot = F.xy;
+  let hk = hash21(vec2f(F.w, 1.3));
+  b.kind = select(select(2, 1, hk < 0.6), 0, hk < 0.2);
+  b.r = F.z;
+  b.w = F.z * (1.3 + 1.0 * hash21(vec2f(F.w, 2.9)));
+  b.ht = F.z;
+  b.seed = F.w;
+  b.tilt = (hash21(vec2f(F.w, 4.1)) - 0.5) * 0.35;
+  b.bend = hash21(vec2f(F.w, 5.3)) * 0.2;
+  return b;
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
@@ -862,13 +977,11 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
     let pq = groundQ(ps, 0.014);
     {
       var sh = 0.0;
-      for (var i = 0; i < 10; i++) {
-        if (i >= nT) { break; }
+      for (var i = 0; i < nT; i++) {
         sh = max(sh, treeShade(ps, pq, i, px));
       }
       // The dunes throw theirs too.
-      for (var k = 0; k < 4; k++) {
-        if (k >= nD) { break; }
+      for (var k = 0; k < nD; k++) {
         let D = u.dune[k];
         sh = max(sh, blobShadowQ(pq, ps, vec2f(D.x + D.z * 0.15, D.y - D.w * 0.45), D.z * 0.75, D.y, px) * 0.8);
       }
@@ -880,77 +993,69 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
     {
       let mv = landRows(p, KM);
       var msh = 0.0;
-      for (var o = 0; o <= 2; o++) {
-        let rr = floor(mv) - f32(o);
+      // Three rows, three cells in each, two shrubs to a cell: one loop,
+      // so the compiler keeps a single copy of the shrub code.
+      for (var c = 0; c < loopN(18); c++) {
+        let rr = floor(mv) - f32(c / 6);
         if (rr < 0.0) { continue; }
-        let si0 = floor(p.x / bushW(rr, KM) + rr * 0.37);
-        for (var co = -1; co <= 1; co++) {
-          for (var n = 0; n < 2; n++) {
-            let b = bushAt(si0 + f32(co), rr, KM, n);
-            if (!b.on) { continue; }
-            msh = max(msh, blobShadowQ(pq, ps, b.foot - vec2f(0.0, b.ht * 0.5), b.w * 0.9, b.foot.y, px));
-          }
-        }
+        let b = bushAt(floor(p.x / bushW(rr, KM) + rr * 0.37) + f32((c % 6) / 2 - 1), rr, KM, c % 2, ps, vec2f(1.6, 0.5), (gt - HZ) * exp((rr + 0.8) / KM));
+        if (b.on) { msh = max(msh, blobShadowQ(pq, ps, b.foot - vec2f(0.0, b.ht * 0.5), b.w * 0.9, b.foot.y, px)); }
       }
       gc = mix(gc, C(16) * 0.62, msh * 0.72);
     }
     gc = moonCast(gc, gl);
     col = mix(col, gc, fillA(gt - p.y, px));
     col = mix(col, C(30), dotLine(p.y - gt, p.x, DOT, px, 6.0) * 0.7);
-    // Scrub along the lip.
-    let cw = 0.05;
-    let ci = floor(p.x / cw);
-    for (var o = -1; o <= 1; o++) {
-      let id = ci + f32(o);
-      let h = hash1(id * 1.9 + u.a.w);
-      if (h < 0.4) { continue; }
-      var b: Bush;
-      b.on = true;
-      b.r = 0.008 + 0.012 * h * h;
-      b.foot = vec2f((id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * cw, 0.0);
-      b.foot.y = groundTop(b.foot.x) + b.r * 0.3;
-      b.kind = i32(hash1(id * 7.3 + u.a.w) * 2.99);
-      b.w = b.r * (1.3 + 0.5 * hash1(id * 2.2));
-      b.ht = b.r;
-      b.seed = h * 17.0;
-      col = bush(col, p, b, px);
-    }
   }
 
-  // ---- Shrubs and dunes, far to near. A shrub reaches up from its foot,
-  // so the rows from this pixel's own toward the viewer can cover it; each
-  // dune goes in among the rows at the depth of its foot.
-  if (p.y > HZ - 0.1) {
+  // ---- Everything standing on the sand, far to near. First the scrub
+  // along the lip; then the rows from this pixel's own toward the viewer (a
+  // shrub reaches up from its foot, so those rows can cover it), with each
+  // dune and tree going in among them at the depth of its foot; then the
+  // brush in the foreground. Each kind is drawn from one place in the code,
+  // in loops the compiler keeps rolled, so the shader stays small.
+  if (p.y > HZ && abs(p.y - gt) < 0.05) {
+    let lipI = floor(p.x / 0.05);
+    for (var n = 0; n < loopN(3); n++) {
+      let b = lipBush(lipI + f32(n - 1));
+      if (b.on) { col = bush(col, p, b, px); }
+    }
+  }
+  {
     let mv = landRows(p, KM);
     var dk = 0;
-    for (var o = 0; o <= 2; o++) {
+    var ti = 0;
+    for (var o = 0; o < loopN(4); o++) {
       let rr = floor(mv) + f32(o);
-      let rowY = HZ + (gt - HZ) * exp((rr + 0.6) / KM);
-      for (var k = 0; k < 4; k++) {
-        if (dk >= nD || u.dune[dk].y > rowY) { break; }
-        col = dune(col, p, dk, px);
+      // The last pass takes whatever stands nearer than all three rows.
+      let rowY = select(1e3, HZ + (gt - HZ) * exp((rr + 0.6) / KM), o < 3);
+      for (var k = 0; k < loopN(6); k++) {
+        if (dk >= nD || u.dune[min(dk, 5)].y > rowY) { break; }
+        if (duneNear(dk, p)) {
+          col = duneFace(col, p, dk, px);
+          for (var j = 0; j < loopN(24); j++) {
+            let b = duneBush(dk, j, p, px);
+            if (b.on) { col = bush(col, p, b, px); }
+          }
+        }
         dk++;
       }
-      if (rr < 0.0) { continue; }
-      let si0 = floor(p.x / bushW(rr, KM) + rr * 0.37);
-      for (var co = -1; co <= 1; co++) {
-        for (var n = 0; n < 2; n++) {
-          let b = bushAt(si0 + f32(co), rr, KM, n);
+      for (var k = 0; k < loopN(10); k++) {
+        if (ti >= nT || u.tr[min(ti, 9)].y > rowY) { break; }
+        col = cypress(col, p, ti, px, hazeC);
+        ti++;
+      }
+      if (o < 3 && rr >= 0.0 && p.y >= HZ) {
+        for (var c = 0; c < loopN(6); c++) {
+          let b = bushAt(floor(p.x / bushW(rr, KM) + rr * 0.37) + f32(c / 2 - 1), rr, KM, c % 2, p, vec2f(0.62, 0.35), (gt - HZ) * exp((rr + 0.8) / KM));
           if (b.on) { col = bush(col, p, b, px); }
         }
       }
     }
-    for (var k = 0; k < 4; k++) {
-      if (dk >= nD) { break; }
-      col = dune(col, p, dk, px);
-      dk++;
-    }
   }
-
-  // ---- Cypresses, far to near.
-  for (var i = 0; i < 10; i++) {
-    if (i >= nT) { break; }
-    col = cypress(col, p, i, px, hazeC);
+  for (var k = 0; k < loopN(12); k++) {
+    let b = fgBush(k);
+    if (b.on) { col = bush(col, p, b, px); }
   }
   // Painted layers over everything, finer in the distance, faint in the sky.
   let land = smoothstep(HZ - 0.1, HZ + 0.02, p0.y);
@@ -1116,6 +1221,13 @@ const FORE = 0.45;
     }
   }
   return a;
+}
+// A line of even round dots, lighter than dotLine where there are many to
+// draw: d across it, s the distance along it, w0 the dots' radius.
+@diagnostic(off, derivative_uniformity) fn evenDots(d: f32, s: f32, w0: f32, px: f32) -> f32 {
+  let w = max(w0, px * 0.8);
+  let sp = w * 2.3;
+  return fillA(length(vec2f(d, (fract(s / sp) - 0.5) * sp)) - w, px);
 }
 // An open line: d across it, s the distance along it.
 @diagnostic(off, derivative_uniformity) fn dotLine(d: f32, s: f32, w0: f32, px: f32, seed: f32) -> f32 {
@@ -1389,7 +1501,9 @@ const FORE = 0.45;
   return post(lambert(groundN(s * 1.8, depth * 7.0 + 0.15), 0.4), 3.0);
 }
 `;
-const PIXEL_BUDGET = 4500000;
+// This scene draws a great deal per pixel, so it keeps to a smaller budget
+// than the others.
+const PIXEL_BUDGET = 2400000;
 
 const NAME = 'cypress-grove';
 
@@ -1501,9 +1615,9 @@ function readControls() {
 // a gentle lean and a few bends, often forking into a second leader.
 // Branches leave the leaders in tiers on either side, a few more of them
 // downwind, reaching out near level, then dipping and curling up at their
-// tips; some are bare and dead. Foliage grows in flat pads at the ends of
-// the branches and the tops of the leaders.
-const NT = 10, SEG = 36, PAD = 12;
+// tips. Foliage grows in flat pads at the end of every branch and the tops
+// of the leaders.
+const NT = 10, SEG = 36, PAD = 16;
 function growTree(R, big) {
   const D = Math.PI / 180;
   const segs = [], pads = [];
@@ -1539,7 +1653,7 @@ function growTree(R, big) {
     a = Math.max(-10 * D, Math.min(14 * D, a + (R() - 0.5) * 18 * D));
     tas.push(a); tls.push(H / 4 * (0.85 + R() * 0.3));
   }
-  const r0 = 0.022 + R() * 0.006;
+  const r0 = 0.018 + R() * 0.012;
   const trunk = run([0, 0.03], tas, tls, r0, r0 * 0.3, false, 0);
   const leaders = [trunk];
   // Often a second leader forks off part way up and rises beside the first.
@@ -1563,12 +1677,11 @@ function growTree(R, big) {
       const b = at(L, f);
       const down = side > 0;
       const len = (0.14 + 0.24 * Math.sin(Math.PI * Math.min(1, Math.max(0, (f - 0.2) / 0.85)))) * (down ? 1.1 : 0.85) * (0.75 + R() * 0.45) * (li === 0 ? 1 : 0.8);
-      const bare = R() < (down ? 0.1 : 0.22);
       const a0 = side * (70 + R() * 18) * D;
       const a1 = a0 + side * (6 + R() * 8) * D;
       const a2 = a1 - side * (18 + R() * 16) * D;
-      const pts = run(b.p, [a0, a1, a2], [len * 0.4, len * 0.35, len * 0.25], Math.max(b.r * 0.55, 0.004), bare ? 0.0012 : 0.0025, bare, b.path);
-      if (bare || pts.length < 4) continue;
+      const pts = run(b.p, [a0, a1, a2], [len * 0.4, len * 0.35, len * 0.25], Math.max(b.r * 0.55, 0.004), 0.0025, false, b.path);
+      if (pts.length < 4) continue;
       const e = pts[3].p;
       tips.push({ x: e[0] + side * len * 0.04, y: e[1] - len * 0.04, w: len * (0.6 + R() * 0.2), pri: 1 });
       if (len > 0.16) tips.push({ x: pts[1].p[0] + side * len * 0.1, y: pts[1].p[1] - len * 0.05, w: len * (0.4 + R() * 0.1), pri: 2 });
@@ -1579,11 +1692,9 @@ function growTree(R, big) {
   });
   tips.sort((a, b) => a.pri - b.pri);
   for (const T of tips.slice(0, PAD)) pads.push({ x: T.x, y: T.y, w: T.w, sd: R() * 100, tilt: (R() - 0.5) * 0.2, n: 10 + Math.floor(R() * 3), ph: R() * 6.28 });
-  // Scale it to stand 1 high to the top of its crown, and keep the foliage
-  // off the lower trunk.
+  // Scale it to stand 1 high to the top of its crown.
   let top = trunk[trunk.length - 1].p[1];
   for (const P of pads) top = Math.min(top, P.y - P.w * 0.7);
-  for (let j = pads.length - 1; j >= 0; j--) if (pads[j].y > top * 0.3) pads.splice(j, 1);
   const k = 1 / -top;
   for (const S of segs) { S.a = [S.a[0] * k, S.a[1] * k]; S.b = [S.b[0] * k, S.b[1] * k]; S.r0 *= k; S.r1 *= k; S.path *= k; }
   for (const P of pads) { P.x *= k; P.y *= k; P.w *= k; }
@@ -1598,12 +1709,13 @@ function growTree(R, big) {
   return {
     segs, pads, shade,
     fork: [tt.p[0] * k, tt.p[1] * k], forkR: r0 * 0.5 * k, phase: R() * 6.28,
+    bark: [R(), R(), 0.15 + 0.6 * R(), R()],
     bounds: [x0 - 0.06, y0 - 0.06, x1 + 0.06, 0.12],
   };
 }
 
 let grove = [], seedN = 1 + Math.floor(Math.random() * 1e6), laidAspect = 0;
-let TR = [], TK = [], TB = [], TSH = [], SEGS = [], SR = [], PADS = [], PADP = [];
+let TR = [], TK = [], TV = [], TB = [], TSH = [], SEGS = [], SR = [], PADS = [], PADP = [];
 const smooth = (a, b, x) => { const f = Math.min(1, Math.max(0, (x - a) / (b - a))); return f * f * (3 - 2 * f); };
 // The edge of the dunes, as the shader draws it.
 const lipAt = (x) => 0.07 + 0.035 * Math.sin(x * 2.3 + seed) - 0.03 * smooth(0.2, 0.9, x) + 0.006 * Math.sin(x * 13);
@@ -1614,7 +1726,7 @@ const duneTop = (D, x) => {
   return D[1] - D[3] * f * f * (3 - 2 * f) * (1 + 0.05 * Math.sin(q * 7 + D[0] * 13));
 };
 const duneFoot = (D, x) => { const q = (x - D[0]) / D[2]; return D[1] + D[3] * 0.3 * Math.max(1 - q * q, 0); };
-let dunes = [];
+let dunes = [], fgs = [];
 // Every tree is sized by how far its foot stands below the horizon, so the
 // horizon crosses trees of one height at the same point on each of them.
 function layout() {
@@ -1628,15 +1740,15 @@ function layout() {
   // (on a tall screen, which shows more land below, it stands nearer and
   // fills the frame)...
   const tall = zoom - 1;
-  spots.push({ x: -xr * (0.45 + R() * 0.2 + Math.min(tall, 1) * 0.15), y: 0.34 + R() * 0.07 + tall * 0.34, k: (1.75 + R() * 0.25) / (1 + tall * 0.2), big: true });
+  spots.push({ x: -xr * (0.45 + R() * 0.2 + Math.min(tall, 1) * 0.15), y: 0.34 + R() * 0.07 + tall * 0.34, k: (1.36 + R() * 0.2) / (1 + tall * 0.2), big: true });
   // ...one or two in the middle distance...
-  spots.push({ x: xr * (0.2 + R() * 0.35), y: 0.19 + R() * 0.07 + tall * 0.12, k: 1.25 + R() * 0.2 });
-  if (p.count >= 6) spots.push({ x: -xr * (0.95 - R() * 0.15), y: 0.2 + R() * 0.06 + tall * 0.1, k: 1.2 + R() * 0.2 });
+  spots.push({ x: xr * (0.2 + R() * 0.35), y: 0.19 + R() * 0.07 + tall * 0.12, k: 0.98 + R() * 0.16 });
+  if (p.count >= 6) spots.push({ x: -xr * (0.95 - R() * 0.15), y: 0.2 + R() * 0.06 + tall * 0.1, k: 0.94 + R() * 0.16 });
   // ...and the rest standing back along the lip.
   const nFar = p.count - spots.length;
   for (let j = 0; j < nFar; j++) {
     const x = -xr + (j + 0.2 + R() * 0.6) / nFar * 2 * xr;
-    spots.push({ x, y: lipAt(x) + 0.014 + R() * 0.04, k: 1.05 + R() * 0.3 });
+    spots.push({ x, y: lipAt(x) + 0.014 + R() * 0.04, k: 0.82 + R() * 0.24 });
   }
   // Dunes on the right, far to near: a foredune along the edge, one in the
   // middle distance and a big one close in at the side of the frame, each
@@ -1647,6 +1759,23 @@ function layout() {
   dune(fx, lipAt(fx) + 0.02 + R() * 0.02, 1.8 + R() * 0.8, 0.28 + R() * 0.12);
   dune(xr * (0.35 + R() * 0.35), 0.22 + R() * 0.06 + tall * 0.1, 1.4 + R() * 0.6, 0.3 + R() * 0.12);
   dune(xr * (0.85 + R() * 0.25), 0.4 + R() * 0.06 + tall * 0.3, 1.2 + R() * 0.5, 0.32 + R() * 0.12);
+  // Rolling swells of sand on the left too, behind the old giant.
+  dune(-xr * (0.55 + R() * 0.3), 0.15 + R() * 0.05 + tall * 0.08, 1.5 + R() * 0.6, 0.26 + R() * 0.1);
+  dune(-xr * (0.05 + R() * 0.25), lipAt(0) + 0.03 + R() * 0.02, 1.6 + R() * 0.6, 0.26 + R() * 0.1);
+  dunes.sort((a, b) => a[1] - b[1]);
+  // Brush in the foreground, nearest of all: a bank of big bushes in the
+  // bottom-left corner, cut by the edge of the frame, and a few on the right.
+  fgs = [];
+  const yb = 0.5 * zoom;
+  for (let j = 0; j < 8; j++) {
+    const y = yb - 0.03 + R() * 0.08;
+    fgs.push([-xr * (1.08 - 0.72 * (j + R() * 0.7) / 8), y, (y - HZ) * (0.09 + 0.09 * R()), R() * 100]);
+  }
+  for (let j = 0; j < 3; j++) {
+    const y = yb + R() * 0.07;
+    fgs.push([xr * (0.5 + 0.55 * (j + R()) / 3), y, (y - HZ) * (0.06 + 0.06 * R()), R() * 100]);
+  }
+  fgs.sort((a, b) => a[1] - b[1]);
   // A tree whose foot lands on a dune stands on it, sized for the dune's depth.
   for (const o of spots) {
     for (const D of dunes) {
@@ -1659,11 +1788,12 @@ function layout() {
   // Far ones first.
   grove.sort((a, b) => a.y - b.y);
   const z4 = () => [0, 0, 0, 0];
-  TR = []; TK = []; TB = []; TSH = []; SEGS = []; SR = []; PADS = []; PADP = [];
+  TR = []; TK = []; TV = []; TB = []; TSH = []; SEGS = []; SR = []; PADS = []; PADP = [];
   for (let i = 0; i < NT; i++) {
     const g = grove[i], T = g && g.tree;
     TR.push(g ? [g.x, g.y, g.s, g.haze] : z4());
     TK.push(g ? [T.fork[0], T.fork[1], T.forkR, T.phase] : z4());
+    TV.push(g ? T.bark : z4());
     TB.push(g ? T.bounds : z4());
     for (let j = 0; j < 6; j++) TSH.push(g && T.shade[j] ? T.shade[j] : z4());
     for (let j = 0; j < SEG; j++) {
@@ -1699,7 +1829,9 @@ function uniforms() {
     e: [grove.length, p.glow, Math.min(1, fogAt(tau) * p.fog), dunes.length],
     cols: dayCols(tau, SKIES, LAND, KEEP),
     tr: TR, tk: TK, tb: TB, tsh: TSH, seg: SEGS, sr: SR, pad: PADS, padP: PADP,
-    dune: [0, 1, 2, 3].map((j) => dunes[j] || [0, 0, 0, 0]),
+    dune: [0, 1, 2, 3, 4, 5].map((j) => dunes[j] || [0, 0, 0, 0]),
+    fg: Array.from({ length: 12 }, (_, j) => fgs[j] || [0, 0, 0, 0]),
+    tv: TV,
   };
 }
 function step(dt) {
@@ -1740,9 +1872,10 @@ try {
   throw e;
 }
 
-// Desktop renders above screen resolution within a pixel budget and lets the
-// browser scale down, for crisper edges and finer marks; phones stay light.
-const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 2e6 ? 1.25 : b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(PIXEL_BUDGET) });
+// Desktop renders at screen resolution, or below it where the screen has
+// more pixels than the budget, and lets the browser scale up; phones stay
+// light.
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 2e6 ? 1.25 : b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(0.7, Math.min(d, s)); return [v, v]; })(PIXEL_BUDGET) });
 const clk = clock(gpu);
 const tl = tilt();
 let W = 1, H = 1, aspect = 1, t = Math.random() * 100;
