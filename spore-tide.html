@@ -297,19 +297,20 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 // with a gentle lean, often forking, with branches in tiers that dip and
 // curl up at their tips, some bare and dead. The foliage grows in flat pads
 // built from long, thin diamonds of many sizes pointing different ways.
-// Shrubs, spiky, rounded or both, from low tufts to big bushes, dot the
-// sand. Everything stands at its true size on dunes whose rows close up
-// toward their edge, over a sea of short lavender and blue dashes, granite
-// rocks ringed in surf and a headland with its own grove stepping into
-// haze. The day turns slowly; after dark the surf glows. One light, the sun
-// or the moon, shades every branch, pad and shrub from its own form and
-// throws every shadow the same way; lines are laid in dots.
+// Shrubs, spiky, rounded or both, and mats of creeping cover dot the sand
+// and thicken over the dunes on the right. Everything stands at its true
+// size on sand whose rows close up toward its edge, over a sea of short
+// lavender and blue dashes, granite rocks ringed in surf and a headland
+// with its own grove stepping into haze. The day turns slowly; after dark
+// the surf glows. One light, the sun or the moon, shades every branch, pad
+// and shrub from its own form and throws every shadow the same way; lines
+// are laid in dots.
 struct U {
   a: vec4f,   // time, aspect, px, seed
   b: vec4f,   // wind, gust, grain, zoom
   c: vec4f,   // sun x, sun y, sun height, dark
   d: vec4f,   // moon x, moon y, moon height, tilt x
-  e: vec4f,   // tree count, glow, fog, _
+  e: vec4f,   // tree count, glow, fog, dune count
   cols: array<vec4f, 33>,
   tr: array<vec4f, 10>,    // per tree: foot x, foot y, height, haze
   tk: array<vec4f, 10>,    // top of its trunk x, y, radius there, sway phase (tree units)
@@ -319,6 +320,7 @@ struct U {
   sr: array<vec4f, 360>,   // their radius at each end, bare (0/1), distance along the limb
   pad: array<vec4f, 120>,  // pads of foliage, PAD per tree: centre x, y, reach, _
   padP: array<vec4f, 120>, // their seed, tilt, number of lobes, sway phase
+  dune: array<vec4f, 4>,   // dunes far to near: x of the middle, depth of the foot, half width, height
 }
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -542,29 +544,42 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
 
 // A shrub on the dunes: where it stands, how big it is and what kind.
 // kind 0 is a spiky pad of diamonds, 1 a rounded mound, 2 a rounded mound
-// crowned with spiky sprays. r is its height, w its half width, ht how tall
-// it stands for its shadow.
+// crowned with spiky sprays, 3 a low mat of creeping cover. r is its
+// height, w its half width, ht how tall it stands for its shadow.
 struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f32 }
 // The spacing of the shrubs along row rr of the dunes.
 @diagnostic(off, derivative_uniformity) fn bushW(rr: f32, KM: f32) -> f32 { return 0.063 * exp((rr + 0.8) / KM); }
-// The shrub in cell si of row rr: sizes run from low tufts to big bushes,
-// most of them small, all scaled by their distance.
-@diagnostic(off, derivative_uniformity) fn bushAt(si: f32, rr: f32, KM: f32) -> Bush {
+// Shrub n (0 or 1) in cell si of row rr: sizes run from low tufts to big
+// bushes, most of them small, all scaled by their distance. The scrub
+// thickens toward the dunes on the right and gathers in patches, where a
+// cell can hold a second shrub.
+@diagnostic(off, derivative_uniformity) fn bushAt(si: f32, rr: f32, KM: f32, n: i32) -> Bush {
   var b: Bush;
-  let id = vec2f(si, rr);
+  let id = vec2f(si, rr) + f32(n) * vec2f(31.7, 17.3);
   let h = hash21(id + u.a.w + 50.0);
-  b.on = h > 0.5;
-  let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * bushW(rr, KM);
+  let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * select(0.5, 0.9, n == 1)) * bushW(rr, KM);
+  let xr = 0.5 * u.a.y * u.b.w;
+  let thin = mix(0.62, 0.15, smoothstep(-0.3, 0.6, cx / xr)) - 0.35 * (vnoise(vec2f(cx * 4.0, rr * 0.8) + u.a.w) - 0.5);
+  b.on = h > thin + select(0.0, 0.35, n == 1);
   let cy = HZ + (groundTop(cx) - HZ) * exp((rr + 0.8 + (hash21(id + 4.0) - 0.5) * 0.4) / KM);
-  let hs = hash21(id + 6.1);
-  b.r = (cy - HZ) * (0.035 + 0.12 * hs * hs);
-  let hk = hash21(id + 8.3);
-  b.kind = select(select(2, 1, hk < 0.72), 0, hk < 0.36);
-  b.w = b.r * select(1.2 + 0.6 * hash21(id + 9.7), 1.6, b.kind == 0);
-  b.ht = b.r * select(1.0, 1.3, b.kind == 2);
+  // None where a dune stands: the dunes carry their own.
+  for (var k = 0; k < 4; k++) {
+    if (k >= i32(u.e.w)) { break; }
+    let D = u.dune[k];
+    if (abs(cx - D.x) < D.z && cy > duneTop(D, cx) - (cy - HZ) * 0.05 && cy < duneFoot(D, cx) + (cy - HZ) * 0.03) { b.on = false; }
+  }
   b.foot = vec2f(cx, cy);
-  b.seed = h * 13.0 + hk * 7.0;
+  shape(&b, cy - HZ, hash21(id + 6.1), hash21(id + 8.3), hash21(id + 9.7), h * 13.0);
   return b;
+}
+// Size and kind for a shrub dz below the horizon, from three hashes.
+@diagnostic(off, derivative_uniformity) fn shape(b: ptr<function, Bush>, dz: f32, hs: f32, hk: f32, hw: f32, seed: f32) {
+  let r = dz * (0.035 + 0.12 * hs * hs);
+  (*b).kind = select(select(select(3, 2, hk < 0.82), 1, hk < 0.62), 0, hk < 0.3);
+  (*b).r = select(r, r * 0.45, (*b).kind == 3);
+  (*b).w = r * select(select(1.2 + 0.6 * hw, 1.6, (*b).kind == 0), 1.8 + 0.8 * hw, (*b).kind == 3);
+  (*b).ht = (*b).r * select(1.0, 1.3, (*b).kind == 2);
+  (*b).seed = seed + hk * 7.0;
 }
 // A rounded shrub: a low dome, dark in its core and stippled with light
 // round its curve from the one light. foot is where it meets the ground,
@@ -580,6 +595,7 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
 // Draw shrub b over col.
 @diagnostic(off, derivative_uniformity) fn bush(col: vec3f, p: vec2f, b: Bush, px: f32) -> vec3f {
   if (b.kind == 0) { return shrub(col, p, b.foot, b.r, b.seed, px); }
+  // Mounds and mats: a mat is just a very low, wide mound.
   var c = mound(col, p, b.foot, b.r, b.w, b.seed, px);
   if (b.kind == 2) { c = shrub(c, p, b.foot - vec2f(0.0, b.r * 0.55), b.r * 0.75, b.seed + 3.0, px); }
   return c;
@@ -616,6 +632,62 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
   }
   let res = unpremul(acc);
   return mix(col, res.rgb, res.a);
+}
+
+// ---- Dunes, laid out in JS far to near: x of the middle, depth of the
+// foot, half the width and the height. Each has a long, gentle windward
+// slope and a steeper lee face, a crest lit by the one light, ripples that
+// follow its curve, and shrubs of its own on its face.
+@diagnostic(off, derivative_uniformity) fn duneTop(D: vec4f, x: f32) -> f32 {
+  let q = (x - D.x) / D.z;
+  let t = clamp(select((1.0 - q) / 0.75, (q + 1.0) / 1.25, q < 0.25), 0.0, 1.0);
+  return D.y - D.w * t * t * (3.0 - 2.0 * t) * (1.0 + 0.05 * sin(q * 7.0 + D.x * 13.0));
+}
+// Where its face meets the flat sand in front, bulging toward the viewer.
+@diagnostic(off, derivative_uniformity) fn duneFoot(D: vec4f, x: f32) -> f32 {
+  let q = (x - D.x) / D.z;
+  return D.y + D.w * 0.3 * max(1.0 - q * q, 0.0);
+}
+@diagnostic(off, derivative_uniformity) fn dune(col: vec3f, p: vec2f, k: i32, px: f32) -> vec3f {
+  let D = u.dune[k];
+  let dz = D.y - HZ;
+  let mgn = dz * 0.32;
+  if (D.w <= 0.0 || abs(p.x - D.x) > D.z + mgn || p.y < D.y - D.w * 1.1 - mgn || p.y > D.y + D.w * 0.4) { return col; }
+  var c = col;
+  let top = duneTop(D, p.x);
+  let foot = duneFoot(D, p.x);
+  if (p.y > top - px * 3.0 && abs(p.x - D.x) < D.z) {
+    let e = D.z * 0.01;
+    let sl = (duneTop(D, p.x + e) - duneTop(D, p.x - e)) / (2.0 * e);
+    let f = clamp((p.y - top) / max(foot - top, 1e-4), 0.0, 1.0);
+    // The face turns from the crest down toward the viewer.
+    let gl = lambert(groundN(sl * 1.4, 0.2 + f * 1.4), 0.45);
+    var dc = mix(C(16), C(15), 0.3 + 0.7 * post(gl * 1.1, 4.0));
+    dc = mix(dc, C(17), (1.0 - smoothstep(0.0, 0.2, f)) * gl * 0.8);
+    // Ripples following its curve.
+    let nr = 4.0 + 6.0 * D.w / dz;
+    let rv = f * nr;
+    dc = mix(dc, C(16), dotLine((fract(rv + 0.5) - 0.5) * (foot - top) / nr, p.x, DOT * clamp(dz / 0.3, 0.55, 1.25) * 0.7, px, floor(rv + 0.5) + f32(k) * 11.0) * 0.3);
+    dc = moonCast(dc, gl);
+    // The face melts into the sand at its foot; the crest is drawn in dots.
+    c = mix(c, dc, fillA(top - p.y, px) * (1.0 - smoothstep(0.7, 1.0, f)));
+    c = mix(c, C(30), dotLine(p.y - top, p.x, DOT, px, f32(k) * 7.0 + 3.0) * 0.6 * smoothstep(1.0, 0.9, abs(p.x - D.x) / D.z));
+  }
+  // Its own scrub in patches, from the crest down: shrubs, and mats of
+  // creeping cover spread among them.
+  for (var j = 0; j < 24; j++) {
+    let fj = f32(j);
+    let h = hash21(vec2f(fj * 1.7, f32(k) * 3.1 + u.a.w));
+    let clump = (f32(j % 4) + 0.5) / 4.0 * 1.6 - 0.8 + (hash21(vec2f(f32(j % 4) * 4.3, f32(k) + u.a.w + 9.0)) - 0.5) * 0.3;
+    let x = D.x + D.z * clamp(clump + (hash21(vec2f(fj * 2.3, f32(k) + u.a.w + 5.0)) - 0.5) * 0.55, -0.92, 0.92);
+    var b: Bush;
+    b.on = true;
+    b.foot = vec2f(x, mix(duneTop(D, x), duneFoot(D, x), 0.05 + 0.65 * (fj + h) / 25.0));
+    let hk = select(hash21(vec2f(fj * 5.1, f32(k) + 4.0 + u.a.w)), 0.95, (j % 5) == 1);
+    shape(&b, dz, 0.25 + 0.75 * hash21(vec2f(fj * 3.9, f32(k) + 2.0 + u.a.w)), hk, h, h * 13.0 + f32(k));
+    c = bush(c, p, b, px);
+  }
+  return c;
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
@@ -753,6 +825,8 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
   // toward the lip.
   let gt = groundTop(p.x);
   let nT = i32(u.e.x);
+  let nD = i32(u.e.w);
+  let KM = 4.0;
   if (p.y > gt - px * 2.0) {
     let dy = p.y - gt;
     let dz = max(p.y - HZ, 1e-3);
@@ -792,34 +866,33 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
         if (i >= nT) { break; }
         sh = max(sh, treeShade(ps, pq, i, px));
       }
+      // The dunes throw theirs too.
+      for (var k = 0; k < 4; k++) {
+        if (k >= nD) { break; }
+        let D = u.dune[k];
+        sh = max(sh, blobShadowQ(pq, ps, vec2f(D.x + D.z * 0.15, D.y - D.w * 0.45), D.z * 0.75, D.y, px) * 0.8);
+      }
       gc = mix(gc, C(16) * 0.62, sh * 0.62);
     }
-    // Shrubs in rows that close up with distance. Each stands at its true
-    // size for its distance and throws a shadow from its own height, so
-    // gather the shadows of those nearby first, then draw them far to near.
+    // Shrubs stand in rows that close up with distance, each at its true
+    // size and throwing a shadow from its own height; the shadows here fall
+    // from the rows behind.
     {
-      let KM = 4.0;
       let mv = landRows(p, KM);
-      var bs: array<Bush, 9>;
       var msh = 0.0;
       for (var o = 0; o <= 2; o++) {
         let rr = floor(mv) - f32(o);
+        if (rr < 0.0) { continue; }
         let si0 = floor(p.x / bushW(rr, KM) + rr * 0.37);
-        for (var co = 0; co < 3; co++) {
-          var b = bushAt(si0 + f32(co - 1), rr, KM);
-          b.on = b.on && rr >= 0.0;
-          bs[o * 3 + co] = b;
-          if (!b.on) { continue; }
-          msh = max(msh, blobShadowQ(pq, ps, b.foot - vec2f(0.0, b.ht * 0.5), b.w * 0.9, b.foot.y, px));
+        for (var co = -1; co <= 1; co++) {
+          for (var n = 0; n < 2; n++) {
+            let b = bushAt(si0 + f32(co), rr, KM, n);
+            if (!b.on) { continue; }
+            msh = max(msh, blobShadowQ(pq, ps, b.foot - vec2f(0.0, b.ht * 0.5), b.w * 0.9, b.foot.y, px));
+          }
         }
       }
       gc = mix(gc, C(16) * 0.62, msh * 0.72);
-      for (var o = 2; o >= 0; o--) {
-        for (var co = 0; co < 3; co++) {
-          let b = bs[o * 3 + co];
-          if (b.on) { gc = bush(gc, p, b, px); }
-        }
-      }
     }
     gc = moonCast(gc, gl);
     col = mix(col, gc, fillA(gt - p.y, px));
@@ -841,6 +914,36 @@ struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f
       b.ht = b.r;
       b.seed = h * 17.0;
       col = bush(col, p, b, px);
+    }
+  }
+
+  // ---- Shrubs and dunes, far to near. A shrub reaches up from its foot,
+  // so the rows from this pixel's own toward the viewer can cover it; each
+  // dune goes in among the rows at the depth of its foot.
+  if (p.y > HZ - 0.1) {
+    let mv = landRows(p, KM);
+    var dk = 0;
+    for (var o = 0; o <= 2; o++) {
+      let rr = floor(mv) + f32(o);
+      let rowY = HZ + (gt - HZ) * exp((rr + 0.6) / KM);
+      for (var k = 0; k < 4; k++) {
+        if (dk >= nD || u.dune[dk].y > rowY) { break; }
+        col = dune(col, p, dk, px);
+        dk++;
+      }
+      if (rr < 0.0) { continue; }
+      let si0 = floor(p.x / bushW(rr, KM) + rr * 0.37);
+      for (var co = -1; co <= 1; co++) {
+        for (var n = 0; n < 2; n++) {
+          let b = bushAt(si0 + f32(co), rr, KM, n);
+          if (b.on) { col = bush(col, p, b, px); }
+        }
+      }
+    }
+    for (var k = 0; k < 4; k++) {
+      if (dk >= nD) { break; }
+      col = dune(col, p, dk, px);
+      dk++;
     }
   }
 
@@ -1504,6 +1607,14 @@ let TR = [], TK = [], TB = [], TSH = [], SEGS = [], SR = [], PADS = [], PADP = [
 const smooth = (a, b, x) => { const f = Math.min(1, Math.max(0, (x - a) / (b - a))); return f * f * (3 - 2 * f); };
 // The edge of the dunes, as the shader draws it.
 const lipAt = (x) => 0.07 + 0.035 * Math.sin(x * 2.3 + seed) - 0.03 * smooth(0.2, 0.9, x) + 0.006 * Math.sin(x * 13);
+// A dune's crest and the foot of its face at x, as the shader draws them.
+const duneTop = (D, x) => {
+  const q = (x - D[0]) / D[2];
+  const f = Math.min(1, Math.max(0, q < 0.25 ? (q + 1) / 1.25 : (1 - q) / 0.75));
+  return D[1] - D[3] * f * f * (3 - 2 * f) * (1 + 0.05 * Math.sin(q * 7 + D[0] * 13));
+};
+const duneFoot = (D, x) => { const q = (x - D[0]) / D[2]; return D[1] + D[3] * 0.3 * Math.max(1 - q * q, 0); };
+let dunes = [];
 // Every tree is sized by how far its foot stands below the horizon, so the
 // horizon crosses trees of one height at the same point on each of them.
 function layout() {
@@ -1527,7 +1638,24 @@ function layout() {
     const x = -xr + (j + 0.2 + R() * 0.6) / nFar * 2 * xr;
     spots.push({ x, y: lipAt(x) + 0.014 + R() * 0.04, k: 1.05 + R() * 0.3 });
   }
-  grove = spots.map((o) => ({ ...o, s: (o.y - HZ) * o.k, haze: Math.min(1, Math.max(0, (0.33 - o.y) / 0.25)), tree: growTree(R, !!o.big) }));
+  // Dunes on the right, far to near: a foredune along the edge, one in the
+  // middle distance and a big one close in at the side of the frame, each
+  // sized for its distance.
+  dunes = [];
+  const dune = (x, y, wk, hk) => dunes.push([x, y, (y - HZ) * wk, (y - HZ) * hk]);
+  const fx = xr * (0.45 + R() * 0.35);
+  dune(fx, lipAt(fx) + 0.02 + R() * 0.02, 1.8 + R() * 0.8, 0.28 + R() * 0.12);
+  dune(xr * (0.35 + R() * 0.35), 0.22 + R() * 0.06 + tall * 0.1, 1.4 + R() * 0.6, 0.3 + R() * 0.12);
+  dune(xr * (0.85 + R() * 0.25), 0.4 + R() * 0.06 + tall * 0.3, 1.2 + R() * 0.5, 0.32 + R() * 0.12);
+  // A tree whose foot lands on a dune stands on it, sized for the dune's depth.
+  for (const o of spots) {
+    for (const D of dunes) {
+      if (Math.abs(o.x - D[0]) > D[2] * 0.9) continue;
+      const top = duneTop(D, o.x), foot = duneFoot(D, o.x);
+      if (o.y > top - 0.005 && o.y < foot + 0.005) { o.y = Math.max(o.y, top + (foot - top) * 0.25); o.depth = D[1]; }
+    }
+  }
+  grove = spots.map((o) => ({ ...o, s: ((o.depth ?? o.y) - HZ) * o.k, haze: Math.min(1, Math.max(0, (0.33 - (o.depth ?? o.y)) / 0.25)), tree: growTree(R, !!o.big) }));
   // Far ones first.
   grove.sort((a, b) => a.y - b.y);
   const z4 = () => [0, 0, 0, 0];
@@ -1568,9 +1696,10 @@ function uniforms() {
     b: [p.wind, gust, p.grain, zoom],
     c: [s.sx, s.sy, s.elev, dark],
     d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
-    e: [grove.length, p.glow, Math.min(1, fogAt(tau) * p.fog), 0],
+    e: [grove.length, p.glow, Math.min(1, fogAt(tau) * p.fog), dunes.length],
     cols: dayCols(tau, SKIES, LAND, KEEP),
     tr: TR, tk: TK, tb: TB, tsh: TSH, seg: SEGS, sr: SR, pad: PADS, padP: PADP,
+    dune: [0, 1, 2, 3].map((j) => dunes[j] || [0, 0, 0, 0]),
   };
 }
 function step(dt) {
