@@ -292,18 +292,18 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
   return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
 }
 
-// Cypress Grove: the old Monterey cypresses of Point Lobos in the colours of
-// my painted surfboard, drawn crisp in the manner of Eyvind Earle. Short,
-// twisting trunks fork into crooked limbs that the wind has bent over, some
-// bare and bleached, most rusted orange with algae, and every live limb
-// streams a spray of foliage downwind: a stack of long, thin diamonds, each
-// two long triangles pointed at both ends. The trees stand at their true
-// sizes on a red bluff whose rows close up toward its lip, over a sea of
-// short lavender and blue dashes, granite rocks ringed in surf and a
-// headland with its own grove stepping into haze. The day turns slowly;
-// after dark the surf glows. One light, the sun or the moon, shades every
-// limb, spray and mound from its own form and throws every shadow the same
-// way; lines are laid in dots.
+// Cypress Grove: the old Monterey cypresses of Point Lobos on white dunes,
+// drawn crisp in the manner of Eyvind Earle. Slender, weathered trunks rise
+// with a gentle lean, often forking, with branches in tiers that dip and
+// curl up at their tips, some bare and dead. The foliage grows in flat pads
+// built from long, thin diamonds of many sizes pointing different ways.
+// Shrubs, spiky, rounded or both, from low tufts to big bushes, dot the
+// sand. Everything stands at its true size on dunes whose rows close up
+// toward their edge, over a sea of short lavender and blue dashes, granite
+// rocks ringed in surf and a headland with its own grove stepping into
+// haze. The day turns slowly; after dark the surf glows. One light, the sun
+// or the moon, shades every branch, pad and shrub from its own form and
+// throws every shadow the same way; lines are laid in dots.
 struct U {
   a: vec4f,   // time, aspect, px, seed
   b: vec4f,   // wind, gust, grain, zoom
@@ -314,17 +314,17 @@ struct U {
   tr: array<vec4f, 10>,    // per tree: foot x, foot y, height, haze
   tk: array<vec4f, 10>,    // top of its trunk x, y, radius there, sway phase (tree units)
   tb: array<vec4f, 10>,    // its bounds in tree units: min x, min y, max x, max y
-  tsh: array<vec4f, 30>,   // three masses of its crown for shadows: centre x, y, radius
-  seg: array<vec4f, 140>,  // limb pieces, SEG per tree: from x, y, to x, y
-  sr: array<vec4f, 140>,   // their radius at each end, bare (0/1), distance along the limb
-  spray: array<vec4f, 80>, // sprays of foliage, SPR per tree: root x, y, length, thickness
-  sprayP: array<vec4f, 80>, // their seed, tilt, number of diamonds, sway phase
+  tsh: array<vec4f, 60>,   // six pads of its crown for shadows: centre x, y, radius
+  seg: array<vec4f, 360>,  // trunk and branch pieces, SEG per tree: from x, y, to x, y
+  sr: array<vec4f, 360>,   // their radius at each end, bare (0/1), distance along the limb
+  pad: array<vec4f, 120>,  // pads of foliage, PAD per tree: centre x, y, reach, _
+  padP: array<vec4f, 120>, // their seed, tilt, number of lobes, sway phase
 }
 @group(0) @binding(0) var<uniform> u: U;
 
 // 0-6 sky, 7 headland, 8 mist, 9 mist light, 10 sea far, 11 sea near,
-// 12 dash lavender, 13 dash blue, 14 foam, 15 ground red, 16 ground shade,
-// 17 ground light, 18 algae orange, 19 needle tip, 20 needle dark,
+// 12 dash lavender, 13 dash blue, 14 foam, 15 sand, 16 sand shade,
+// 17 sand light, 18 algae orange, 19 needle tip, 20 needle dark,
 // 21 needle mid, 22 bleached wood, 23 bark, 24 needle lit, 25 bush dark,
 // 26 bush mid, 27 bush hi, 28 bush hi 2, 29 glow, 30 ink, 31 lamp, 32 pink
 @diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
@@ -334,49 +334,77 @@ struct U {
 
 const HZ = -0.04;
 const DOT = 0.0011;
-const SEG = 14;
-const SPR = 8;
+const SEG = 36;
+const PAD = 12;
 @diagnostic(off, derivative_uniformity) fn groundTop(x: f32) -> f32 { return 0.07 + 0.035 * sin(x * 2.3 + u.a.w) - 0.03 * smoothstep(0.2, 0.9, x) + 0.006 * sin(x * 13.0); }
 @diagnostic(off, derivative_uniformity) fn headTop(x: f32) -> f32 { return HZ + 0.004 - 0.09 * smoothstep(0.25, 0.75, x) + 0.01 * sin(x * 11.0 + u.a.w) - 0.02 * smoothstep(0.8, 1.2, x); }
 
-// Rows across the bluff, k to each doubling of the distance below the
+// Rows across the dunes, k to each doubling of the distance below the
 // horizon: spaced in proportion to that distance, as the rows of the sea
 // are, so the land closes up toward its lip. 0 at the lip.
 @diagnostic(off, derivative_uniformity) fn landRows(p: vec2f, k: f32) -> f32 {
   return log(max(p.y - HZ, 1e-3) / max(groundTop(p.x) - HZ, 1e-3)) * k;
 }
-// Height of the bluff: terraced bands over a gentle roll, both shrinking
-// with distance.
+// Height of the dunes: broad swells whose crests wander across the sand,
+// over a gentle roll, both shrinking with distance.
 @diagnostic(off, derivative_uniformity) fn groundZ(p: vec2f) -> f32 {
   let dz = max(p.y - HZ, 0.0);
-  let rowV = landRows(p, 9.0) + 0.3 * sin(p.x * 6.0 + u.a.w);
-  return dz * (0.085 * terrace(fract(rowV)) + 0.1 * (fbm(vec2f(p.x / (dz + 0.05) * 0.9, rowV * 0.35) + u.a.w) - 0.5));
+  let rowV = landRows(p, 9.0);
+  let swell = sin(rowV * 0.8 + 1.4 * sin(p.x / (dz + 0.05) * 0.8 + u.a.w));
+  return dz * (0.07 * swell + 0.1 * (fbm(vec2f(p.x / (dz + 0.05) * 0.9, rowV * 0.35) + u.a.w) - 0.5));
 }
 
 // ---- Cypresses. Each is laid out in JS in its own units: foot at the
 // origin, about 1 high (y up is negative), +x downwind. Their foliage grows
-// in sprays of long, thin triangles streaming downwind from the limb tips.
-// Kite k of n in a spray: a long, thin diamond made of two long triangles
-// meeting along its axis, widest just past the limb's tip and drawn out to a
-// long point downwind and a short one upwind. The kites stack from the
-// bottom of the spray (f 0) to its top (f 1), fanning a little. Ls is the
-// spray's length, Ts its thickness at the root, sd a seed, fl a flutter
-// from the wind.
+// in flat pads of long, thin triangles at the ends of the branches.
+// Lobe m of n in a pad of foliage: a long, thin diamond made of two long
+// triangles meeting along its axis. Most lie out along the pad one way or
+// the other, rising or dipping; some stand up from it and a few hang. The
+// pad is flat, so the ones along it are long and the upright ones short,
+// and they run from large at the back of the pad (m 0) to small at its
+// front. Ls is the pad's reach, sd a seed, fl a flutter from the wind.
 struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
-@diagnostic(off, derivative_uniformity) fn kite(k: i32, n: i32, Ls: f32, Ts: f32, sd: f32, fl: f32) -> Kite {
-  let fk = f32(k);
+@diagnostic(off, derivative_uniformity) fn kite(m: i32, n: i32, Ls: f32, sd: f32, fl: f32) -> Kite {
+  let fm = f32(m);
+  let h1 = hash21(vec2f(fm * 3.7, sd));
+  let h2 = hash21(vec2f(fm * 5.3, sd + 1.3));
+  let h3 = hash21(vec2f(fm * 7.1, sd + 2.7));
   var K: Kite;
-  K.f = fk / f32(max(n - 1, 1));
-  let ang = mix(-0.12, 0.14, K.f) + (hash1(fk * 3.7 + sd) - 0.5) * 0.1 + fl * 0.04 * sin(fk * 2.1 + sd);
+  K.f = fm / f32(max(n - 1, 1));
+  var ang = mix(-2.0, -1.1, h2);
+  if (h1 < 0.42) { ang = mix(-0.35, 0.5, h2); }
+  else if (h1 < 0.78) { ang = 3.1416 + mix(-0.5, 0.35, h2); }
+  else if (h1 < 0.94) { ang = mix(0.9, 2.25, h2); }
+  // The first few lie level either way and make the body of the pad.
+  if (m < 3) { ang = select(3.1416, 0.0, (m & 1) == 0) + (h2 - 0.5) * 0.4; }
+  ang += fl * 0.06 * sin(fm * 2.1 + sd);
   K.dir = vec2f(cos(ang), -sin(ang));
-  K.c = vec2f(Ls * (0.02 + 0.14 * hash1(fk * 7.3 + sd)), (0.5 - K.f) * Ts * 0.9);
-  K.ld = Ls * (0.62 + 0.38 * hash1(fk * 5.1 + sd)) * (1.0 - 0.15 * abs(K.f - 0.6));
-  K.lw = K.ld * (0.16 + 0.12 * hash1(fk * 2.9 + sd));
-  K.hw = Ts * (0.34 + 0.14 * hash1(fk * 2.2 + sd));
+  K.ld = Ls * mix(0.45, 1.0, h3) * mix(0.45, 1.0, abs(K.dir.x)) * mix(1.0, 0.55, K.f) * select(1.0, 0.8, K.dir.x < 0.0) * select(1.0, 0.75, m < 3) * select(1.0, 0.6, K.dir.y > 0.5);
+  K.lw = K.ld * (0.2 + 0.14 * hash21(vec2f(fm * 2.9, sd + 4.1)));
+  K.hw = K.ld * (0.19 + 0.09 * hash21(vec2f(fm * 2.2, sd + 5.3)));
+  K.c = (vec2f(hash21(vec2f(fm * 9.1, sd + 6.7)), hash21(vec2f(fm * 4.7, sd + 7.9))) - 0.5) * vec2f(Ls * 0.8, Ls * 0.22) + K.dir * K.ld * 0.1;
   return K;
 }
-// The grain of the foliage: small, long triangles in staggered rows, all
-// pointing downwind. Returns their coverage and a hash for each.
+// Signed distance to a diamond's outline, from (along, across) its axis.
+// Inside, the axis is no edge, so only the two outer sides count.
+@diagnostic(off, derivative_uniformity) fn kiteD(lq: vec2f, K: Kite) -> f32 {
+  let hq = vec2f(lq.x, abs(lq.y));
+  let d = sdTri(hq, vec2f(-K.lw, 0.0), vec2f(0.0, K.hw), vec2f(K.ld, 0.0));
+  if (d >= 0.0) { return d; }
+  return max(dot(hq - vec2f(-K.lw, 0.0), normalize(vec2f(-K.hw, K.lw))), dot(hq - vec2f(K.ld, 0.0), normalize(vec2f(K.hw, K.ld))));
+}
+// How much light a diamond's facet at lq takes: four flat facets meet at
+// its widest point, the two along each side of the axis turned away from
+// it, the long ones leaning toward the tip and the short ones back.
+@diagnostic(off, derivative_uniformity) fn kiteLit(lq: vec2f, K: Kite) -> f32 {
+  let nrm = vec2f(-K.dir.y, K.dir.x);
+  let fa = select(-0.45, 0.45, lq.x > 0.0);
+  let fu = select(0.7, -0.7, lq.y > 0.0);
+  return lambert(normalize(vec3f(fa * K.dir.x - fu * nrm.x, -fa * K.dir.y + fu * nrm.y, 0.6)), 0.25);
+}
+// The grain of the foliage: small, long triangles in staggered rows along
+// a lobe's axis, all pointing toward its tip. Returns their coverage and a
+// hash for each.
 @diagnostic(off, derivative_uniformity) fn sprayGrain(q: vec2f, cell: f32, px: f32, seed: f32) -> vec2f {
   var best = vec2f(0.0);
   for (var L = 0; L < 2; L++) {
@@ -397,7 +425,7 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
   }
   return best;
 }
-// Tree i over col at p: its limbs, then its sprays from the crown down,
+// Tree i over col at p: its trunk and branches, then its pads of foliage,
 // washed toward the haze with distance and fog.
 @diagnostic(off, derivative_uniformity) fn cypress(col: vec3f, p: vec2f, i: i32, px: f32, hazeC: vec3f) -> vec3f {
   let T = u.tr[i];
@@ -448,63 +476,50 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
       bc = mix(bc, mix(C(23), C(30), 0.3), dotLine((fract(gv) - 0.5) * br * 0.4, bu, dotW * 0.6, pl, floor(gv) + f32(bk) * 7.0) * 0.6);
     } else {
       bc = barkTex(bu, across, br * 1.4, bl, pl, mix(C(23), C(30), 0.45), C(23), mix(C(23), C(22), 0.5), f32(bk) + K.w * 7.0);
-      // Rust-orange algae over the limbs, as on the old trees at Point Lobos.
-      let alg = smoothstep(0.52, 0.68, vnoise(vec2f(bu * 16.0, across * 1.2 + f32(bk) * 3.1 + K.w)));
-      bc = mix(bc, C(18) * mix(0.55, 1.1, bl), alg * 0.85);
+      // Patches of rust-orange algae, as on the old trees at Point Lobos.
+      let alg = smoothstep(0.6, 0.74, vnoise(vec2f(bu * 16.0, across * 1.2 + f32(bk) * 3.1 + K.w)));
+      bc = mix(bc, C(18) * mix(0.55, 1.1, bl), alg * 0.45);
     }
     bc = moonCast(bc, bl);
     acc = over(acc, bc, fillA(bd, pl));
     acc = over(acc, C(30), dotLine(bd, bu, dotW, pl, f32(bk) * 3.0 + K.w * 5.0) * 0.7);
   }
-  // ---- Foliage, from the top of the crown down. Each spray streams
-  // downwind from its limb's tip as a stack of long diamonds, the upper
-  // ones laid over the lower. Each diamond is lit as four flat facets
-  // meeting at its widest point: the upper two turned to the sky, the lower
-  // two down into shade, the long ones facing downwind and the short ones
-  // upwind, so the light slides from facet to facet as the sun moves.
-  let cell = max(0.011, pl * 2.4);
-  for (var k = 0; k < SPR; k++) {
-    let P = u.spray[i * SPR + k];
+  // ---- Foliage, from the top of the tree down, each pad laid over the
+  // ones above it: long, thin diamonds of many sizes pointing different
+  // ways, large ones at the back in the pad's own shade and smaller ones
+  // over them in front. Each is lit as flat facets, so the light slides
+  // from facet to facet as the sun moves.
+  let cell = max(0.008, pl * 2.4);
+  for (var k = 0; k < PAD; k++) {
+    let P = u.pad[i * PAD + k];
     if (P.z <= 0.0) { break; }
-    let Q = u.sprayP[i * SPR + k];
-    let Ls = P.z; let Ts = P.w;
-    // Each spray bobs a little on its limb and lifts toward its tips.
+    let Q = u.padP[i * PAD + k];
+    let Ls = P.z;
+    // Each pad bobs a little on its branch.
     let bob = vec2f(wind * 0.006 * sin(t * 1.1 + Q.w), wind * 0.003 * sin(t * 1.7 + Q.w * 1.3));
-    var v = rot2(q - P.xy - bob, -Q.y);
-    if (v.x < -Ls * 0.32 - mg || v.x > Ls * 1.22 + mg || v.y < -Ls * 0.34 - Ts - mg || v.y > Ls * 0.22 + Ts + mg) { continue; }
+    let v = rot2(q - P.xy - bob, -Q.y);
+    if (v.x < -Ls * 1.35 - mg || v.x > Ls * 1.55 + mg || v.y < -Ls * 0.85 - mg || v.y > Ls * 0.7 + mg) { continue; }
     let fl = wind * sin(t * 1.6 + Q.w);
-    v.y += (0.1 + 0.04 * fl) * max(v.x, 0.0) * max(v.x, 0.0) / Ls;
-    let gr = sprayGrain(v, cell, pl, Q.x);
     let nK = i32(Q.z);
-    for (var j = 0; j < 4; j++) {
+    for (var j = 0; j < 12; j++) {
       if (j >= nK) { break; }
-      let K = kite(j, nK, Ls, Ts, Q.x, fl);
-      let nrm = vec2f(-K.dir.y, K.dir.x);
-      // Along and across its axis; the diamond is the same either side.
-      let lq = vec2f(dot(v - K.c, K.dir), dot(v - K.c, nrm));
+      let K = kite(j, nK, Ls, Q.x, fl);
+      let lq = vec2f(dot(v - K.c, K.dir), dot(v - K.c, vec2f(-K.dir.y, K.dir.x)));
       if (lq.x < -K.lw - mg || lq.x > K.ld + mg || abs(lq.y) > K.hw + mg) { continue; }
-      let hq = vec2f(lq.x, abs(lq.y));
-      var d = sdTri(hq, vec2f(-K.lw, 0.0), vec2f(0.0, K.hw), vec2f(K.ld, 0.0));
-      if (d < 0.0) {
-        // Inside, the axis is no edge: measure to the two outer sides only.
-        d = max(dot(hq - vec2f(-K.lw, 0.0), normalize(vec2f(-K.hw, K.lw))), dot(hq - vec2f(K.ld, 0.0), normalize(vec2f(K.hw, K.ld))));
-      }
-      let fa = select(-0.45, 0.45, lq.x > 0.0);
-      let fu = select(mix(0.6, 1.0, K.f), mix(-0.5, -0.2, K.f), lq.y > 0.0);
-      let nf = normalize(vec3f(fa * K.dir.x - fu * nrm.x, -fa * K.dir.y + fu * nrm.y, 0.6));
-      let lit = lambert(nf, 0.25);
-      var fc = mix(C(20), C(21), smoothstep(0.1, 0.75, lit));
-      let dens = smoothstep(0.05, 0.8, lit + (gr.y - 0.5) * 0.4);
-      fc = mix(fc, mix(C(21), select(C(24), C(19), gr.y > 0.82), smoothstep(0.15, 0.8, lit)), gr.x * dens);
-      fc = moonCast(fc, lit);
+      let d = kiteD(lq, K);
+      // The heart of the pad sits in its own shade; lobes that stand up
+      // catch more light than the ones that hang.
+      let lit = kiteLit(lq, K) * mix(0.7, 1.0, K.f) * mix(0.85, 1.1, smoothstep(-0.7, 0.7, -K.dir.y));
+      let gr = sprayGrain(lq, cell, pl, Q.x + f32(j) * 13.0);
+      let fc = moonCast(foliage(lit, gr, C(20), C(21), C(24), C(19)), lit);
       acc = over(acc, fc, fillA(d, pl));
-      acc = over(acc, C(30), dotLine(d, lq.x, dotW * 0.85, pl, Q.x * 3.0 + f32(j)) * 0.55);
+      acc = over(acc, C(30), dotLine(d, lq.x, dotW * 0.8, pl, Q.x * 3.0 + f32(j)) * 0.5);
     }
   }
   let res = unpremul(acc);
   return mix(col, mix(res.rgb, hazeC, T.w * (0.25 + 0.45 * u.e.z)), res.a);
 }
-// Everything tree i throws on the bluff: its trunk, the masses of its
+// Everything tree i throws on the sand: its trunk, the pads of its
 // crown, and the dark ring where it stands.
 @diagnostic(off, derivative_uniformity) fn treeShade(ps: vec2f, pq: vec2f, i: i32, px: f32) -> f32 {
   let T = u.tr[i];
@@ -516,13 +531,91 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
   if (ps.x < lo.x || ps.x > hi.x || ps.y < lo.y || ps.y > hi.y) { return 0.0; }
   let K = u.tk[i];
   var sh = stemShadow(ps, foot, foot + K.xy * s, K.z * s, px);
-  for (var j = 0; j < 3; j++) {
-    let M = u.tsh[i * 3 + j];
+  for (var j = 0; j < 6; j++) {
+    let M = u.tsh[i * 6 + j];
     if (M.z <= 0.0) { continue; }
     sh = max(sh, blobShadowQ(pq, ps, foot + M.xy * s, M.z * s, foot.y, px));
   }
   let cq = (ps - foot) / vec2f(s * 0.09, s * 0.022);
   return max(sh, exp(-dot(cq, cq)) * 0.8);
+}
+
+// A shrub on the dunes: where it stands, how big it is and what kind.
+// kind 0 is a spiky pad of diamonds, 1 a rounded mound, 2 a rounded mound
+// crowned with spiky sprays. r is its height, w its half width, ht how tall
+// it stands for its shadow.
+struct Bush { on: bool, foot: vec2f, r: f32, w: f32, ht: f32, kind: i32, seed: f32 }
+// The spacing of the shrubs along row rr of the dunes.
+@diagnostic(off, derivative_uniformity) fn bushW(rr: f32, KM: f32) -> f32 { return 0.063 * exp((rr + 0.8) / KM); }
+// The shrub in cell si of row rr: sizes run from low tufts to big bushes,
+// most of them small, all scaled by their distance.
+@diagnostic(off, derivative_uniformity) fn bushAt(si: f32, rr: f32, KM: f32) -> Bush {
+  var b: Bush;
+  let id = vec2f(si, rr);
+  let h = hash21(id + u.a.w + 50.0);
+  b.on = h > 0.5;
+  let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * bushW(rr, KM);
+  let cy = HZ + (groundTop(cx) - HZ) * exp((rr + 0.8 + (hash21(id + 4.0) - 0.5) * 0.4) / KM);
+  let hs = hash21(id + 6.1);
+  b.r = (cy - HZ) * (0.035 + 0.12 * hs * hs);
+  let hk = hash21(id + 8.3);
+  b.kind = select(select(2, 1, hk < 0.72), 0, hk < 0.36);
+  b.w = b.r * select(1.2 + 0.6 * hash21(id + 9.7), 1.6, b.kind == 0);
+  b.ht = b.r * select(1.0, 1.3, b.kind == 2);
+  b.foot = vec2f(cx, cy);
+  b.seed = h * 13.0 + hk * 7.0;
+  return b;
+}
+// A rounded shrub: a low dome, dark in its core and stippled with light
+// round its curve from the one light. foot is where it meets the ground,
+// r its height and w its half width.
+@diagnostic(off, derivative_uniformity) fn mound(col: vec3f, p: vec2f, foot: vec2f, r: f32, w: f32, seed: f32, px: f32) -> vec3f {
+  let v = p - foot + vec2f(0.0, r * 0.5);
+  if (abs(v.x) > w * 1.25 + px * 3.0 || abs(v.y) > r * 0.75 + px * 3.0) { return col; }
+  let sd = max(length(v / vec2f(w / (r * 0.62), 1.0)) - r * 0.62 * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + seed * 9.0)), v.y - r * 0.5);
+  let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(w, r * 0.62)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.5, v.y) * 0.6);
+  var c = mix(col, moonCast(stippleBush(p, 0.05 + 0.95 * blit, max(0.0024 + r * 0.06, px * 2.2), px, C(25), C(26), C(27), C(28), C(18), seed), blit), fillA(sd, px));
+  return mix(c, C(30), dotRing(sd, v, r * 0.7, DOT * 0.8, px, seed * 29.0) * 0.5);
+}
+// Draw shrub b over col.
+@diagnostic(off, derivative_uniformity) fn bush(col: vec3f, p: vec2f, b: Bush, px: f32) -> vec3f {
+  if (b.kind == 0) { return shrub(col, p, b.foot, b.r, b.seed, px); }
+  var c = mound(col, p, b.foot, b.r, b.w, b.seed, px);
+  if (b.kind == 2) { c = shrub(c, p, b.foot - vec2f(0.0, b.r * 0.55), b.r * 0.75, b.seed + 3.0, px); }
+  return c;
+}
+// Foliage in three flat tones, shade, mid and the lit tops, with the grain
+// laid over it a tone lighter.
+@diagnostic(off, derivative_uniformity) fn foliage(lit: f32, gr: vec2f, dark: vec3f, mid: vec3f, hi: vec3f, tip: vec3f) -> vec3f {
+  var c = mix(dark, mid, smoothstep(0.08, 0.16, lit));
+  c = mix(c, hi, smoothstep(0.3, 0.4, lit));
+  let g = select(select(mix(dark, mid, 0.7), mix(mid, hi, 0.6), lit > 0.12), mix(hi, tip, 0.7), lit > 0.35);
+  return mix(c, g, gr.x * smoothstep(0.02, 0.5, lit + (gr.y - 0.5) * 0.4));
+}
+// A low cypress shrub: a small pad of long, thin diamonds pointing different
+// ways, sitting on the ground, now and then with a rusty one among them.
+// c is its foot, r its size.
+@diagnostic(off, derivative_uniformity) fn shrub(col: vec3f, p: vec2f, c: vec2f, r: f32, seed: f32, px: f32) -> vec3f {
+  let Ls = r * 1.4;
+  let v = p - c - vec2f(0.0, -r * 0.5);
+  if (v.x < -Ls * 1.35 - px * 2.0 || v.x > Ls * 1.55 + px * 2.0 || v.y < -Ls * 0.85 - px * 2.0 || v.y > r * 0.5 + px * 2.0) { return col; }
+  var acc = vec4f(0.0);
+  let cell = max(r * 0.12, px * 2.4);
+  for (var m = 0; m < 9; m++) {
+    let K = kite(m, 9, Ls, seed, 0.0);
+    let lq = vec2f(dot(v - K.c, K.dir), dot(v - K.c, vec2f(-K.dir.y, K.dir.x)));
+    if (lq.x < -K.lw - px * 2.0 || lq.x > K.ld + px * 2.0 || abs(lq.y) > K.hw + px * 2.0) { continue; }
+    // Cut off where it meets the ground.
+    let d = max(kiteD(lq, K), v.y - r * 0.5);
+    let lit = kiteLit(lq, K) * mix(0.7, 1.0, K.f);
+    var fc = foliage(lit, sprayGrain(lq, cell, px, seed + f32(m) * 13.0), C(25), C(26), C(27), C(28));
+    fc = mix(fc, C(18) * mix(0.6, 1.0, lit), step(0.92, hash21(vec2f(f32(m) * 3.3, seed + 8.1))));
+    fc = moonCast(fc, lit);
+    acc = over(acc, fc, fillA(d, px));
+    acc = over(acc, C(30), dotLine(d, lq.x, DOT * 0.7, px, seed + f32(m)) * 0.4);
+  }
+  let res = unpremul(acc);
+  return mix(col, res.rgb, res.a);
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
@@ -600,23 +693,22 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
         let hh = hash1(id * 2.37 + u.a.w);
         let bx = (id + 0.5 + (hash1(id * 5.1 + 1.0) - 0.5) * 0.7) * gw;
         if (hh < 0.4 || bx < 0.32) { continue; }
-        let th = 0.016 + 0.016 * hh;
+        let th = 0.018 + 0.016 * hh;
         let v = pFar - vec2f(bx, headTop(bx) + 0.002);
-        // A short leaning trunk under a stack of long diamonds streaming downwind.
-        let trunk = sdSeg(v, vec2f(0.0, 0.0), vec2f(th * 0.1, -th * 0.35)) - th * 0.06;
-        var crown = 1e3;
+        // A slender trunk with flat, pointed pads in tiers.
+        var dd = sdSeg(v, vec2f(0.0, 0.0), vec2f(th * 0.06, -th * 0.95)) - th * 0.03;
         for (var b = 0; b < 3; b++) {
           let fb = f32(b);
-          let ang = -0.08 + 0.1 * fb + 0.08 * hash1(id * 1.3 + fb);
-          let dir = vec2f(cos(ang), -sin(ang));
-          let nrm = vec2f(-dir.y, dir.x);
-          let c = vec2f(th * (0.18 + 0.1 * hash1(id * 1.7 + fb)), -th * (0.34 + 0.15 * fb));
-          let tip = c + dir * th * (0.6 + 0.3 * hash1(id * 2.9 + fb));
-          let back = c - dir * th * 0.2;
-          crown = min(crown, min(sdTri(v, back, c - nrm * th * 0.16, tip), sdTri(v, back, tip, c + nrm * th * 0.16)));
+          let side = select(-1.0, 1.0, fract(fb * 0.5 + hh * 3.0) > 0.5);
+          var K: Kite;
+          K.c = vec2f(th * (0.03 * fb + side * 0.1), -th * (0.5 + 0.22 * fb));
+          K.dir = normalize(vec2f(1.0, -0.2 * (hash1(id * 1.3 + fb) - 0.5)));
+          K.ld = th * (0.42 - 0.07 * fb) * (0.8 + 0.4 * hash1(id * 2.9 + fb));
+          K.lw = K.ld * 0.75; K.hw = K.ld * 0.34; K.f = 1.0;
+          dd = min(dd, kiteD(vec2f(dot(v - K.c, K.dir), dot(v - K.c, vec2f(-K.dir.y, K.dir.x))), K));
         }
         let gc = hazeStep(mix(C(20), C(7) * 0.7, 0.45), 0.45 + 0.3 * fog, hazeC);
-        col = mix(col, gc, fillA(min(trunk, crown), px));
+        col = mix(col, gc, fillA(dd, px));
       }
     }
   }
@@ -656,8 +748,9 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
   col = mix(col, C(29), clamp(seaGlow, 0.0, 1.0));
   col += C(29) * seaGlow * 0.3;
 
-  // ---- Red bluff: raked light, stippled earth, pebbles, scrub and the
-  // shadows of the trees; its rows close up toward the lip.
+  // ---- Dunes: pale sand in raked light, fine ripples, rust-coloured dabs
+  // of dry weed, shrubs and the shadows of the trees; the rows close up
+  // toward the lip.
   let gt = groundTop(p.x);
   let nT = i32(u.e.x);
   if (p.y > gt - px * 2.0) {
@@ -666,28 +759,28 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
     let s = (groundTop(p.x + 0.01) - groundTop(p.x - 0.01)) / 0.02;
     let rowV = landRows(p, 9.0) + 0.3 * sin(p.x * 6.0 + u.a.w);
     let rowH = dz / 9.0;
-    // The bluff's terraces and swells are real slopes, lit from their normals.
+    // The dunes' swells are real slopes, lit from their normals.
     let z0 = groundZ(p);
     let ez = 0.006;
     let gn = heightN((groundZ(p + vec2f(ez, 0.0)) - z0) / ez + s * 0.8, (groundZ(p + vec2f(0.0, ez)) - z0) / ez * 0.5, 1.2);
-    let gl = lambert(normalize(gn + vec3f(0.0, 0.0, 0.2 + terraceFace(fract(rowV)) * 0.9)), 0.45);
+    let gl = lambert(normalize(gn + vec3f(0.0, 0.0, 0.25)), 0.45);
     var gc = mix(C(16), C(15), 0.3 + 0.7 * post(gl * 1.1, 4.0));
     gc = mix(gc, C(17), smoothstep(0.015, 0.0, dy) * gl * 0.8);
-    // Contour bands and hatching down the bluff, finer with distance.
+    // Wind ripples across the sand, finer with distance.
     let dw = DOT * clamp(dz / 0.3, 0.55, 1.25);
-    gc = mix(gc, mix(gc, C(16), 0.35), step(0.5, fract(floor(rowV) * 0.5)));
-    gc = mix(gc, C(16), dotLine((fract(rowV + 0.5) - 0.5) * rowH, p.x, dw * 0.75, px, floor(rowV + 0.5) + 4.0) * 0.45);
-    gc = mix(gc, C(16) * 0.9, step(0.8, fract(p.x / (0.0015 + dz * 0.012) + fract(rowV) * 0.5)) * 0.25);
-    // Pebbles, on a grid that shrinks with distance.
+    gc = mix(gc, mix(gc, C(16), 0.12), step(0.5, fract(floor(rowV) * 0.5)));
+    gc = mix(gc, C(16), dotLine((fract(rowV + 0.5) - 0.5) * rowH, p.x, dw * 0.7, px, floor(rowV + 0.5) + 4.0) * 0.3);
+    gc = mix(gc, C(16) * 0.9, step(0.82, fract(p.x / (0.0015 + dz * 0.012) + fract(rowV) * 0.5)) * 0.1);
+    // Dabs of dry weed, on a grid that shrinks with distance.
     let pc = dz * 0.085;
     let pg = vec2f(p.x / dz, log(dz)) / 0.085;
     let pid = floor(pg);
     let ph = hash21(pid + 7.0);
     if (ph > 0.94) {
       let pv = fract(pg) - 0.5 - (vec2f(hash21(pid + 1.0), hash21(pid + 2.0)) - 0.5) * 0.4;
-      let pd = (length(pv / vec2f(1.0, 0.6)) - 0.18) * pc;
-      let pbl = lambert(roundN(pv * pc, vec2f(0.18 * pc, 0.11 * pc)), 0.35);
-      gc = mix(gc, mix(C(17), C(22), 0.4) * mix(0.5, 1.05, pbl), fillA(pd, px));
+      let pd = (length(pv / vec2f(1.0, 0.45)) - 0.16) * pc;
+      let pbl = lambert(roundN(pv * pc, vec2f(0.16 * pc, 0.07 * pc)), 0.35);
+      gc = mix(gc, mix(C(18), C(16), 0.25) * mix(0.55, 1.05, pbl), fillA(pd, px));
       gc = mix(gc, C(30), dotRing(pd, pv * pc, 0.15 * pc, dw * 0.6, px, ph * 50.0) * 0.5);
     }
     // Shadows fall on the terraces: look them up where they'd land.
@@ -699,72 +792,55 @@ struct Kite { c: vec2f, dir: vec2f, ld: f32, lw: f32, hw: f32, f: f32 }
         if (i >= nT) { break; }
         sh = max(sh, treeShade(ps, pq, i, px));
       }
-      gc = mix(gc, C(16) * 0.6, sh * 0.75);
+      gc = mix(gc, C(16) * 0.62, sh * 0.62);
     }
-    // Low scrub mounds in rows that close up with distance: dark cores,
-    // stippled tops lit round their curve; gather the shadows of those
-    // nearby first.
+    // Shrubs in rows that close up with distance. Each stands at its true
+    // size for its distance and throws a shadow from its own height, so
+    // gather the shadows of those nearby first, then draw them far to near.
     {
       let KM = 4.0;
       let mv = landRows(p, KM);
+      var bs: array<Bush, 9>;
       var msh = 0.0;
       for (var o = 0; o <= 2; o++) {
         let rr = floor(mv) - f32(o);
-        if (rr < 0.0) { continue; }
-        let sw = 0.14 * exp((rr + 0.8) / KM) * 0.45;
-        let si0 = floor(p.x / sw + rr * 0.37);
-        for (var co = -1; co <= 1; co++) {
-          let si = si0 + f32(co);
-          let id = vec2f(si, rr);
-          let h = hash21(id + u.a.w + 50.0);
-          if (h < 0.55) { continue; }
-          let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
-          let cy = HZ + (groundTop(cx) - HZ) * exp((rr + 0.8) / KM);
-          let r = (cy - HZ) * (0.06 + 0.03 * h);
-          msh = max(msh, blobShadowQ(pq, ps, vec2f(cx, cy - r * 0.1), r * 1.1, cy + r * 0.5, px));
+        let si0 = floor(p.x / bushW(rr, KM) + rr * 0.37);
+        for (var co = 0; co < 3; co++) {
+          var b = bushAt(si0 + f32(co - 1), rr, KM);
+          b.on = b.on && rr >= 0.0;
+          bs[o * 3 + co] = b;
+          if (!b.on) { continue; }
+          msh = max(msh, blobShadowQ(pq, ps, b.foot - vec2f(0.0, b.ht * 0.5), b.w * 0.9, b.foot.y, px));
         }
       }
-      gc = mix(gc, C(16) * 0.7, msh * 0.7);
-      for (var o = 1; o >= 0; o--) {
-        let rr = floor(mv) - f32(o);
-        if (rr < 0.0) { continue; }
-        let sw = 0.14 * exp((rr + 0.8) / KM) * 0.45;
-        let si0 = floor(p.x / sw + rr * 0.37);
-        for (var co = -1; co <= 1; co++) {
-          let si = si0 + f32(co);
-          let id = vec2f(si, rr);
-          let h = hash21(id + u.a.w + 50.0);
-          if (h < 0.55) { continue; }
-          let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
-          let cy = HZ + (groundTop(cx) - HZ) * exp((rr + 0.8) / KM);
-          let r = (cy - HZ) * (0.06 + 0.03 * h);
-          let v = p - vec2f(cx, cy);
-          if (abs(v.x) > r * 1.8 || abs(v.y) > r * 1.3) { continue; }
-          let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
-          let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * 1.45, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.5, v.y) * 0.6);
-          gc = mix(gc, moonCast(stippleBush(p, 0.05 + 0.95 * blit, 0.0028 + r * 0.08, px, C(25), C(26), C(27), C(28), C(18), h * 13.0), blit), fillA(sd, px));
-          gc = mix(gc, C(30), dotRing(sd, v, r * 1.2, dw * 0.8, px, h * 29.0) * 0.5);
+      gc = mix(gc, C(16) * 0.62, msh * 0.72);
+      for (var o = 2; o >= 0; o--) {
+        for (var co = 0; co < 3; co++) {
+          let b = bs[o * 3 + co];
+          if (b.on) { gc = bush(gc, p, b, px); }
         }
       }
     }
     gc = moonCast(gc, gl);
     col = mix(col, gc, fillA(gt - p.y, px));
     col = mix(col, C(30), dotLine(p.y - gt, p.x, DOT, px, 6.0) * 0.7);
-    // Coastal scrub along the lip.
+    // Scrub along the lip.
     let cw = 0.05;
     let ci = floor(p.x / cw);
     for (var o = -1; o <= 1; o++) {
       let id = ci + f32(o);
       let h = hash1(id * 1.9 + u.a.w);
       if (h < 0.4) { continue; }
-      let cx = (id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * cw;
-      let r = 0.012 + 0.012 * h;
-      let cy = groundTop(cx) + r * 0.3;
-      let v = p - vec2f(cx, cy);
-      let sd = max(length(v / vec2f(1.35, 1.0)) - r * (1.0 + 0.14 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.3);
-      let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * 1.35, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.3, v.y) * 0.6);
-      col = mix(col, moonCast(stippleBush(p, 0.05 + 0.95 * blit, 0.0026, px, C(25), C(26), C(27), C(28), C(18), h * 17.0), blit), fillA(sd, px));
-      col = mix(col, C(30), dotRing(sd, v, r * 1.2, DOT * 0.8, px, h * 31.0) * 0.5);
+      var b: Bush;
+      b.on = true;
+      b.r = 0.008 + 0.012 * h * h;
+      b.foot = vec2f((id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * cw, 0.0);
+      b.foot.y = groundTop(b.foot.x) + b.r * 0.3;
+      b.kind = i32(hash1(id * 7.3 + u.a.w) * 2.99);
+      b.w = b.r * (1.3 + 0.5 * hash1(id * 2.2));
+      b.ht = b.r;
+      b.seed = h * 17.0;
+      col = bush(col, p, b, px);
     }
   }
 
@@ -1294,12 +1370,12 @@ const SKIES = {
   'dawn':        ['#6a70b0', '#d098c0', '#ffd0b8', '#fff0d0', '#ffc0a8', '#ffe6dc', '#a888ac', '#a08eb0', '#ece0e8', '#fff2f0'],
   'morning':     ['#7aaee8', '#b4d0ee', '#f2ecdc', '#fff8e4', '#fff4d8', '#fffcf8', '#ccd0dc', '#a4acc8', '#eaeef4', '#fcfcfa'],
 };
-// sea far, sea near, dash lavender, dash blue, foam, ground red, ground shade, ground light,
+// sea far, sea near, dash lavender, dash blue, foam, sand, sand shade, sand light,
 // algae orange, needle tip, needle dark, needle mid, bleached wood, bark, needle lit,
 // bush dark, bush mid, bush hi, bush hi 2, glow, ink, lamp, pink
-const LAND = ['#8a9ad8', '#3a4ab0', '#b8b0e8', '#2a3aa8', '#f4f6ff', '#e0321f', '#8a1a14', '#f07a4a',
-  '#e8782a', '#d2dc84', '#0d1f24', '#2b5747', '#e6e0d2', '#5e4a42', '#76a560',
-  '#141c24', '#2a3a30', '#7a9a48', '#b8b85a', '#7affd8', '#0c0a0c', '#ffd98a', '#f2586a'];
+const LAND = ['#8a9ad8', '#3a4ab0', '#b8b0e8', '#2a3aa8', '#f4f6ff', '#f2efe8', '#9ea8bd', '#fefdf9',
+  '#e8782a', '#d2dc84', '#0d1f24', '#2b5747', '#e6e0d2', '#857870', '#76a560',
+  '#151d26', '#2e5238', '#6f9c5c', '#bdd083', '#7affd8', '#0c0a0c', '#ffd98a', '#f2586a'];
 const KEEP = [19, 21];
 
 const p = {};
@@ -1318,88 +1394,115 @@ function readControls() {
 }
 
 // ---- The grove. Each tree is grown in its own units: foot at the origin,
-// about 1 high (y up is negative), +x downwind. A short trunk kinks and
-// forks; its limbs bend over downwind as they grow, zigzagging where they
-// kink, some ending bare and bleached, and every live limb streams a spray
-// of foliage downwind from its tip.
-const NT = 10, SEG = 14, SPR = 8;
+// about 1 high (y up is negative), +x downwind. A slender trunk rises with
+// a gentle lean and a few bends, often forking into a second leader.
+// Branches leave the leaders in tiers on either side, a few more of them
+// downwind, reaching out near level, then dipping and curling up at their
+// tips; some are bare and dead. Foliage grows in flat pads at the ends of
+// the branches and the tops of the leaders.
+const NT = 10, SEG = 36, PAD = 12;
 function growTree(R, big) {
   const D = Math.PI / 180;
-  const segs = [], sprays = [];
-  // A spray rooted at (x, y), about 2 w long, of three or four diamonds.
-  const spray = (x, y, w) => {
-    if (sprays.length >= SPR) return;
-    const Ls = w * 2;
-    sprays.push({ x: x - Ls * 0.04, y, w: Ls, h: Ls * (0.2 + R() * 0.07), sd: R() * 100, tilt: (R() - 0.5) * 0.3, n: R() < 0.4 ? 4 : 3, ph: R() * 6.28 });
-  };
-  // A crooked run of tapering pieces from pos, heading a (0 up, + downwind);
-  // pull is how hard the wind bends it over as it grows, kink how far each
-  // piece may turn off the last.
-  const run = (from, a, len, r, n, pull, bare, kink = 50, lo = -90, hi = 110) => {
-    let pos = from.pos, path = from.path;
-    const joints = [];
-    for (let k = 0; k < n && segs.length < SEG; k++) {
-      const L = len / n * (0.75 + R() * 0.5);
-      a += (75 * D - a) * pull * (0.6 + R() * 0.8) + (R() - 0.5) * kink * D;
-      a = Math.min(hi * D, Math.max(lo * D, a));
-      const b = [pos[0] + Math.sin(a) * L, pos[1] - Math.cos(a) * L];
-      const r1 = bare && k === n - 1 ? 0.002 : Math.max(r * 0.72, 0.006);
-      segs.push({ a: pos, b, r0: r, r1, bare: bare ? 1 : 0, path });
-      path += L; pos = b; r = r1;
-      joints.push({ pos, a, r, path });
+  const segs = [], pads = [];
+  // A run of tapering pieces from p along headings as (0 up, + downwind),
+  // lens long, from radius r0 to r1. Returns the points along it.
+  const run = (p, as, lens, r0, r1, bare, path) => {
+    const pts = [{ p, r: r0, path }];
+    for (let k = 0; k < as.length && segs.length < SEG; k++) {
+      const b = [p[0] + Math.sin(as[k]) * lens[k], p[1] - Math.cos(as[k]) * lens[k]];
+      const r = r0 + (r1 - r0) * (k + 1) / as.length;
+      segs.push({ a: p, b, r0: pts[k].r, r1: r, bare: bare ? 1 : 0, path });
+      path += lens[k]; p = b;
+      pts.push({ p, r, path });
     }
-    return joints;
+    return pts;
   };
-  // The trunk: stout, leaning a little downwind, kinked where it thickened.
-  const trunk = run({ pos: [0, 0.03], path: 0 }, (big ? 0 : 4) * D + R() * 12 * D, 0.28 + R() * 0.12, 0.04 + R() * 0.01, 2 + (R() < 0.45 ? 1 : 0), big ? 0.04 : 0.08, false, 26, -8, big ? 20 : 30);
-  const fork = trunk[trunk.length - 1], low = trunk[trunk.length - 2] || fork;
-  // A leader up the middle, a limb reaching far downwind, a short one on the
-  // windward side that the wind has turned back; old trees carry more.
-  const limbs = [
-    { from: fork, a: fork.a + (-20 + R() * 20) * D, len: 0.42 + R() * 0.14, r: fork.r * 0.8, n: 3, pull: 0.16, w: 0.18 + R() * 0.05 },
-    { from: fork, a: (40 + R() * 25) * D, len: 0.45 + R() * 0.2, r: fork.r * 0.72, n: 3, pull: 0.22, w: 0.2 + R() * 0.06 },
-    { from: R() < 0.5 ? low : fork, a: (-55 + R() * 25) * D, len: 0.26 + R() * 0.12, r: fork.r * 0.5, n: 2, pull: 0.5, w: 0.12 + R() * 0.04, bare: R() < 0.4 },
-  ];
-  if (big || R() < 0.5) limbs.push({ from: fork, a: (18 + R() * 22) * D, len: 0.36 + R() * 0.1, r: fork.r * 0.6, n: 3, pull: 0.3, w: 0.16 + R() * 0.05 });
-  // An old giant spreads wide on both sides.
-  if (big) {
-    limbs[0].len *= 0.85;
-    limbs.push({ from: fork, a: (-42 + R() * 16) * D, len: 0.42 + R() * 0.1, r: fork.r * 0.62, n: 3, pull: 0.32, w: 0.17 + R() * 0.05 });
+  // The point f of the way along a run, with its radius and distance along.
+  const at = (pts, f) => {
+    const s0 = pts[0].path, s = s0 + f * (pts[pts.length - 1].path - s0);
+    for (let k = 1; k < pts.length; k++) {
+      const A = pts[k - 1], B = pts[k];
+      if (B.path < s && k < pts.length - 1) continue;
+      const u = Math.min(1, Math.max(0, (s - A.path) / Math.max(B.path - A.path, 1e-6)));
+      return { p: [A.p[0] + (B.p[0] - A.p[0]) * u, A.p[1] + (B.p[1] - A.p[1]) * u], r: A.r + (B.r - A.r) * u, path: s };
+    }
+    return pts[0];
+  };
+  // The trunk.
+  const H = 0.9;
+  let a = (-3 + R() * 9) * D;
+  const tas = [], tls = [];
+  for (let k = 0; k < 4; k++) {
+    a = Math.max(-10 * D, Math.min(14 * D, a + (R() - 0.5) * 18 * D));
+    tas.push(a); tls.push(H / 4 * (0.85 + R() * 0.3));
   }
-  for (const L of limbs) {
-    const js = run(L.from, L.a, L.len, L.r, L.n, L.pull, !!L.bare);
-    if (L.bare || !js.length) continue;
-    const end = js[js.length - 1];
-    spray(end.pos[0], end.pos[1], L.w);
-    // A smaller spray at a joint part way along.
-    if (js.length > 1 && R() < 0.6) { const m = js[js.length - 2]; spray(m.pos[0], m.pos[1], L.w * (0.6 + R() * 0.2)); }
+  const r0 = 0.022 + R() * 0.006;
+  const trunk = run([0, 0.03], tas, tls, r0, r0 * 0.3, false, 0);
+  const leaders = [trunk];
+  // Often a second leader forks off part way up and rises beside the first.
+  if (big || R() < 0.45) {
+    const f = at(trunk, 0.45 + R() * 0.15);
+    const side = R() < 0.6 ? 1 : -1;
+    let b = side * (22 + R() * 18) * D;
+    const las = [], lls = [], len = H * (0.42 + R() * 0.12);
+    for (let k = 0; k < 3; k++) { las.push(b); lls.push(len / 3); b -= side * (6 + R() * 10) * D; }
+    leaders.push(run(f.p, las, lls, f.r * 0.75, 0.005, false, f.path));
   }
-  // Scale it to stand 1 high to the tips of its crown, and keep the foliage
-  // up in the crown.
-  let top = -0.2;
-  for (const P of sprays) top = Math.min(top, P.y - P.h * 0.5 - P.w * 0.3);
-  for (let j = sprays.length - 1; j >= 0; j--) if (sprays[j].y > top * 0.42) sprays.splice(j, 1);
+  // Branches in tiers, mostly alternating sides, longest part way up.
+  const tips = [];
+  leaders.forEach((L, li) => {
+    const nb = li === 0 ? (big ? 6 : 5) : 3;
+    const f0 = li === 0 ? 0.36 : 0.25, f1 = li === 0 ? 0.56 : 0.65;
+    let side = R() < 0.5 ? 1 : -1;
+    for (let j = 0; j < nb; j++) {
+      const f = f0 + f1 * (j + 0.3 + 0.4 * R()) / nb;
+      if (R() < 0.75) side = -side;
+      const b = at(L, f);
+      const down = side > 0;
+      const len = (0.14 + 0.24 * Math.sin(Math.PI * Math.min(1, Math.max(0, (f - 0.2) / 0.85)))) * (down ? 1.1 : 0.85) * (0.75 + R() * 0.45) * (li === 0 ? 1 : 0.8);
+      const bare = R() < (down ? 0.1 : 0.22);
+      const a0 = side * (70 + R() * 18) * D;
+      const a1 = a0 + side * (6 + R() * 8) * D;
+      const a2 = a1 - side * (18 + R() * 16) * D;
+      const pts = run(b.p, [a0, a1, a2], [len * 0.4, len * 0.35, len * 0.25], Math.max(b.r * 0.55, 0.004), bare ? 0.0012 : 0.0025, bare, b.path);
+      if (bare || pts.length < 4) continue;
+      const e = pts[3].p;
+      tips.push({ x: e[0] + side * len * 0.04, y: e[1] - len * 0.04, w: len * (0.6 + R() * 0.2), pri: 1 });
+      if (len > 0.16) tips.push({ x: pts[1].p[0] + side * len * 0.1, y: pts[1].p[1] - len * 0.05, w: len * (0.4 + R() * 0.1), pri: 2 });
+    }
+    // The top of each leader carries a pad of its own, the tallest the biggest.
+    const tp = L[L.length - 1].p;
+    tips.push({ x: tp[0] + 0.03, y: tp[1] - 0.02, w: (li === 0 ? 0.24 : 0.18) + R() * 0.06, pri: 0 });
+  });
+  tips.sort((a, b) => a.pri - b.pri);
+  for (const T of tips.slice(0, PAD)) pads.push({ x: T.x, y: T.y, w: T.w, sd: R() * 100, tilt: (R() - 0.5) * 0.2, n: 10 + Math.floor(R() * 3), ph: R() * 6.28 });
+  // Scale it to stand 1 high to the top of its crown, and keep the foliage
+  // off the lower trunk.
+  let top = trunk[trunk.length - 1].p[1];
+  for (const P of pads) top = Math.min(top, P.y - P.w * 0.7);
+  for (let j = pads.length - 1; j >= 0; j--) if (pads[j].y > top * 0.3) pads.splice(j, 1);
   const k = 1 / -top;
   for (const S of segs) { S.a = [S.a[0] * k, S.a[1] * k]; S.b = [S.b[0] * k, S.b[1] * k]; S.r0 *= k; S.r1 *= k; S.path *= k; }
-  for (const P of sprays) { P.x *= k; P.y *= k; P.w *= k; P.h *= k; }
-  // Top of the crown first, so the lower sprays lap over the ones above.
-  sprays.sort((a, b) => a.y - b.y);
+  for (const P of pads) { P.x *= k; P.y *= k; P.w *= k; }
+  // Top of the tree first, so each pad lies over the ones above it.
+  pads.sort((a, b) => a.y - b.y);
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity;
   for (const S of segs) { x0 = Math.min(x0, S.a[0] - S.r0, S.b[0] - S.r0); x1 = Math.max(x1, S.a[0] + S.r0, S.b[0] + S.r0); y0 = Math.min(y0, S.b[1] - S.r0); }
-  for (const P of sprays) { x0 = Math.min(x0, P.x - P.w * 0.32); x1 = Math.max(x1, P.x + P.w * 1.22); y0 = Math.min(y0, P.y - P.h - P.w * 0.34); }
-  // The longest sprays stand in for the crown in its shadow.
-  const shade = [...sprays].sort((a, b) => b.w - a.w).slice(0, 3).map((P) => [P.x + P.w * 0.45, P.y, P.w * 0.42, 0]);
+  for (const P of pads) { x0 = Math.min(x0, P.x - P.w * 1.35); x1 = Math.max(x1, P.x + P.w * 1.55); y0 = Math.min(y0, P.y - P.w * 0.85); }
+  // The biggest pads throw the crown's shadow.
+  const shade = [...pads].sort((a, b) => b.w - a.w).slice(0, 6).map((P) => [P.x, P.y, P.w * 0.62, 0]);
+  const tt = trunk[trunk.length - 1];
   return {
-    segs, sprays, shade,
-    fork: [fork.pos[0] * k, fork.pos[1] * k], forkR: fork.r * k, phase: R() * 6.28,
+    segs, pads, shade,
+    fork: [tt.p[0] * k, tt.p[1] * k], forkR: r0 * 0.5 * k, phase: R() * 6.28,
     bounds: [x0 - 0.06, y0 - 0.06, x1 + 0.06, 0.12],
   };
 }
 
 let grove = [], seedN = 1 + Math.floor(Math.random() * 1e6), laidAspect = 0;
-let TR = [], TK = [], TB = [], TSH = [], SEGS = [], SR = [], SPRAYS = [], SPRAYP = [];
+let TR = [], TK = [], TB = [], TSH = [], SEGS = [], SR = [], PADS = [], PADP = [];
 const smooth = (a, b, x) => { const f = Math.min(1, Math.max(0, (x - a) / (b - a))); return f * f * (3 - 2 * f); };
-// The bluff's lip, as the shader draws it.
+// The edge of the dunes, as the shader draws it.
 const lipAt = (x) => 0.07 + 0.035 * Math.sin(x * 2.3 + seed) - 0.03 * smooth(0.2, 0.9, x) + 0.006 * Math.sin(x * 13);
 // Every tree is sized by how far its foot stands below the horizon, so the
 // horizon crosses trees of one height at the same point on each of them.
@@ -1428,22 +1531,22 @@ function layout() {
   // Far ones first.
   grove.sort((a, b) => a.y - b.y);
   const z4 = () => [0, 0, 0, 0];
-  TR = []; TK = []; TB = []; TSH = []; SEGS = []; SR = []; SPRAYS = []; SPRAYP = [];
+  TR = []; TK = []; TB = []; TSH = []; SEGS = []; SR = []; PADS = []; PADP = [];
   for (let i = 0; i < NT; i++) {
     const g = grove[i], T = g && g.tree;
     TR.push(g ? [g.x, g.y, g.s, g.haze] : z4());
     TK.push(g ? [T.fork[0], T.fork[1], T.forkR, T.phase] : z4());
     TB.push(g ? T.bounds : z4());
-    for (let j = 0; j < 3; j++) TSH.push(g && T.shade[j] ? T.shade[j] : z4());
+    for (let j = 0; j < 6; j++) TSH.push(g && T.shade[j] ? T.shade[j] : z4());
     for (let j = 0; j < SEG; j++) {
       const S = g && T.segs[j];
       SEGS.push(S ? [S.a[0], S.a[1], S.b[0], S.b[1]] : z4());
       SR.push(S ? [S.r0, S.r1, S.bare, S.path] : z4());
     }
-    for (let j = 0; j < SPR; j++) {
-      const P = g && T.sprays[j];
-      SPRAYS.push(P ? [P.x, P.y, P.w, P.h] : z4());
-      SPRAYP.push(P ? [P.sd, P.tilt, P.n, P.ph] : z4());
+    for (let j = 0; j < PAD; j++) {
+      const P = g && T.pads[j];
+      PADS.push(P ? [P.x, P.y, P.w, 0] : z4());
+      PADP.push(P ? [P.sd, P.tilt, P.n, P.ph] : z4());
     }
   }
 }
@@ -1467,7 +1570,7 @@ function uniforms() {
     d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
     e: [grove.length, p.glow, Math.min(1, fogAt(tau) * p.fog), 0],
     cols: dayCols(tau, SKIES, LAND, KEEP),
-    tr: TR, tk: TK, tb: TB, tsh: TSH, seg: SEGS, sr: SR, spray: SPRAYS, sprayP: SPRAYP,
+    tr: TR, tk: TK, tb: TB, tsh: TSH, seg: SEGS, sr: SR, pad: PADS, padP: PADP,
   };
 }
 function step(dt) {
