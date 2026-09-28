@@ -330,7 +330,7 @@ const DOT = 0.0011;
 // and steps (cliffX).
 @diagnostic(off, derivative_uniformity) fn profileLine(y: f32) -> f32 {
   let k = max(y - bluffTop(CLIFF), 0.0);
-  return CLIFF + 0.06 * sqrt(k) + k * 0.5;
+  return CLIFF + 0.06 * sqrt(k) + k * 0.3;
 }
 @diagnostic(off, derivative_uniformity) fn cliffX(y: f32) -> f32 {
   return profileLine(y) + 0.024 * (fbm(vec2f(y * 14.0, u.a.w * 1.7)) - 0.5) + 0.006 * (vnoise(vec2f(y * 85.0, u.a.w)) - 0.5);
@@ -450,76 +450,98 @@ const DOT = 0.0011;
 }
 // The footpath's line down the bluff at depth dy below the crest.
 @diagnostic(off, derivative_uniformity) fn pathX(dy: f32) -> f32 { return -0.2 + 0.1 * sin(dy * 16.0 + u.a.w) + dy * 0.4; }
-// The brow: where the turf on top gives way to bare rock on the flank,
-// falling away from the point toward the land in an uneven line, bitten
-// here and there by the rounded scar of an old slump.
-@diagnostic(off, derivative_uniformity) fn browY(x: f32) -> f32 {
-  let k = CLIFF - 0.035 - x;
-  let scar = 0.03 * smoothstep(0.45, 0.85, vnoise(vec2f(x * 16.0, 5.0 + u.a.w))) * smoothstep(CLIFF - 0.03, CLIFF - 0.08, x);
-  return bluffTop(x) + 0.05 + 0.6 * (k + sqrt(k * k + 0.0003)) + 0.012 * sin(x * 11.0 + u.a.w * 2.0)
-       + 0.006 * sin(x * 29.0 + u.a.w) + 0.006 * (vnoise(vec2f(x * 70.0, u.a.w)) - 0.5) - scar;
+// The brow: where the turf on top gives way to the cliff. It runs from the
+// point back toward us along the headland's near side, bowed out over the
+// hill's rounded shoulder, and along it the land breaks into spurs: over
+// each the turf bulges out toward the sea, rounded, with a sharp bay cut
+// back between it and the next. The spurs grow toward us and crowd
+// together out at the point. Places are measured in a frame laid along the
+// brow's run: browA from its near end toward the point, browAcross out
+// toward the sea; browC gives how far out the brow lies at a.
+const BROW_N = vec2f(0.0, 0.33);
+const BROW_U = vec2f(0.67502, -0.73781);
+const BROW_V = vec2f(0.73781, 0.67502);
+const BROW_LEN = 0.3185;
+const SPUR_K = 3.4;
+const SPUR_L = 0.09;
+@diagnostic(off, derivative_uniformity) fn browA(p: vec2f) -> f32 { return dot(p - BROW_N, BROW_U); }
+@diagnostic(off, derivative_uniformity) fn browAcross(p: vec2f) -> f32 { return dot(p - BROW_N, BROW_V); }
+// Spur phase at a: a whole number at each bay.
+@diagnostic(off, derivative_uniformity) fn spurPhase(a: f32) -> f32 {
+  let ph = SPUR_K * log(1.0 + max(BROW_LEN - a, 0.0) / SPUR_L) + 0.3 + 0.4 * hash1(u.a.w * 1.3);
+  // Some spurs broad, some narrow.
+  return ph + 0.14 * sin(ph * 2.3 + u.a.w * 3.0);
 }
-// The cliff as Earle paints one: rounded masses of rock heaped down the
-// face. They are scattered through tiers that run gently up toward the point
-// and grow a little taller toward us. tierOf
-// gives the fractional tier at a point; tierMid and tierH the middle line
-// and height of tier R. The tiers wander, and each mass strays up to 0.4 of
-// a tier from its own, so they don't line up in rows, yet every mass still
-// sits below all those of the tier behind it.
-const TIER_K = 18.0;
-const TIER_D0 = 0.55;
-const TIER_TOP = 0.09;
-const MASS_W = 1.75;
-@diagnostic(off, derivative_uniformity) fn tierWarp(x: f32) -> f32 { return 0.5 * (x - CLIFF) + 0.012 * sin(x * 19.0 + u.a.w) + 0.006 * sin(x * 41.0 + u.a.w * 2.0); }
-@diagnostic(off, derivative_uniformity) fn tierOf(p: vec2f) -> f32 {
-  return TIER_K * log(1.0 + max(p.y + tierWarp(p.x) - TIER_TOP, 0.0) / TIER_D0);
+@diagnostic(off, derivative_uniformity) fn browC(a: f32) -> f32 {
+  let ph = spurPhase(a);
+  let wide = (SPUR_L + max(BROW_LEN - a, 0.0)) / SPUR_K;
+  let sn = sin(3.14159 * fract(ph));
+  let spur = wide * 0.5 * (0.7 + 0.6 * hash1(floor(ph) * 3.7 + u.a.w)) * sn * (1.6 - 0.6 * sn);
+  // Past the point the turf rounds over the shoulder.
+  let over = 2.5 * max(a - BROW_LEN + 0.012, 0.0);
+  return browBow(a) + spur + over + 0.003 * (vnoise(vec2f(a * 80.0, u.a.w)) - 0.5);
 }
-@diagnostic(off, derivative_uniformity) fn tierMid(R: f32) -> f32 { return TIER_TOP + TIER_D0 * (exp((R + 0.5) / TIER_K) - 1.0); }
-@diagnostic(off, derivative_uniformity) fn tierH(R: f32) -> f32 { return TIER_D0 * exp((R + 0.5) / TIER_K) / TIER_K; }
-// The mass in column ci of tier R, as (centre x, y, half-width, hash), or
-// half-width 0 where there is none. Masses keep to the rock face: the outer
-// ones, small, only just break the profile (tested against its line
-// without the small breaks), and massHolds starts the top row at the brow,
-// where the turf's lip hides their crowns.
-@diagnostic(off, derivative_uniformity) fn mass(R: f32, ci: f32) -> vec4f {
-  if (R < 0.0) { return vec4f(0.0); }
-  let H = tierH(R);
-  let W = H * MASS_W;
-  let id = vec2f(ci, R);
-  let h = hash21(id + u.a.w * 1.7 + 11.0);
-  let cx = (ci + 0.5 - hash1(R * 7.31 + u.a.w) + (hash21(id + 3.7) - 0.5) * 0.8) * W;
-  let cy = tierMid(R) - tierWarp(cx) + (hash21(id + 8.1) - 0.5) * 0.8 * H;
-  // Smaller masses along the profile keep its outline to a fine lumpiness.
-  let toEdge = profileLine(cy) - cx;
-  let rx = W * (0.42 + 0.38 * h) * mix(0.45, 1.0, smoothstep(0.0, 0.08, toEdge));
-  if (h < 0.04 || toEdge < 0.1 * rx || cy > SEA_BASE + 0.07) { return vec4f(0.0); }
-  return vec4f(cx, cy, rx, h);
+// The brow's broad sweep out over the hill's shoulder, spurs aside.
+@diagnostic(off, derivative_uniformity) fn browBow(a: f32) -> f32 { return 0.022 * sin(3.14159 * clamp(a / BROW_LEN, 0.0, 1.0)); }
+// The cliff face as a ruled surface: each point a along the brow's broad
+// sweep (spurs aside) joins a point on the cliff's foot: the lines fall
+// nearly straight down, fanning out only toward the point, where they swing
+// round to run down the seaward profile.
+// Down each line the spur above fades into the face. So its ridges and
+// gullies, and the ledges running across it, all recede together toward
+// the point.
+@diagnostic(off, derivative_uniformity) fn faceTop(a: f32) -> vec2f { return BROW_N + a * BROW_U + browBow(a) * BROW_V; }
+// (The foot lies below everything we see of the face, so the lines never
+// cross where they're seen.)
+@diagnostic(off, derivative_uniformity) fn faceFoot(a: f32) -> vec2f {
+  let f = pow(clamp(a / BROW_LEN, 0.0, 1.0), 2.2);
+  return vec2f(mix(0.02, profileLine(SEA_BASE + 0.1), f), SEA_BASE + 0.1);
 }
-// The slow swell of the face beneath the masses.
-@diagnostic(off, derivative_uniformity) fn swell(q: vec2f) -> f32 { return vnoise(q); }
-@diagnostic(off, derivative_uniformity) fn massHolds(m: vec4f, ry: f32) -> bool { return m.y > browY(m.x) + 0.25 * ry; }
-// A rock mass of the cliff: a hard, weathered dome of stone, nothing like
-// the soft stippled clumps of brush. The face stands in its own shade below
-// the turf, so the stone is muted and cool, one grey-brown with little
-// change from mass to mass, only gently rounded, lifting to a soft light
-// across the crown and a thin rim where the light grazes it; a fine grit, a
-// few cracks, streaks of stain down its face and the honeycomb pits
-// (tafoni) that salt wind cuts into the shaded side.
+// Which side of the line at a the point p lies: positive once a has passed it.
+@diagnostic(off, derivative_uniformity) fn faceSide(p: vec2f, a: f32) -> f32 {
+  let T = faceTop(a);
+  let d = faceFoot(a) - T;
+  return (d.x * (p.y - T.y) - d.y * (p.x - T.x)) / length(d);
+}
+// Where p lies on the face: (a, t), t running 0 at the brow to 1 at the foot.
+@diagnostic(off, derivative_uniformity) fn faceAt(p: vec2f) -> vec2f {
+  var a = browA(p);
+  for (var i = 0; i < 4; i++) {
+    let f0 = faceSide(p, a);
+    let df = (faceSide(p, a + 0.003) - f0) / 0.003;
+    a -= f0 / max(df, 0.2);
+  }
+  let T = faceTop(a);
+  let d = faceFoot(a) - T;
+  return vec2f(a, dot(p - T, d) / dot(d, d));
+}
+// A point of the face at (a, t), with the spurs of the brow fading down it.
+@diagnostic(off, derivative_uniformity) fn facePoint(a: f32, t: f32) -> vec2f {
+  let spur = browC(a) - browBow(a);
+  return mix(faceTop(a) + spur * pow(max(1.0 - t, 0.0), 0.6) * BROW_V, faceFoot(a), t);
+}
+// A mass of the cliff's stone, as the sea stacks are: a hard, weathered dome,
+// nothing like the soft stippled clumps of brush. Muted and cool, one
+// grey-brown, only gently rounded, lifting to a soft light across the crown
+// and a thin rim where the light grazes it; a fine grit, a few cracks,
+// streaks of stain down its face and the honeycomb pits (tafoni) that salt
+// wind cuts into the shaded side.
 // v: offset from its centre, r: half-width and height, sd: signed distance
-// to its outline, h: its hash, tip: slope of the big form beneath it.
-@diagnostic(off, derivative_uniformity) fn rockMass(p: vec2f, v: vec2f, r: vec2f, sd: f32, h: f32, tip: vec2f, px: f32) -> vec3f {
+// to its outline, h: its hash, face: the normal of the face it sits on,
+// shade: how far that face lies in a thrown shadow.
+@diagnostic(off, derivative_uniformity) fn rockMass(p: vec2f, v: vec2f, r: vec2f, sd: f32, h: f32, face: vec3f, shade: f32, px: f32) -> vec3f {
   let q = v / r;
   let e = length(q);
-  // A broad crown and gently falling flanks.
-  let lean = pow(clamp(e, 1e-4, 1.0), 1.5) * 1.2;
+  // A broad crown and gently falling flanks, bulging from the face.
+  let lean = pow(clamp(e, 1e-4, 1.0), 1.5) * 0.15;
   let dir = q / max(e, 1e-4);
-  let lit = lambert(normalize(vec3f(dir.x * lean - tip.x * 0.25, -dir.y * lean + tip.y * 0.25 + 0.1, 1.0)), 0.3);
-  // Weathered grey-brown, cooled in shadow by the sky.
+  let lit = lambert(normalize(face + vec3f(dir.x * lean, -dir.y * lean + 0.05, 0.0)), 0.15) * (1.0 - shade);
+  // Weathered grey-brown: pale where the face takes the light, deep and
+  // cooled by the sky where it doesn't.
   let stone = rockStone() * (0.93 + 0.1 * hash1(h * 91.0));
   let deep = rockShade();
-  let hi = mix(stone, mix(C(12), C(5), 0.35), 0.35);
-  var c = mix(deep, stone, smoothstep(0.05, 0.5, lit));
-  c = mix(c, hi, smoothstep(0.5, 0.9, lit) * 0.6);
+  let hi = rockLight();
+  var c = mix(deep, mix(stone, hi, 0.6), rockTone(rockLit(lit)));
   // Grit: a fine speckle, light and dark.
   let gr = hash21(floor(p / max(px * 1.4, 0.0012)) + h * 7.0);
   c *= 1.0 + (step(0.9, gr) * 0.16 - step(gr, 0.1) * 0.14) * (0.5 + 0.5 * smoothstep(0.1, 0.5, lit));
@@ -548,12 +570,21 @@ const MASS_W = 1.75;
   }
   // A thin rim of light along the crown where the light grazes it.
   let rim = (1.0 - smoothstep(0.0, 0.0018, -sd)) * smoothstep(0.4, 0.75, lit);
-  return moonCast(mix(c, mix(hi, C(5), 0.25), rim * 0.55), lit);
+  return moonCast(mix(c, mix(hi, C(5), 0.25), rim * 0.3), lit);
 }
-// The cliff's stone, and the same stone deep in shadow, a little of the
-// sky in it: shared by the masses, the clefts between them and the stacks.
+// The cliff's stone; the same stone in full light and deep in shadow, a
+// little of the sky in it; and how far a face of it at a given light has
+// turned from the one to the other, a firm edge between them. Shared by
+// the masses, the face between them and the stacks.
 @diagnostic(off, derivative_uniformity) fn rockStone() -> vec3f { return mix(C(13), vec3f(dot(C(13), vec3f(0.3, 0.59, 0.11))), 0.35) * 0.95; }
-@diagnostic(off, derivative_uniformity) fn rockShade() -> vec3f { return mix(rockStone() * 0.58, C(1) * 0.35, 0.2); }
+@diagnostic(off, derivative_uniformity) fn rockLight() -> vec3f { return mix(rockStone(), mix(C(12), C(5), 0.4), 0.5); }
+@diagnostic(off, derivative_uniformity) fn rockShade() -> vec3f { return mix(rockStone() * 0.42, C(1) * 0.3, 0.22); }
+@diagnostic(off, derivative_uniformity) fn rockLit(lit: f32) -> f32 { return smoothstep(0.04, 0.5, lit / max(LI, 0.05)) * LI; }
+// Three flat tones with a narrow, soft step between each.
+@diagnostic(off, derivative_uniformity) fn rockTone(l: f32) -> f32 {
+  let s = l * 2.0;
+  return (floor(s) + smoothstep(0.42, 0.58, fract(s))) / 2.0;
+}
 // Coyote brush on the bluff: the clump in cell ci of contour band bb, as
 // (x, y of its foot, radius, hash), or radius 0 where there is none or it
 // would stand on the path. brushHolds says whether it keeps to the turf:
@@ -575,10 +606,7 @@ const MASS_W = 1.75;
   // Far back from the headland every clump is on the turf.
   if (b.x < CLIFF - 0.3) { return true; }
   if (b.x > profileLine(b.y) - 0.016 - b.z * 1.3) { return false; }
-  // Well up from the brow's lowest reach, no need to find it exactly.
-  let k = CLIFF - 0.035 - b.x;
-  if (b.y < bluffTop(b.x) + 0.6 * (k + sqrt(k * k + 0.0003)) - 0.009 - b.z * 0.2) { return true; }
-  return b.y < browY(b.x) - 0.008 - b.z * 0.2;
+  return browAcross(b.xy) < browC(browA(b.xy)) - 0.008 - b.z * 0.25;
 }
 // Everything the cypresses throw across the bluff: trunks and canopies.
 @diagnostic(off, derivative_uniformity) fn treeShade(ps: vec2f, pq: vec2f, px: f32) -> f32 {
@@ -702,7 +730,7 @@ const MASS_W = 1.75;
       let r = st[i].z;
       if (length(v) > r * 3.0) { continue; }
       let sd = max(length(v / vec2f(0.85, 1.4)) - r * (1.0 + 0.15 * sin(atan2(v.y, v.x) * 5.0 + fi)), v.y);
-      var sc = rockMass(pMid, v, vec2f(r * 0.85, r * 1.4), sd, 0.13 + fi * 0.29, vec2f(0.0), px);
+      var sc = rockMass(pMid, v, vec2f(r * 0.85, r * 1.4), sd, 0.13 + fi * 0.29, vec3f(0.0, 0.1, 1.0), 0.0, px);
       sc = mix(sc, mix(sc * 0.5, C(8) * 0.35, 0.25), smoothstep(-r * 0.4, 0.0, v.y) * 0.8);
       col = mix(col, sc, fillA(sd, px));
       let surge = 0.5 + 0.5 * sin(t * 1.2 + fi * 2.0);
@@ -770,18 +798,88 @@ const MASS_W = 1.75;
   // measured square to the brow, with tufts of grass hanging over the lip.
   var dn = -1.0;
   var edge = -1.0;
+  var bA = 0.0;
+  var bC = 0.0;
+  var bcp = 0.0;
   if (p.x > CLIFF - 0.3 && p.y > bt && p.x < cxAt + 0.08 && p.y < SEA_BASE + 0.12) {
-    dn = p.y - browY(p.x);
-    let bsl = (browY(p.x + 0.002) - browY(p.x - 0.002)) / 0.004;
-    edge = (dn - 0.008 * pow(vnoise(vec2f(p.x * 260.0, 1.3)), 3.0) - 0.003 * vnoise(vec2f(p.x * 90.0, 7.7))) / sqrt(1.0 + bsl * bsl);
+    bA = browA(p);
+    bC = browC(bA);
+    bcp = (browC(bA + 0.003) - browC(bA - 0.003)) / 0.006;
+    dn = browAcross(p) - bC;
+    edge = (dn - 0.007 * pow(vnoise(vec2f(bA * 300.0, 1.3)), 3.0) - 0.003 * vnoise(vec2f(bA * 100.0, 7.7))) / sqrt(1.0 + bcp * bcp);
+  }
+  // Bare rock: below the brow and inside the profile, the corner between
+  // them rounded off where the turf drapes over the point.
+  let rq = vec2f(0.035 - edge, 0.035 - (cxAt - p.x));
+  let rockD = length(max(rq, vec2f(0.0))) + min(max(rq.x, rq.y), 0.0) - 0.035;
+  // The face looks out square to the way it runs: out to sea where it heads
+  // for the point, round toward us on the near side of each spur, so every
+  // spur has a lit flank and one in shadow, and near the point it turns to
+  // face the open sea. It leans out a little toward its foot. The light
+  // lies on the rock in a few flat tones with firm edges.
+  var faceN = vec3f(0.0, 0.3, 1.0);
+  var faceLit = 0.0;
+  var bay = 0.0;
+  var thrown = 0.0;
+  var ledgeLit = 0.0;
+  var ledgeShade = 0.0;
+  if (dn > -0.01) {
+    let at = faceAt(p);
+    let aF = clamp(at.x, 0.0, BROW_LEN);
+    let tF = clamp(at.y, 0.0, 1.0);
+    // Past the last line from the point, the rock faces the open sea.
+    let seaward = smoothstep(BROW_LEN - 0.02, BROW_LEN + 0.01, at.x);
+    let run = (facePoint(aF + 0.003, tF) - facePoint(aF - 0.003, tF)) / 0.006;
+    let faceH = normalize(vec2f(-run.y / FORE, run.x));
+    faceN = normalize(mix(vec3f(faceH.x, 0.25 + 0.3 * tF, faceH.y), vec3f(0.95, 0.3, 0.12), seaward));
+    // Buttresses fall down the face along its lines, three or so to a spur,
+    // so they too crowd together toward the point: unevenly spaced and
+    // unevenly cut, some rounded out boldly, turning one side toward us and
+    // the other toward the sea with a gully after, some barely standing out
+    // of a broad face.
+    let rw = SPUR_K * 3.0 * log(1.0 + (BROW_LEN - aF) / SPUR_L) + 0.9 * (vnoise(vec2f(aF * 40.0, 3.0 + u.a.w)) - 0.5)
+           + 0.2 * (vnoise(vec2f(aF * 110.0, tF * 6.0 + u.a.w)) - 0.5);
+    let rf = fract(rw);
+    let col = floor(rw);
+    let cut = hash1(col * 7.1 + u.a.w);
+    // Where the buttresses crowd finer than the pixels can hold, they fade.
+    let fine = 1.0 - smoothstep(0.12, 0.3, fwidth(rw));
+    let turnB = (0.5 - rf) * (0.3 + 1.2 * cut) * (1.0 - seaward * 0.5) * fine;
+    faceN = normalize(vec3f(faceN.x * cos(turnB) + faceN.z * sin(turnB), faceN.y, faceN.z * cos(turnB) - faceN.x * sin(turnB)));
+    let gully = (1.0 - smoothstep(0.0, 0.16, min(rf, 1.0 - rf))) * smoothstep(0.35, 0.8, cut) * fine;
+    // Here and there a short ledge steps across a buttress, running level
+    // along the face: its top catches the sky, the rock under it is in
+    // shadow. The ledges of one buttress don't line up with the next.
+    let fh = length(faceFoot(aF) - faceTop(aF));
+    let lh0 = mix(0.012, 0.03, smoothstep(0.0, BROW_LEN, BROW_LEN - aF));
+    let lv = tF * fh / lh0 + hash1(col * 3.3 + u.a.w) * 7.0;
+    let lf = fract(lv);
+    let lon = step(0.86, hash1(floor(lv) * 7.7 + col * 1.9 + u.a.w)) * smoothstep(0.08, 0.2, tF) * smoothstep(0.1, 0.25, min(rf, 1.0 - rf)) * fine;
+    ledgeLit = lon * (1.0 - smoothstep(0.0, 0.08, lf)) * smoothstep(0.0, 0.02, lf);
+    ledgeShade = lon * smoothstep(0.07, 0.11, lf) * (1.0 - smoothstep(0.11, 0.34, lf));
+    // When the light comes in off the sea and rakes along the cliff, a spur
+    // throws its shadow across the bay beside it.
+    let u3 = normalize(vec2f(BROW_U.x, BROW_U.y / FORE));
+    let lh = vec2f(LD.x, LD.z);
+    let along = dot(lh, u3);
+    let outw = dot(lh, vec2f(-u3.y, u3.x));
+    if (outw > 0.05) {
+      let da = 0.02 * sign(along);
+      thrown = smoothstep(0.0, 0.006, browC(aF + da) - browC(aF) - 0.04 * outw / max(abs(along), 0.05)) * (1.0 - seaward) * (1.0 - tF * 0.5);
+    }
+    faceLit = rockTone(rockLit(lambert(faceN, 0.15)) * (1.0 - thrown));
+    // The bays between spurs lie deep in shadow, and the gullies below them.
+    let sph = spurPhase(aF);
+    bay = max((1.0 - smoothstep(0.04, 0.3, min(fract(sph), 1.0 - fract(sph)))) * (1.0 - seaward) * (1.0 - 0.4 * tF), gully * 0.75) * smoothstep(0.0, 0.03, dn);
   }
   // Under the lip the rock lies in the turf's shadow.
-  let lipShade = (1.0 - smoothstep(0.0, 0.022, edge)) * (0.45 + 0.3 * LI);
+  let lipW = 0.016 + 0.2 * max(bC - 0.03, 0.0);
+  let lipShade = (1.0 - smoothstep(lipW * 0.75, lipW, edge)) * (0.6 + 0.35 * LI);
   if (inBluff) {
     let dy = p.y - bt;
     let rowV = dy / 0.026 + 0.35 * sin(p.x * 9.0 + u.a.w) + 0.15 * sin(p.x * 23.0);
     let band = floor(rowV);
-    let rockA = fillA(-edge, px);
+    let rockA = fillA(rockD, px);
     var gc = vec3f(0.0);
     if (rockA < 1.0) {
       // Coyote brush throws its shadow along the light: gather those from
@@ -798,18 +896,22 @@ const MASS_W = 1.75;
       }
       // Grass in contour bands that step down the bluff, combed along each
       // band: every tread and drop lit from its own slope.
-      let fv = fract(rowV);
+      // Near the brow the terraces bend to follow it round the spurs.
+      let rowG = rowV - bC * BROW_V.y / 0.026 * exp(min(dn, 0.0) / 0.05) * step(-0.9, dn);
+      let bandG = floor(rowG);
+      let fv = fract(rowG);
       let bs = (bluffTop(p.x + 0.01) - bluffTop(p.x - 0.01)) / 0.02 - 0.35 * 9.0 * cos(p.x * 9.0 + u.a.w) * 0.026;
-      let gn = groundN(bs * 2.2, 0.15 + terraceFace(fv) * 1.3 + dy * 1.5);
+      // And the turf rolls over each spur's shoulder into the face below.
+      let gn = normalize(mix(groundN(bs * 2.2, 0.15 + terraceFace(fv) * 1.3 + dy * 1.5), faceN, smoothstep(-0.045, 0.0, dn) * 0.6 * step(-0.9, dn)));
       let gl = lambert(gn, 0.45);
-      let base = select(C(15), mix(C(15), C(14), 0.6), (i32(band) % 2) == 0);
+      let base = select(C(15), mix(C(15), C(14), 0.6), (i32(bandG) % 2) == 0);
       gc = mix(base * 0.68, mix(base, C(14), 0.55), post(gl * 1.1, 4.0));
       gc = mix(gc, C(14), smoothstep(0.012, 0.0, dy) * gl * 0.8);
       gc = mix(gc, gc * 0.72, cloudShade(vec2f(p.x, 1.5 + dy * 3.0), t) * 0.7);
       gc = mix(gc, mix(C(14), C(5), 0.3), gustWave(p, t) * 0.35 * (0.3 + 0.7 * lt));
-      let comb = fract(p.x / (0.0035 + dy * 0.01) + fv * 0.6 + hash1(band) * 3.0);
+      let comb = fract(p.x / (0.0035 + dy * 0.01) + fv * 0.6 + hash1(bandG) * 3.0);
       gc = mix(gc, C(16), step(0.78, comb) * 0.4 * smoothstep(0.15, 0.5, fv));
-      gc = mix(gc, C(16), dotLine((fract(rowV + 0.5) - 0.5) * 0.026, p.x, DOT * 0.8, px, floor(rowV + 0.5) + 3.0) * 0.5);
+      gc = mix(gc, C(16), dotLine((fract(rowG + 0.5) - 0.5) * 0.026, p.x, DOT * 0.8, px, floor(rowG + 0.5) + 3.0) * 0.5);
       // A footpath winding back toward the trees.
       let pw = 0.003 + dy * 0.09;
       let pxp = pathX(dy);
@@ -827,9 +929,13 @@ const MASS_W = 1.75;
     if (rockA > 0.0) {
       // Deep in the clefts between the masses: the stone in shadow, wetter
       // low down.
-      rc = rockShade() * (0.75 + 0.3 * vnoise(p * vec2f(90.0, 40.0) + u.a.w));
+      rc = mix(rockShade(), mix(rockStone(), rockLight(), 0.45), faceLit) * (0.8 + 0.25 * vnoise(p * vec2f(90.0, 40.0) + u.a.w));
+      rc *= 1.0 - 0.14 * smoothstep(0.55, 0.85, vnoise(vec2f(p.x * 300.0, p.y * 24.0 + u.a.w)));
+      rc *= 0.9 + 0.2 * smoothstep(0.3, 0.7, fbm(p * vec2f(30.0, 14.0) + u.a.w * 1.7));
       rc = mix(rc, mix(rc * 0.7, C(8) * 0.3, 0.3), smoothstep(0.22, 0.32, p.y));
-      rc = mix(rc, rc * 0.6, lipShade);
+      rc = mix(rc, mix(rc, rockLight(), 0.6), ledgeLit * LI);
+      rc = mix(rc, rc * 0.6, ledgeShade);
+      rc = mix(rc, rc * 0.45, max(lipShade, bay * 0.8));
     }
     col = mix(col, mix(gc, rc, rockA), fillA(bt - p.y, px));
   }
@@ -843,57 +949,11 @@ const MASS_W = 1.75;
     }
     col = mix(col, C(24), dotLine(dxe, p.y * 1.17, DOT, px, 8.0) * step(bt, p.y) * step(p.y, SEA_BASE + 0.08) * 0.65);
   }
-  // The cliff's rock masses over the dark clefts, back to front: the higher
-  // on the face, the further back. Each darkens the stone just behind its
-  // edge, so the masses stand off one another, and the lowest are wet where
-  // the sea washes them.
-  if (edge > -px * 2.0 && p.x < cxAt + 0.08 && p.y < SEA_BASE + 0.12) {
-    // Big forms under the masses: a slow swell of the face that tips each
-    // mass on it up to the sky or down into shadow.
-    let mq = p * vec2f(7.0, 6.0) + u.a.w * 3.3;
-    let m0 = swell(mq);
-    let tipM = vec2f(swell(mq + vec2f(0.05, 0.0)) - m0, swell(mq + vec2f(0.0, 0.05)) - m0) / 0.05;
-    // Tier by tier from the back; within a tier the higher masses first.
-    let halo = 0.007;
-    let T = floor(tierOf(p));
-    for (var k = 0; k < 6; k++) {
-      let R = T - 1.0 + f32(k / 2);
-      let lower = (k % 2) == 1;
-      let H = tierH(R);
-      let c0 = floor(p.x / (H * MASS_W) + hash1(R * 7.31 + u.a.w));
-      for (var co = -1; co <= 1; co++) {
-        // The same hash that sets how far the mass strays down its tier.
-        if ((hash21(vec2f(c0 + f32(co), R) + 8.1) > 0.5) != lower) { continue; }
-        let ms = mass(R, c0 + f32(co));
-        if (ms.z <= 0.0) { continue; }
-        let ry = min(ms.z * 0.6, H * 0.8);
-        let v = p - ms.xy;
-        if (abs(v.x) > ms.z * 1.25 + halo || v.y < -ry * 1.25 - halo || v.y > ry * 0.7 + halo || !massHolds(ms, ry)) { continue; }
-        // A weathered block, squarer than a bush, its outline broken by
-        // knobs and flat breaks.
-        let q = abs(v / vec2f(ms.z, ry)) + 1e-4;
-        let an = atan2(v.y, v.x);
-        let rough = 0.06 * sin(an * 3.0 + ms.w * 9.0) + 0.04 * sin(an * 7.0 + ms.w * 23.0) + 0.02 * sin(an * 17.0 + ms.w * 5.0);
-        let sq = 2.0 + 0.6 * hash1(ms.w * 13.0);
-        let sd = max((pow(pow(q.x, sq) + pow(q.y, sq), 1.0 / sq) - 1.0 - rough) * ry, v.y - ry * 0.62);
-        // Each darkens the stone just behind its edge, then lays its own,
-        // the turf's lip hiding any crown that rises above the brow.
-        col = mix(col, col * 0.8, (1.0 - smoothstep(0.0, halo, sd)) * step(0.0, sd) * step(p.x, cxAt) * smoothstep(0.0, 0.004, edge) * (0.5 + 0.3 * LI));
-        let sdc = max(sd, -edge);
-        if (sdc > px) { continue; }
-        var mc = rockMass(p, v, vec2f(ms.z, ry), sd, ms.w, tipM, px);
-        mc = mix(mc, mix(mc * 0.5, C(8) * 0.35, 0.25), smoothstep(SEA_BASE - 0.05, SEA_BASE + 0.03, p.y));
-        mc = mix(mc, mc * 0.5, tsh * 0.6);
-        mc = mix(mc, mc * 0.6, lipShade);
-        col = mix(col, mc, fillA(sdc, px));
-      }
-    }
-  }
   // Coyote brush: round clumps on the band edges, drawn whole over the ground
   // so neither the brow, the skyline nor the cliff's edge cuts one. Back to
   // front, each lit from its own curve: a bright rim on the side the light
   // comes from, near-black underneath.
-  if (nearBluff && (p.x < CLIFF - 0.24 || p.y < browY(p.x) + 0.07)) {
+  if (nearBluff && (p.x < CLIFF - 0.24 || dn < 0.05)) {
     let rowV = (p.y - bt) / 0.026 + 0.35 * sin(p.x * 9.0 + u.a.w) + 0.15 * sin(p.x * 23.0);
     let band = floor(rowV);
     for (var bo = 1; bo >= -1; bo--) {
