@@ -407,18 +407,19 @@ const DOT = 0.0011;
   }
   return acc;
 }
-// One young fan leaf hanging out toward us just under the heart, closing the
-// gap between the leaves that angle down to either side. It hangs from a
-// short stalk and tilts out of the crown, so it is foreshortened: its fan is
+// One young fan leaf hanging out toward us from just under the heart, its top
+// tucked under the young leaf there, closing the gap between the leaves that
+// angle down to either side. It tilts out of the crown, so it is
+// foreshortened: its fan is
 // squashed top to bottom and its tips make a wide, flat arc. We see its
 // underside, a cooler and paler green than the fan above.
 @diagnostic(off, derivative_uniformity) fn downFan(acc0: vec4f, v: vec2f, r: f32, a: f32, R: f32, sd: f32, px: f32) -> vec4f {
   var acc = acc0;
-  let A = vec2f((hash1(sd * 6.7) - 0.5) * R * 0.06, R * 0.17);
+  let A = vec2f((hash1(sd * 6.7) - 0.5) * R * 0.04, R * 0.03);
   let q = v - A;
   if (q.y < -R * 0.25 || abs(q.x) > R * 0.95 || q.y > R * 0.7) { return acc; }
   // The stalk from the heart.
-  let st = tube(v, vec2f(0.0, R * 0.05), A, R * 0.035);
+  let st = tube(v, vec2f(0.0, -R * 0.02), A, R * 0.035);
   acc = over(acc, mix(C(19) * 0.55, C(20) * 0.8, lambert(roundN(st.yz, vec2f(R * 0.035)), 0.4)), fillA(st.x, px));
   // The fan in its own tilted frame.
   let sq = 0.6;
@@ -436,7 +437,7 @@ const DOT = 0.0011;
   let tipS = 1.0 - abs(fu - 0.5) * 2.0;
   let hs = hash1(si * 1.91 + sd * 3.3);
   let across = dl / half;
-  let rrD = R * (0.8 - 0.18 * across * across) * (0.6 + 0.4 * pow(tipS, 0.7)) * (0.9 + 0.18 * hs);
+  let rrD = R * (0.9 - 0.2 * across * across) * (0.6 + 0.4 * pow(tipS, 0.7)) * (0.9 + 0.18 * hs);
   // Distances in the tilted frame, brought back toward screen units.
   let dD = max((rs - rrD) * sq, (abs(dl) - half) * rs * sq);
   if (dD > px * 2.0 + DOT * 2.0) { return acc; }

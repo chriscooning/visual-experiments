@@ -461,13 +461,14 @@ const HOUSE_Z = 5.5;
   // face-down in front, straight under the heart, closing the gap there.
   for (var L = 0; L < 3; L++) {
     if (L == 1) {
-      // One young leaf hangs out toward us just under the heart, from a
-      // short stalk; tilted out of the crown it is foreshortened, its fan
+      // One young leaf hangs out toward us from just under the heart, its
+      // top tucked under the young leaf there; tilted out of the crown it is
+      // foreshortened, its fan
       // squashed top to bottom, and we see its paler underside.
-      let A = vec2f((hash1(sd * 6.7) - 0.5) * R * 0.06, R * 0.17);
+      let A = vec2f((hash1(sd * 6.7) - 0.5) * R * 0.04, R * 0.03);
       let q = v - A;
       if (q.y > -R * 0.25 && abs(q.x) < R * 0.95 && q.y < R * 0.7) {
-        let st = sdSeg(v, vec2f(0.0, R * 0.05), A) - R * 0.035;
+        let st = sdSeg(v, vec2f(0.0, -R * 0.02), A) - R * 0.035;
         col = mix(col, C(31) * 0.6, fillA(st, px));
         alpha = max(alpha, fillA(st, px));
         let sq = 0.6;
@@ -483,7 +484,7 @@ const HOUSE_Z = 5.5;
         let tipS = 1.0 - abs(fu - 0.5) * 2.0;
         let hs = hash1(floor(us) * 1.91 + sd * 3.3);
         let across = dl / half;
-        let rrD = R * (0.8 - 0.18 * across * across) * (0.6 + 0.4 * pow(tipS, 0.7)) * (0.9 + 0.18 * hs);
+        let rrD = R * (0.9 - 0.2 * across * across) * (0.6 + 0.4 * pow(tipS, 0.7)) * (0.9 + 0.18 * hs);
         let dD = max((rs - rrD) * sq, (abs(dl) - half) * rs * sq);
         if (dD < px * 2.0) {
           var fc = mix(mix(C(31), C(32), 0.55 + 0.2 * hs), C(8), 0.3);
