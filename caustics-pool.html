@@ -438,6 +438,9 @@ const HOUSE_Z = 5.5;
       if (d > px * 2.0) { continue; }
       var fc = mix(C(31) * 0.85, mix(C(31), C(32), 0.35), h);
       fc = mix(fc, mix(C(32), C(30), 0.5 + 0.3 * h), smoothstep(0.45, 1.0, s) * (0.25 + 0.6 * h));
+      // A couple are young leaves, still a fresh, lighter green.
+      let young = step(0.72, hash1(fk * 9.1 + sd * 2.3));
+      fc = mix(fc, mix(C(31), C(32), 0.6 + 0.3 * smoothstep(0.3, 0.9, s)), young);
       // Lit on the side toward the sun, in the fan's shade near the top.
       let pv = c0 + dir * len * s + vec2f(0.0, sag * s * s);
       let outd = normalize(pv + vec2f(1e-5, -R * 0.05));
@@ -467,15 +470,22 @@ const HOUSE_Z = 5.5;
     let rrL = R * lenL * (0.55 + 0.45 * pow(tipL, 0.7)) * (1.0 - 0.2 * smoothstep(0.35, 0.0, abs(fsL - 0.5)) * step(0.45, hL));
     let heading = sin((lk0 + 0.5 - off) * 6.2832 / NL);
     let lim = select(select(-0.1, 0.35, L == 1), 0.8, L == 0);
-    let keep = step(heading, lim) * select(1.0, step(0.3, hL), L == 1) * select(1.0, step(0.45, hL), L == 2);
+    // A share of the lighter front leaves angle downward too, lying over the
+    // darker leaves beneath so the crown balances top and bottom.
+    let hd = hash1(lk * 2.71 + sd * 1.9 + fl * 5.0);
+    let lowOk = select(0.0, step(0.45, hd) * step(heading, 0.85), L == 1) + select(0.0, step(0.55, hd) * step(heading, 0.75), L == 2);
+    let low = (1.0 - step(heading, lim)) * min(lowOk, 1.0);
+    let keep = max(step(heading, lim), low) * select(1.0, step(0.3, hL), L == 1) * select(1.0, step(0.45, hL), L == 2);
     let dL = (r - rrL) * 0.8 + (1.0 - keep) * 1e3;
     if (dL < px * 2.0) {
       var fc = C(31) * 0.8;
       if (L == 1) { fc = mix(C(31), C(32), select(0.3, 0.55, hL > 0.5)); }
       if (L == 2) { fc = mix(C(31), C(32), select(0.6, 0.85, hL > 0.6)); }
+      // The downward ones are young leaves, a fresher green.
+      fc = mix(fc, mix(C(31), C(32), 0.7 + 0.25 * hd), low);
       let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
       fc = mix(fc, C(32), post(smoothstep(0.1, 0.8, facing) * smoothstep(0.4, 0.9, r / rrL), 2.0) * lt * (0.35 + 0.3 * fl));
-      fc = mix(fc, C(31) * 0.7, smoothstep(0.3, 0.85, v.y / R) * (0.65 - fl * 0.15));
+      fc = mix(fc, C(31) * 0.7, smoothstep(0.3, 0.85, v.y / R) * (0.65 - fl * 0.15) * (1.0 - 0.7 * low));
       fc = mix(fc, mix(C(32), C(30), 0.5), smoothstep(0.7, 1.0, r / rrL) * step(0.84, hL) * 0.8);
       fc = mix(fc, C(31) * 0.65, strokeA((fsL - 0.5) * r * 6.2832 / NL, px * 0.42, px) * smoothstep(0.15, 0.4, r / R));
       fc = mix(fc, C(33), strokeA(dL, px * 0.45, px) * (0.5 + 0.2 * fl));

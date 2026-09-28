@@ -388,6 +388,9 @@ const DOT = 0.0011;
     if (d > px * 2.0 + DOT * 2.0) { continue; }
     var fc = mix(C(19) * 0.85, mix(C(19), C(20), 0.6), h);
     fc = mix(fc, mix(C(21), C(22), 0.55 + 0.3 * h), smoothstep(0.45, 1.0, s) * (0.25 + 0.6 * h));
+    // A couple are young leaves, still a fresh, lighter green.
+    let young = step(0.72, hash1(fk * 9.1 + sd * 2.3));
+    fc = mix(fc, mix(C(20), C(21), 0.25 + 0.35 * smoothstep(0.3, 0.9, s)), young);
     // Light: the blade faces out from the crown and toward us, its folds
     // tipping it one way and the other; near the top it sits in the shade
     // of the fan above.
@@ -450,17 +453,24 @@ const DOT = 0.0011;
     let rrL = R * lenL * (0.55 + 0.45 * pow(tipL, 0.7)) * splitL;
     let heading = sin((lk0 + 0.5 - off) * 6.2832 / NL);
     let lim = select(select(-0.1, 0.35, L == 1), 0.8, L == 0);
-    let keep = step(heading, lim) * select(1.0, step(0.3, hL), L == 1) * select(1.0, step(0.45, hL), L == 2);
+    // A share of the lighter front leaves angle downward too, lying over the
+    // darker leaves beneath so the crown balances top and bottom.
+    let hd = hash1(lk * 2.71 + sd * 1.9 + fl * 5.0);
+    let lowOk = select(0.0, step(0.45, hd) * step(heading, 0.85), L == 1) + select(0.0, step(0.55, hd) * step(heading, 0.75), L == 2);
+    let low = (1.0 - step(heading, lim)) * min(lowOk, 1.0);
+    let keep = max(step(heading, lim), low) * select(1.0, step(0.3, hL), L == 1) * select(1.0, step(0.45, hL), L == 2);
     let dL = (r - rrL) * 0.8 + (1.0 - keep) * 1e3;
     if (dL < px * 2.0 + DOT * 2.0) {
       var fc = C(19) * 0.82;
       if (L == 1) { fc = mix(C(19), C(20), select(0.45, 0.8, hL > 0.5)); }
       if (L == 2) { fc = select(C(20), mix(C(20), C(21), 0.3), hL > 0.6); }
+      // The downward ones are young leaves, a fresher green.
+      fc = mix(fc, mix(C(20), C(21), 0.3 + 0.35 * hd), low);
       // Each leaf fans up and out toward us: lit from its own tilt.
       let ld = v / max(r, 1e-4);
       let lf = lambert(normalize(vec3f(ld.x, -ld.y, 0.9)), 0.3);
       fc = mix(fc, C(21), post(smoothstep(0.15, 0.7, lf) * smoothstep(0.4, 0.9, r / rrL), 2.0) * (0.35 + 0.3 * fl));
-      fc = mix(fc, C(19) * 0.75, smoothstep(0.3, 0.85, v.y / R) * (0.65 - fl * 0.15));
+      fc = mix(fc, C(19) * 0.75, smoothstep(0.3, 0.85, v.y / R) * (0.65 - fl * 0.15) * (1.0 - 0.7 * low));
       // A few tired leaves, yellowing toward their tips.
       fc = mix(fc, mix(C(21), C(22), 0.55), smoothstep(0.7, 1.0, r / rrL) * step(0.84, hL) * 0.8);
       // Rib down each leaf and the pleats either side.
