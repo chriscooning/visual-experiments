@@ -455,8 +455,46 @@ const HOUSE_Z = 5.5;
     }
   }
   // The fan: three layers back to front, each on its own spacing; the front
-  // layers keep only leaves that point up or out.
+  // layers keep only leaves that point up or out, and one young leaf hangs
+  // face-down in front, straight under the heart, closing the gap there.
   for (var L = 0; L < 3; L++) {
+    if (L == 1) {
+      // One young leaf hangs out toward us just under the heart, from a
+      // short stalk; tilted out of the crown it is foreshortened, its fan
+      // squashed top to bottom, and we see its paler underside.
+      let A = vec2f((hash1(sd * 6.7) - 0.5) * R * 0.06, R * 0.17);
+      let q = v - A;
+      if (q.y > -R * 0.25 && abs(q.x) < R * 0.95 && q.y < R * 0.7) {
+        let st = sdSeg(v, vec2f(0.0, R * 0.05), A) - R * 0.035;
+        col = mix(col, C(31) * 0.6, fillA(st, px));
+        alpha = max(alpha, fillA(st, px));
+        let sq = 0.6;
+        let qs = vec2f(q.x, q.y / sq);
+        let rs = length(qs);
+        let th = 1.5708 + (hash1(sd * 4.1) - 0.5) * 0.25;
+        let half = 0.95 + 0.1 * hash1(sd * 2.9);
+        var dl = atan2(qs.y, qs.x) - th;
+        dl -= 6.2832 * round(dl / 6.2832);
+        let NS = 11.0;
+        let us = (dl / half * 0.5 + 0.5) * NS;
+        let fu = fract(us);
+        let tipS = 1.0 - abs(fu - 0.5) * 2.0;
+        let hs = hash1(floor(us) * 1.91 + sd * 3.3);
+        let across = dl / half;
+        let rrD = R * (0.8 - 0.18 * across * across) * (0.6 + 0.4 * pow(tipS, 0.7)) * (0.9 + 0.18 * hs);
+        let dD = max((rs - rrD) * sq, (abs(dl) - half) * rs * sq);
+        if (dD < px * 2.0) {
+          var fc = mix(mix(C(31), C(32), 0.55 + 0.2 * hs), C(8), 0.3);
+          let facing = dot(v / max(r, 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
+          fc = mix(fc * mix(0.6, 0.78, lt), fc * 1.05, post(lt * smoothstep(-0.3, 0.6, facing + select(-0.15, 0.15, fu > 0.5)), 2.0));
+          fc = mix(fc, fc * 0.72, smoothstep(0.45, 0.12, rs / rrD));
+          fc = mix(fc, C(31) * 0.7, strokeA((fu - 0.5) * rs * sq * 2.0 * half / NS, px * 0.4, px) * smoothstep(0.1, 0.35, rs / R));
+          fc = mix(fc, C(33), strokeA(dD, px * 0.45, px) * 0.6);
+          col = mix(col, fc, fillA(dD, px));
+          alpha = max(alpha, fillA(dD, px));
+        }
+      }
+    }
     let fl = f32(L);
     let NL = 17.0 + fl * 7.0;
     let off = sd * (1.0 + fl * 0.37) + fl * 0.43;

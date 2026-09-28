@@ -407,6 +407,53 @@ const DOT = 0.0011;
   }
   return acc;
 }
+// One young fan leaf hanging out toward us just under the heart, closing the
+// gap between the leaves that angle down to either side. It hangs from a
+// short stalk and tilts out of the crown, so it is foreshortened: its fan is
+// squashed top to bottom and its tips make a wide, flat arc. We see its
+// underside, a cooler and paler green than the fan above.
+@diagnostic(off, derivative_uniformity) fn downFan(acc0: vec4f, v: vec2f, r: f32, a: f32, R: f32, sd: f32, px: f32) -> vec4f {
+  var acc = acc0;
+  let A = vec2f((hash1(sd * 6.7) - 0.5) * R * 0.06, R * 0.17);
+  let q = v - A;
+  if (q.y < -R * 0.25 || abs(q.x) > R * 0.95 || q.y > R * 0.7) { return acc; }
+  // The stalk from the heart.
+  let st = tube(v, vec2f(0.0, R * 0.05), A, R * 0.035);
+  acc = over(acc, mix(C(19) * 0.55, C(20) * 0.8, lambert(roundN(st.yz, vec2f(R * 0.035)), 0.4)), fillA(st.x, px));
+  // The fan in its own tilted frame.
+  let sq = 0.6;
+  let qs = vec2f(q.x, q.y / sq);
+  let rs = length(qs);
+  let th = 1.5708 + (hash1(sd * 4.1) - 0.5) * 0.25;
+  let half = 0.95 + 0.1 * hash1(sd * 2.9);
+  var dl = atan2(qs.y, qs.x) - th;
+  dl -= 6.2832 * round(dl / 6.2832);
+  if (abs(dl) > half + 0.1) { return acc; }
+  let NS = 11.0;
+  let us = (dl / half * 0.5 + 0.5) * NS;
+  let si = floor(us);
+  let fu = fract(us);
+  let tipS = 1.0 - abs(fu - 0.5) * 2.0;
+  let hs = hash1(si * 1.91 + sd * 3.3);
+  let across = dl / half;
+  let rrD = R * (0.8 - 0.18 * across * across) * (0.6 + 0.4 * pow(tipS, 0.7)) * (0.9 + 0.18 * hs);
+  // Distances in the tilted frame, brought back toward screen units.
+  let dD = max((rs - rrD) * sq, (abs(dl) - half) * rs * sq);
+  if (dD > px * 2.0 + DOT * 2.0) { return acc; }
+  // The underside faces down and out toward us; each pleat tips a little
+  // either way. Shaded where it leaves the stalk, lighter out to the tips.
+  let fold = select(-0.3, 0.3, fu > 0.5);
+  let n = normalize(vec3f(sin(dl) * 0.7 + fold, -0.55, 0.75));
+  let ll = lambert(n, 0.4);
+  var fc = mix(mix(C(20), C(21), 0.2 + 0.15 * hs), C(8), 0.28);
+  fc = mix(fc * 0.7, fc * 1.05, post(ll * 1.3, 3.0));
+  fc = mix(fc, fc * 0.72, smoothstep(0.45, 0.12, rs / rrD));
+  fc = mix(fc, mix(C(19), C(8), 0.2) * 0.8, dotLine((fu - 0.5) * rs * sq * 2.0 * half / NS, rs, DOT * 0.5, px, si + sd * 5.0) * smoothstep(0.1, 0.35, rs / R));
+  fc = moonCast(fc, ll);
+  acc = over(acc, fc, fillA(dD, px));
+  acc = over(acc, C(27), dotLine(dD, dl * R, DOT * 0.7, px, sd * 7.0) * 0.6);
+  return acc;
+}
 // Fan palm crown in three sets, back to front: the skirt of dead fronds, the
 // older leaves hanging from the underside, and the living fan on top. Each
 // leaf of the fan is kept or left out whole, by the way it points, so none
@@ -438,6 +485,7 @@ const DOT = 0.0011;
   // front layers keep only leaves that point up or out, so they fan over
   // the ones behind instead of closing into a disc.
   for (var L = 0; L < 3; L++) {
+    if (L == 1) { acc = downFan(acc, v, r, a, R, sd, px); }
     let fl = f32(L);
     let NL = 17.0 + fl * 7.0;
     let off = sd * (1.0 + fl * 0.37) + fl * 0.43;
