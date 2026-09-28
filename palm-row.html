@@ -344,24 +344,79 @@ const DOT = 0.0011;
   return b + vec2f(0.035 * (hash1(f32(i) * 7.1) - 0.5) + sw, -min(palmH(i), b.y + 0.42));
 }
 
-// Fan palm crown: segmented leaves radiating out to spiky tips, drooping
-// below, a dark heart, and a skirt of dead fronds under it.
+// Nearest point on a drooping leaf's centreline, which runs from c0 along
+// dir and bends down under its own weight: (distance, s 0..1, side, _).
+@diagnostic(off, derivative_uniformity) fn hangLeaf(q: vec2f, c0: vec2f, dir: vec2f, len: f32, sag: f32) -> vec4f {
+  var best = 1e3; var bs = 0.0; var bside = 0.0;
+  var prev = c0;
+  for (var k = 1; k <= 4; k++) {
+    let s = f32(k) / 4.0;
+    let cur = c0 + dir * len * s + vec2f(0.0, sag * s * s);
+    let ba = cur - prev;
+    let h = clamp(dot(q - prev, ba) / dot(ba, ba), 0.0, 1.0);
+    let off = q - prev - ba * h;
+    let dd = length(off);
+    if (dd < best) { best = dd; bs = (f32(k - 1) + h) / 4.0; bside = sign(ba.x * off.y - ba.y * off.x); }
+    prev = cur;
+  }
+  return vec4f(best, bs, bside, 0.0);
+}
+// The older leaves hanging from the crown's underside: each droops on its
+// stalk and bends down under its weight, a pleated blade that swells and
+// then splits into ragged ribbons at the tip, yellowing as it ages. The
+// outer ones are laid down first and those hanging straight down last.
+@diagnostic(off, derivative_uniformity) fn hangSet(acc0: vec4f, v: vec2f, R: f32, sd: f32, px: f32) -> vec4f {
+  var acc = acc0;
+  if (v.y < -R * 0.15 || abs(v.x) > R * 1.7 || v.y > R * 2.1) { return acc; }
+  for (var j = 0; j < 9; j++) {
+    let k = select(8 - (j - 1) / 2, j / 2, j % 2 == 0);
+    let fk = f32(k);
+    let h = hash1(fk * 3.7 + sd * 1.3);
+    let th = mix(0.3, 2.84, (fk + 0.5 + (h - 0.5) * 0.6) / 9.0);
+    let dir = vec2f(cos(th), sin(th));
+    let len = R * (0.6 + 0.25 * hash1(fk * 5.1 + sd)) * (0.85 + 0.25 * sin(th));
+    let sag = len * (0.25 + 0.3 * h);
+    let c0 = vec2f(dir.x * R * 0.1, R * 0.05);
+    let lf = hangLeaf(v, c0, dir, len, sag);
+    let s = lf.y;
+    // Stalk, then a blade that swells and tapers.
+    let w = max(len * 0.2 * pow(sin(3.14159 * clamp((s - 0.18) / 0.82, 0.0, 1.0)), 0.7) * (0.85 + 0.3 * h), len * 0.025 * (1.0 - s));
+    let acr = lf.z * lf.x / max(w, 1e-5);
+    // Ragged tip: the blade splits into ribbons over its last stretch.
+    let split = smoothstep(0.72, 0.97, s);
+    let d = max(lf.x - w, (0.14 * split - abs(fract(acr * 1.5 + 0.5) - 0.5)) * w / 1.5);
+    if (d > px * 2.0 + DOT * 2.0) { continue; }
+    var fc = mix(C(19) * 0.85, mix(C(19), C(20), 0.6), h);
+    fc = mix(fc, mix(C(21), C(22), 0.55 + 0.3 * h), smoothstep(0.45, 1.0, s) * (0.25 + 0.6 * h));
+    // Light: the blade faces out from the crown and toward us, its folds
+    // tipping it one way and the other; near the top it sits in the shade
+    // of the fan above.
+    let pv = c0 + dir * len * s + vec2f(0.0, sag * s * s);
+    let outd = normalize(pv + vec2f(1e-5, -R * 0.05));
+    let fold = select(-0.35, 0.35, fract(acr * 2.5 + 7.0) > 0.5);
+    let n = normalize(vec3f(outd.x * 0.75 + fold * dir.y, -outd.y * 0.6 + 0.15, 0.75));
+    let ll = lambert(n, 0.35) * (0.6 + 0.4 * smoothstep(0.2, 0.8, s));
+    fc = mix(fc * 0.68, fc * 1.08, post(ll * 1.3, 3.0));
+    fc = moonCast(fc, ll);
+    fc = mix(fc, C(19) * 0.62, dotLine((fract(acr * 2.5 + 0.5) - 0.5) * w / 2.5, s * len, DOT * 0.5, px, fk * 3.0 + floor(acr * 2.5 + 0.5)) * step(0.25, s) * 0.55);
+    acc = over(acc, fc, fillA(d, px));
+    acc = over(acc, C(27), dotLine(d, s * len + lf.z * 50.0, DOT * 0.7, px, fk + sd) * 0.6);
+  }
+  return acc;
+}
+// Fan palm crown in three sets, back to front: the skirt of dead fronds, the
+// older leaves hanging from the underside, and the living fan on top. Each
+// leaf of the fan is kept or left out whole, by the way it points, so none
+// is ever cut across.
 @diagnostic(off, derivative_uniformity) fn crown(v: vec2f, R: f32, sd: f32, px: f32) -> vec4f {
   let r = length(v);
   let a = atan2(v.y, v.x);
-  let N = 21.0;
-  let seg = a * N / 6.2832 + sd;
-  let fs = fract(seg);
-  let tip = 1.0 - abs(fs - 0.5) * 2.0;
-  // Lower leaves hang longer; each leaf has its own length and a split tip.
-  let hs = hash1(floor(seg) * 1.37 + sd);
+  // Lower leaves hang longer.
   let down = smoothstep(-0.2, 0.9, v.y / max(r, 1e-4));
-  let droop = 1.0 + 0.32 * down + 0.22 * (hs - 0.5);
-  let split = 1.0 - 0.18 * smoothstep(0.35, 0.0, abs(fs - 0.5)) * step(0.4, hs);
-  let rr = R * droop * (0.58 + 0.42 * pow(tip, 0.7)) * split;
-  let d = (r - rr) * 0.8;
-  // Skirt: a tapering thatch of dead fronds hanging under the crown.
-  let sy = v.y - R * 0.3;
+  // Skirt: a tapering thatch of dead fronds, its top domed up under the
+  // hanging leaves.
+  let sTop = R * (0.42 - 0.22 * sqrt(max(1.0 - pow(v.x / (R * 0.45), 2.0), 0.0)));
+  let sy = v.y - sTop;
   let sl = R * (1.25 + 0.2 * sin(sd * 3.0));
   let sw = R * 0.42 * (1.0 - 0.45 * clamp(sy / sl, 0.0, 1.0));
   let skirtD = max(abs(v.x) - sw, max(-sy, sy - sl - R * 0.06 * sin(v.x / R * 30.0 + sd)));
@@ -372,22 +427,30 @@ const DOT = 0.0011;
   col = mix(col, C(24), dotLine((fract(fu) - 0.5) * R * 0.09, v.y, DOT * 0.55, px, floor(fu) + sd) * 0.6);
   var acc = over(vec4f(0.0), col, fillA(skirtD, px));
   acc = over(acc, C(27), dotRing(skirtD, v - vec2f(0.0, R * 0.3 + sl * 0.5), R * 0.7, DOT * 0.8, px, sd + 1.0) * 0.8);
-  // Three layers of leaves, back to front: long dark ones behind, a mid
-  // layer, and shorter lit leaves in front, each on its own spacing so the
-  // crown reads dense and overlapping.
+  // The dark heart where the leaf stalks gather.
+  acc = over(acc, C(19) * 0.45, fillA(length((v - vec2f(0.0, R * 0.12)) / vec2f(1.0, 0.8)) - R * 0.24, px));
+  acc = hangSet(acc, v, R, sd, px);
+  // The fan: three layers, back to front: long dark leaves all round, a mid
+  // layer and shorter lit leaves in front, each on its own spacing. The
+  // front layers keep only leaves that point up or out, so they fan over
+  // the ones behind instead of closing into a disc.
   for (var L = 0; L < 3; L++) {
     let fl = f32(L);
     let NL = 17.0 + fl * 7.0;
-    let sg = a * NL / 6.2832 + sd * (1.0 + fl * 0.37) + fl * 0.43;
+    let off = sd * (1.0 + fl * 0.37) + fl * 0.43;
+    let sg = a * NL / 6.2832 + off;
     let fsL = fract(sg);
     let tipL = 1.0 - abs(fsL - 0.5) * 2.0;
-    let hL = hash1(floor(sg) * 1.37 + sd + fl * 11.0);
+    // The leaf's own index, the same either side of the seam at the left.
+    let lk0 = floor(sg);
+    let lk = lk0 - NL * floor(lk0 / NL);
+    let hL = hash1(lk * 1.37 + sd + fl * 11.0);
     let lenL = (1.06 - fl * 0.14) * (1.0 + (0.34 - fl * 0.08) * down + 0.26 * (hL - 0.5));
     let splitL = 1.0 - 0.2 * smoothstep(0.35, 0.0, abs(fsL - 0.5)) * step(0.45, hL);
     let rrL = R * lenL * (0.55 + 0.45 * pow(tipL, 0.7)) * splitL;
-    // Front layers are gappy and sit toward the top, so leaves fan out
-    // over the ones behind instead of closing into a disc.
-    let keep = select(1.0, step(0.3, hL) * step(v.y / R, 0.45), L == 1) * select(1.0, step(0.45, hL) * step(v.y / R, 0.1), L == 2);
+    let heading = sin((lk0 + 0.5 - off) * 6.2832 / NL);
+    let lim = select(select(-0.1, 0.35, L == 1), 0.8, L == 0);
+    let keep = step(heading, lim) * select(1.0, step(0.3, hL), L == 1) * select(1.0, step(0.45, hL), L == 2);
     let dL = (r - rrL) * 0.8 + (1.0 - keep) * 1e3;
     if (dL < px * 2.0 + DOT * 2.0) {
       var fc = C(19) * 0.82;
@@ -401,7 +464,7 @@ const DOT = 0.0011;
       // A few tired leaves, yellowing toward their tips.
       fc = mix(fc, mix(C(21), C(22), 0.55), smoothstep(0.7, 1.0, r / rrL) * step(0.84, hL) * 0.8);
       // Rib down each leaf and the pleats either side.
-      fc = mix(fc, C(19) * 0.7, dotLine((fsL - 0.5) * r * 6.2832 / NL, r, DOT * 0.55, px, floor(sg) + fl * 7.0) * smoothstep(0.15, 0.4, r / R));
+      fc = mix(fc, C(19) * 0.7, dotLine((fsL - 0.5) * r * 6.2832 / NL, r, DOT * 0.55, px, lk + fl * 7.0) * smoothstep(0.15, 0.4, r / R));
       fc = mix(fc, mix(fc, C(21), 0.55), strokeA((fract(sg * 3.0) - 0.5) * r * 6.2832 / (NL * 3.0), px * 0.3, px) * 0.45 * LI);
       fc = mix(fc, fc * 0.72, smoothstep(0.35, 0.1, r / R) * (1.0 - fl * 0.25));
       fc = moonCast(fc, lf);
@@ -1001,7 +1064,7 @@ const FORE = 0.45;
         let dcy = cy - (row + 0.5) * rowH * 0.85 + (hash1(di * 2.1 + row * 5.0 + fk) - 0.5) * rowH * 0.3;
         let q = vec2f(p.x - dcx, p.y - dcy);
         let tx = clamp(abs(q.x) / hl, 0.0, 1.0);
-        // Tapered stroke, a touch fuller along its top edge.
+        // A brush dab: full in the middle, drawn out to a point at each end.
         let hy = hh * (1.0 - 0.85 * pow(tx, 1.5)) * select(1.0, 0.8, q.y > 0.0);
         let dd = (length(vec2f(q.x / hl, q.y / max(hy, 1e-5))) - 1.0) * hy;
         // Solid body; the edge breaks up into a fringe of dots.
