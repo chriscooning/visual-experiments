@@ -399,8 +399,10 @@ const HOUSE_Z = 5.5;
 // top. Fan leaves are kept or left out whole, by the way each one points,
 // so none is ever cut across.
 @diagnostic(off, derivative_uniformity) fn crown(v: vec2f, R: f32, sd: f32, px: f32) -> vec4f {
-  let lt = light();
   let r = length(v);
+  // Nothing reaches further than this: the fan, the hanging leaves, the skirt.
+  if (r > R * 2.2) { return vec4f(0.0); }
+  let lt = light();
   let a = atan2(v.y, v.x);
   let down = smoothstep(-0.2, 0.9, v.y / max(r, 1e-4));
   // Skirt, its top domed up under the hanging leaves.
@@ -492,6 +494,37 @@ const HOUSE_Z = 5.5;
           fc = mix(fc, C(33), strokeA(dD, px * 0.45, px) * 0.6);
           col = mix(col, fc, fillA(dD, px));
           alpha = max(alpha, fillA(dD, px));
+        }
+      }
+    }
+    if (L == 1) {
+      // A young leaf just opening at the heart: short and broad, a few wide
+      // folds like a paper fan in a fresh yellow-green with a bright rim,
+      // fanning down over the heart and the stalk below.
+      let q = v - vec2f(0.0, -R * 0.02);
+      if (q.y > -R * 0.08 && abs(q.x) < R * 0.42 && q.y < R * 0.32) {
+        let sq = 0.55;
+        let qs = vec2f(q.x, q.y / sq);
+        let rs = length(qs);
+        let half = 1.1;
+        var dl = atan2(qs.y, qs.x) - (1.5708 + (hash1(sd * 8.3) - 0.5) * 0.2);
+        dl -= 6.2832 * round(dl / 6.2832);
+        let NS = 6.0;
+        let us = (dl / half * 0.5 + 0.5) * NS;
+        let fu = fract(us);
+        let tipS = 1.0 - abs(fu - 0.5) * 2.0;
+        let rr = R * 0.34 * (0.7 + 0.3 * pow(tipS, 0.6)) * (0.92 + 0.12 * hash1(floor(us) * 2.3 + sd));
+        let d = max((rs - rr) * sq, (abs(dl) - half) * rs * sq);
+        if (d < px * 2.0) {
+          var fc = mix(C(32), C(14), 0.45);
+          let facing = dot(v / max(length(v), 1e-4), normalize(vec2f(u.c.x - v.x, -0.5)));
+          fc = mix(fc * mix(0.62, 0.8, lt), fc * 1.06, post(lt * smoothstep(-0.3, 0.6, facing + select(-0.25, 0.25, fu > 0.5)), 2.0));
+          fc = mix(fc, fc * 0.8, smoothstep(0.35, 0.05, rs / rr));
+          fc = mix(fc, mix(C(14), C(15), 0.4), strokeA(d + px * 1.5, px * 0.5, px) * smoothstep(0.6, 0.9, rs / rr) * lt);
+          fc = mix(fc, C(31) * 0.7, strokeA((fu - 0.5) * rs * sq * 2.0 * half / NS, px * 0.35, px) * smoothstep(0.15, 0.4, rs / rr) * 0.6);
+          fc = mix(fc, C(33), strokeA(d, px * 0.45, px) * 0.55);
+          col = mix(col, fc, fillA(d, px));
+          alpha = max(alpha, fillA(d, px));
         }
       }
     }
