@@ -47,6 +47,12 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Time <span class="val" id="timeVal">14</span></label><input type="range" id="time" min="0" max="100" value="14"></div>
   <div class="control-group"><label>Day speed <span class="val" id="speedVal">50</span></label><input type="range" id="speed" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Day &amp; night</label>
+    <select id="cycle">
+      <option value="timer" selected>On a timer</option>
+      <option value="click">On click</option>
+    </select>
+  </div>
   <div class="control-group"><label>Wind <span class="val" id="windVal">40</span></label><input type="range" id="wind" min="0" max="100" value="40"></div>
   <div class="control-group"><label>Poppies <span class="val" id="poppiesVal">75</span></label><input type="range" id="poppies" min="0" max="100" value="75"></div>
   <div class="control-group"><label>Mist <span class="val" id="fogVal">60</span></label><input type="range" id="fog" min="0" max="100" value="60"></div>
@@ -57,13 +63,14 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag the sun across the sky · Swipe the land for a gust · H controls</div>
+<div class="hint-pill" id="hintPill">Drag the sun or moon anywhere · Swipe the land for a gust · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
 <script type="module">
 import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
 import { tilt } from './lib/tilt.js';
+import { daySky, dayKey, dayCols } from './lib/sky.js';
 
 const SHADER = /* wgsl */ `
 fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
@@ -1205,75 +1212,9 @@ const PIXEL_BUDGET = 3000000;
 
 const NAME = 'poppy-hill';
 
-// Time of day. tau runs 0..1 round the clock: afternoon at 0, sunset near
-// 0.3, night through the middle, dawn at 0.8. Each piece gives sky colours
-// per key and a land palette that is graded by the light of the moment.
-const DAY_KEYS = [
-  [0.00, 'afternoon', [1, 1, 1], 1.0],
-  [0.18, 'golden hour', [1.08, 0.94, 0.76], 1.12],
-  [0.28, 'sunset', [0.98, 0.7, 0.6], 1.05],
-  [0.35, 'blue hour', [0.46, 0.5, 0.76], 0.72],
-  [0.43, 'night', [0.2, 0.25, 0.42], 0.5],
-  [0.73, 'night', [0.2, 0.25, 0.42], 0.5],
-  [0.81, 'dawn', [0.86, 0.72, 0.8], 0.85],
-  [0.9, 'morning', [1.02, 0.98, 0.94], 0.95],
-  [1.0, 'afternoon', [1, 1, 1], 1.0],
-];
-const SKY_ORDER = ['afternoon', 'golden hour', 'sunset', 'blue hour', 'night', 'night', 'dawn', 'morning', 'afternoon'];
-function dayKey(tau) {
-  let i = 0;
-  while (i < DAY_KEYS.length - 2 && tau >= DAY_KEYS[i + 1][0]) i++;
-  const a = DAY_KEYS[i], b = DAY_KEYS[i + 1];
-  let f = (tau - a[0]) / (b[0] - a[0]);
-  f = f * f * (3 - 2 * f);
-  return { i, f, name: f < 0.5 ? a[1] : b[1] };
-}
-const lerp3 = (a, b, f) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
-// SKIES: name -> list of hex; LAND: list of hex; KEEP: land indexes left ungraded.
-function dayCols(tau, SKIES, LAND, KEEP) {
-  const k = dayKey(tau);
-  const A = DAY_KEYS[k.i], B = DAY_KEYS[k.i + 1];
-  const sa = SKIES[SKY_ORDER[k.i]], sb = SKIES[SKY_ORDER[k.i + 1]];
-  const out = sa.map((h, j) => [...lerp3(hex(h), hex(sb[j]), k.f), 1]);
-  const m = lerp3(A[2], B[2], k.f), sat = A[3] + (B[3] - A[3]) * k.f;
-  LAND.forEach((h, j) => {
-    const c = hex(h);
-    if (KEEP.includes(j)) { out.push([...c, 1]); return; }
-    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
-    out.push([...c.map((v, q) => Math.max(0, Math.min(1, (l + (v - l) * sat) * m[q]))), 1]);
-  });
-  return out;
-}
-// Sun and moon: position on screen, height above the horizon (-1..1).
-function celestial(tau, hz) {
-  const df = ((tau - 0.8) % 1 + 1) % 1;
-  let elev, sx, sy, mx = 0, my = 2, mElev = -1;
-  if (df < 0.51) { const f = df / 0.51; elev = Math.sin(Math.PI * f); sx = -0.55 + 0.9 * f; }
-  else { const f = (df - 0.51) / 0.49; elev = -Math.sin(Math.PI * f); sx = 0.35; mElev = Math.sin(Math.PI * f); mx = 0.5 - 0.95 * f; my = hz - mElev * 0.46 + 0.04; }
-  sy = hz - elev * 0.55 + 0.02;
-  return { sx, sy, elev, mx, my, mElev };
-}
-// Sky drag: a press in the sky takes hold of the sun, or the moon by night,
-// and the day follows the finger along their arcs; let go and the day turns
-// on by itself from there. q is in scene units.
-function bodyAt(tau, hz) {
-  const s = celestial(tau, hz);
-  return s.elev > -0.03 ? [s.sx, s.sy] : [s.mx, s.my];
-}
-function skyTau(q, hz, tau0) {
-  let best = tau0, bestD = Infinity;
-  for (let i = -160; i <= 160; i++) {
-    const tt = ((tau0 + i * 0.002) % 1 + 1) % 1;
-    const b = bodyAt(tt, hz);
-    const d = (b[0] - q[0]) ** 2 + (b[1] - q[1]) ** 2 + (i * 0.002) ** 2 * 0.04;
-    if (d < bestD) { bestD = d; best = tt; }
-  }
-  return best;
-}
-function inSky(q, hz, tau) {
-  const b = bodyAt(tau, hz);
-  return q[1] < hz - 0.01 || Math.hypot(q[0] - b[0], q[1] - b[1]) < 0.12;
-}
+// The day in the sky, the time of day and where the sun and the moon
+// stand, is lib/sky.js's. Each piece gives sky colours for each time of
+// day and a land palette that is graded by the light of the moment.
 
 // sky top, sky mid, horizon, sun, glow, cloud lit, cloud shade, mountains, mist, mist light
 const SKIES = {
@@ -1294,7 +1235,6 @@ const LAND = ['#f0c878', '#c89a5a', '#7a70b8', '#3e3a78', '#141c24', '#2a3a30', 
 const KEEP = [21, 22];
 
 const p = {};
-let tau = 0.1 + Math.random() * 0.12;
 let timeHooked = false;
 function readControls() {
   p.wind = +$('wind').value / 100 * 1.5;
@@ -1303,10 +1243,15 @@ function readControls() {
   p.fog = +$('fog').value / 100 * 1.3;
   p.grain = +$('grain').value / 100 * 0.1;
   for (const id of ['wind', 'speed', 'poppies', 'fog', 'grain']) $(id + 'Val').textContent = $(id).value;
-  if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { tau = +$('time').value / 100; }); }
+  sky.mode = $('cycle').value;
+  // (The day's speed only counts while it turns on its own.)
+  $('speed').disabled = sky.mode !== 'timer';
+  $('speed').closest('.control-group').style.opacity = sky.mode === 'timer' ? '' : '0.4';
+  if (!timeHooked) { timeHooked = true; $('time').addEventListener('input', () => { sky.set(+$('time').value / 100); }); }
 }
-let gust = 0, gustGoal = 0, shown = -1, zoomNow = 1, skyHeld = false;
+let gust = 0, gustGoal = 0, shown = -1, zoomNow = 1;
 const HZ = -0.04;
+const sky = daySky({ hz: HZ, tau: 0.1 + Math.random() * 0.12 });
 function generate() {}
 // Mist in the hollow: thick at dawn, gathering again after sunset.
 function fogAt(tau) {
@@ -1316,38 +1261,35 @@ function fogAt(tau) {
 function uniforms() {
   const zoom = Math.max(1, 1.2 / aspect);
   zoomNow = zoom;
-  const s = celestial(tau, HZ);
-  const dark = 1 - Math.min(1, Math.max(0, (s.elev + 0.25) / 0.3));
+  const s = sky.bodies();
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
     b: [p.wind, gust, p.grain, zoom],
-    c: [s.sx, s.sy, s.elev, dark],
+    c: [s.sx, s.sy, s.elev, s.dark],
     d: [s.mx, s.my, s.mElev, tl.active ? tl.x : 0],
-    e: [fogAt(tau) * p.fog, p.poppies, 0, 0],
-    cols: dayCols(tau, SKIES, LAND, KEEP),
+    e: [fogAt(sky.tau) * p.fog, p.poppies, 0, 0],
+    cols: dayCols(sky.tau, SKIES, LAND, KEEP),
   };
 }
 function step(dt) {
-  if (!skyHeld) tau = (tau + dt * p.speed * p.speed * 0.022) % 1;
+  sky.step(dt, p.speed * p.speed * 0.022);
   gustGoal *= Math.exp(-dt * 1.2);
   gust += (gustGoal - gust) * (1 - Math.exp(-dt * 5));
-  const v = Math.round(tau * 100);
-  if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(tau).name; }
+  const v = Math.round(sky.tau * 100);
+  if (v !== shown) { shown = v; $('time').value = v; $('timeVal').textContent = dayKey(sky.tau).name; }
 }
-// Drag in the sky to move the sun (or the moon) and the time of day with
-// it; swipe across the land for a gust.
+// Drag in the sky to put the sun (or the moon) anywhere in it, the time of
+// day following; swipe across the land for a gust.
 let lastX = 0;
 function onDown(q) {
-  const s = [q[0] * zoomNow, q[1] * zoomNow];
-  skyHeld = inSky(s, HZ, tau);
-  if (skyHeld) { tau = skyTau(s, HZ, tau); return; }
+  if (sky.down([q[0] * zoomNow, q[1] * zoomNow])) return;
   lastX = q[0];
 }
 function onMove(q) {
-  if (skyHeld) { tau = skyTau([q[0] * zoomNow, q[1] * zoomNow], HZ, tau); return; }
+  if (sky.move([q[0] * zoomNow, q[1] * zoomNow])) return;
   gustGoal = Math.max(-1.5, Math.min(1.5, gustGoal + (q[0] - lastX) * 6)); lastX = q[0];
 }
-function onUp() { skyHeld = false; }
+function onUp() { sky.up(); }
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
