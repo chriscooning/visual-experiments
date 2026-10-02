@@ -52,6 +52,12 @@
       <option value="harvest">Harvest</option>
     </select>
   </div>
+  <div class="control-group"><label>Moon</label>
+    <select id="cycle">
+      <option value="timer" selected>On a timer</option>
+      <option value="click">On click</option>
+    </select>
+  </div>
   <div class="control-group"><label>Drift <span class="val" id="driftVal">45</span></label><input type="range" id="drift" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Brush <span class="val" id="brushVal">45</span></label><input type="range" id="brush" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Trails <span class="val" id="trailsVal">60</span></label><input type="range" id="trails" min="0" max="100" value="60"></div>
@@ -62,7 +68,7 @@
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag the moon, or pull the trails · Tilt for depth · H controls</div>
+<div class="hint-pill" id="hintPill">Tap the sky or drag the moon · Pull the trails · Tilt for depth · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -1020,11 +1026,14 @@ function readControls() {
   p.brush = 0.6 + +$('brush').value / 100 * 0.9;
   p.trails = Math.round(+$('trails').value / 100 * 12);
   p.grain = +$('grain').value / 100 * 0.1;
+  p.cycle = $('cycle').value;
   for (const id of ['drift', 'brush', 'trails', 'grain']) $(id + 'Val').textContent = $(id).value;
 }
 let touch = [0, 0, 0];
-// The moon wanders slowly across the sky by itself; press on it to carry it
-// anywhere, and it wanders on from there. Pressing elsewhere pulls the trails.
+// The moon wanders slowly across the sky by itself (on a timer), or stays
+// wherever it's put (on click). Press on it to carry it anywhere, or tap the
+// sky to send it there; on a timer it wanders on from there. Pressing
+// elsewhere pulls the trails.
 
 function sunDrift(o) {
   const span = o.x1 - o.x0;
@@ -1073,22 +1082,32 @@ function uniforms() {
 }
 function step(dt) {
   touch[2] += ((dragging && !moonHeld ? 1 : 0) - touch[2]) * (1 - Math.exp(-dt * 4));
-  drift.step(dt, 1);
+  if (p.cycle === 'timer') drift.step(dt, 1);
   const k = 1 - Math.exp(-dt * (drift.held ? 8 : 3));
   moon[0] += (drift.pos[0] * halfW() - moon[0]) * k; moon[1] += (drift.pos[1] - moon[1]) * k;
 }
 const toScene = (q) => [q[0] * zoomNow, q[1] * zoomNow];
+// (Where a press off the moon began, until it moves enough to be a pull on
+// the trails rather than a tap.)
+let tapAt = null;
 function onDown(q) {
   const s = toScene(q);
   moonHeld = Math.hypot(s[0] - moon[0], s[1] - moon[1]) < 0.09;
   if (moonHeld) { drift.grab([s[0] / halfW(), s[1]]); return; }
+  tapAt = s;
   touch[0] = q[0]; touch[1] = q[1];
 }
 function onMove(q) {
   if (moonHeld) { const s = toScene(q); drift.grab([s[0] / halfW(), s[1]]); return; }
+  if (tapAt) { const s = toScene(q); if (Math.hypot(s[0] - tapAt[0], s[1] - tapAt[1]) > 0.012) tapAt = null; }
   touch[0] = q[0]; touch[1] = q[1];
 }
-function onUp() { if (moonHeld) drift.release(); moonHeld = false; }
+function onUp() {
+  if (moonHeld) drift.release();
+  // A tap in the sky sends the moon there.
+  else if (tapAt && tapAt[1] < -0.12) { drift.grab([tapAt[0] / halfW(), tapAt[1]]); drift.release(); }
+  moonHeld = false; tapAt = null;
+}
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
