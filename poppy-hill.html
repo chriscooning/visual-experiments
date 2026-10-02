@@ -332,15 +332,25 @@ const DOT = 0.0011;
 }
 @diagnostic(off, derivative_uniformity) fn fieldTop(x: f32) -> f32 { return 0.03 + 0.03 * sin(x * 2.6 + u.a.w) - 0.03 * smoothstep(0.1, 0.9, x) + 0.004 * sin(x * 17.0); }
 
-// Eucalyptus crowns: many overlapping lobes of different sizes, clustered
-// over the trunks; returns distance and the nearest lobe's offset / radius
-// for shading.
+// Eucalyptus trunk i: its foot and its top, swaying in the wind.
+@diagnostic(off, derivative_uniformity) fn eucFoot(i: i32) -> vec2f {
+  let fi = f32(i);
+  let bx = 0.15 + fi * 0.068 + 0.02 * sin(fi * 3.1);
+  return vec2f(bx, fieldTop(bx) + 0.008);
+}
+@diagnostic(off, derivative_uniformity) fn eucTop(i: i32, t: f32) -> vec2f {
+  let fi = f32(i);
+  let sw = (u.b.x + u.b.y) * 0.006 * sin(t * 0.9 + fi);
+  return vec2f(eucFoot(i).x + 0.03 * sin(fi * 1.7) + sw, -0.2 - 0.04 * hash1(fi));
+}
+// Eucalyptus crowns: overlapping lobes of different sizes, each one grown
+// from the top of its own trunk so crown and trunk sway together. Lobe i
+// sits on trunk i (a second ring of six lobes fills out the first trunks).
 @diagnostic(off, derivative_uniformity) fn groveLobe(i: i32, t: f32) -> vec3f {
   let fi = f32(i);
-  let sw = (u.b.x + u.b.y) * 0.005 * sin(t * 0.9 + fi * 1.3);
-  let x = 0.13 + fract(fi * 0.618 + 0.1) * 0.7;
-  let y = -0.33 + 0.16 * fract(fi * 0.381 + 0.3) + 0.03 * sin(x * 7.0);
-  return vec3f(x + sw, y, 0.032 + 0.03 * fract(fi * 0.7548));
+  let top = eucTop(i % 10, t);
+  let off = vec2f((hash1(fi * 3.7 + 1.0) - 0.5) * 0.06, -0.012 - 0.035 * hash1(fi * 5.3 + 2.0));
+  return vec3f(top + off, 0.03 + 0.024 * hash1(fi * 0.7548 + 4.0));
 }
 @diagnostic(off, derivative_uniformity) fn groveD(q: vec2f, t: f32) -> f32 {
   var d = 1e3;
@@ -361,21 +371,71 @@ const DOT = 0.0011;
   }
   return n;
 }
-@diagnostic(off, derivative_uniformity) fn cypressD(q: vec2f) -> f32 {
-  var d = 1e3;
-  for (var i = 0; i < 6; i++) {
-    let fi = f32(i);
+// Cypress i: base, height and half-width. The first six stand in a loose
+// windbreak along the field's edge, staggered a little in depth; the rest
+// stand out in the field, nearer and bigger.
+@diagnostic(off, derivative_uniformity) fn cypressT(i: i32) -> vec4f {
+  let fi = f32(i);
+  if (i < 6) {
     let bx = -0.78 + fi * 0.13 + 0.02 * sin(fi * 2.1);
-    let by = fieldTop(bx) - 0.004;
-    let h = 0.11 + 0.035 * hash1(fi + u.a.w);
-    var v = (q - vec2f(bx, by - h * 0.5)) / vec2f(0.045, h * 0.55);
-    // A flame: full near the base, drawing to a point at the top.
-    v.x /= mix(1.0, 0.3, smoothstep(-0.1, 1.0, -v.y));
-    d = min(d, (length(v) - 1.0) * 0.04 + 0.004 * (vnoise(q * 90.0 + fi) - 0.5));
+    let dz = 0.018 * hash1(fi * 7.3 + u.a.w);
+    let s = 1.0 + dz * 4.0;
+    return vec4f(bx, fieldTop(bx) - 0.004 + dz, (0.11 + 0.035 * hash1(fi + u.a.w)) * s, 0.045 * s);
   }
-  return d;
+  let k = fi - 6.0;
+  let bx = -0.72 + k * 0.42 + 0.08 * (hash1(fi * 3.1 + u.a.w) - 0.5);
+  let dz = 0.09 + 0.15 * hash1(fi * 5.7 + u.a.w);
+  let s = 1.0 + dz * 5.0;
+  return vec4f(bx, fieldTop(bx) + dz, (0.1 + 0.035 * hash1(fi + u.a.w)) * s, 0.042 * s);
+}
+// Nearest cypress among lo..hi-1: (distance, across -1..1, height up 0..1, _).
+@diagnostic(off, derivative_uniformity) fn cypressNear(q: vec2f, lo: i32, hi: i32) -> vec4f {
+  var best = vec4f(1e3, 0.0, 0.0, 0.0);
+  for (var i = lo; i < hi; i++) {
+    let c = cypressT(i);
+    let h = c.z;
+    var v = (q - vec2f(c.x, c.y - h * 0.5)) / vec2f(c.w, h * 0.55);
+    // A flame: full near the base, drawing to a point at the top.
+    let pinch = mix(1.0, 0.3, smoothstep(-0.1, 1.0, -v.y));
+    v.x /= pinch;
+    let d = (length(v) - 1.0) * c.w * 0.9 + 0.004 * (c.w / 0.045) * (vnoise(q * 90.0 / (c.w / 0.045) + f32(i)) - 0.5);
+    if (d < best.x) { best = vec4f(d, clamp(v.x, -1.0, 1.0), clamp((c.y - q.y) / h, 0.0, 1.0), f32(i)); }
+  }
+  return best;
+}
+@diagnostic(off, derivative_uniformity) fn cypressD(q: vec2f) -> f32 { return cypressNear(q, 0, 6).x; }
+// A cypress drawn from its nearest-tree info: round flame lit from its curve.
+@diagnostic(off, derivative_uniformity) fn cypressCol(p: vec2f, cn4: vec4f, px: f32) -> vec3f {
+  let v = cn4.y * 0.5;
+  let up = cn4.z;
+  let cn = normalize(vec3f(v * 2.2, up * 0.9 - 0.2, sqrt(max(1.0 - v * v * 4.0, 0.0)) + 0.2));
+  let clit = smoothstep(0.0, 0.6, lambert(cn, 0.35)) * (1.0 - smoothstep(0.3, 0.0, up) * 0.5);
+  let cell = 0.003 * (1.0 + max(cn4.w - 5.0, 0.0) * 0.25);
+  return moonCast(stippleBush(p, 0.06 + 0.94 * clit, cell, px, C(14), C(15), C(16), C(17), C(10), 3.3 + cn4.w), clit);
 }
 
+// A scrub mound: two to four rounded lobes of their own sizes, run
+// together over a flat base, with its own spread, height and ragged edge,
+// so no two are alike.
+@diagnostic(off, derivative_uniformity) fn moundD(v: vec2f, r: f32, id: vec2f) -> f32 {
+  let nl = 2 + i32(hash21(id + 3.7) * 2.99);
+  let wx = 1.2 + 0.9 * hash21(id + 9.0);
+  var d = 1e3;
+  for (var k = 0; k < 4; k++) {
+    if (k >= nl) { break; }
+    let fk = f32(k);
+    let hk = hash21(id + fk * 7.3 + 1.1);
+    let x0 = ((fk + 0.5) / f32(nl) - 0.5) * r * wx * 1.5 + (hk - 0.5) * r * 0.35;
+    let rk = r * (0.55 + 0.45 * hash21(id + fk * 3.1 + 5.0)) * (1.0 - 0.25 * abs(fk + 0.5 - f32(nl) * 0.5) / f32(nl));
+    let c = vec2f(x0, -rk * (0.2 + 0.35 * hk));
+    let dk = length((v - c) / vec2f(1.15, 1.0)) - rk;
+    let hs = clamp(0.5 + 0.5 * (d - dk) / (r * 0.3), 0.0, 1.0);
+    d = mix(d, dk, hs) - r * 0.3 * hs * (1.0 - hs);
+  }
+  let freq = 5.0 + floor(hash21(id + 12.0) * 6.0);
+  d += r * 0.08 * sin(atan2(v.y, v.x) * freq + hash21(id + 2.0) * 9.0) + r * 0.1 * (vnoise(v / r * 2.5 + id) - 0.5);
+  return max(d, v.y - r * (0.3 + 0.3 * hash21(id + 14.0)));
+}
 // Height of the field: long swells running across it.
 @diagnostic(off, derivative_uniformity) fn fieldZ(p: vec2f) -> f32 {
   let dy = p.y - fieldTop(p.x);
@@ -478,25 +538,19 @@ const DOT = 0.0011;
 
   // ---- Cypress windbreak on the left.
   {
-    let cd = cypressD(p);
+    let cn4 = cypressNear(p, 0, 6);
+    let cd = cn4.x;
     if (cd < px * 2.0 + DOT * 2.0) {
-      let v = fract((p.x + 0.78) / 0.13 + 0.5) - 0.5;
-      let up = clamp((fieldTop(p.x) - p.y) / 0.14, 0.0, 1.0);
-      let cn = normalize(vec3f(v * 2.2, up * 0.9 - 0.2, sqrt(max(1.0 - v * v * 4.0, 0.0)) + 0.2));
-      let clit = smoothstep(0.0, 0.6, lambert(cn, 0.35)) * (1.0 - smoothstep(0.3, 0.0, up) * 0.5);
-      let cc = moonCast(stippleBush(p, 0.06 + 0.94 * clit, 0.003, px, C(14), C(15), C(16), C(17), C(10), 3.3), clit);
-      col = mix(col, cc, fillA(cd, px));
-      col = mix(col, C(31), dotLine(cd, p.y + v * 0.1, DOT * 0.8, px, floor((p.x + 0.78) / 0.13 + 0.5)) * 0.5);
+      col = mix(col, cypressCol(p, cn4, px), fillA(cd, px));
+      col = mix(col, C(31), dotLine(cd, p.y + cn4.y * 0.01, DOT * 0.8, px, cn4.w) * 0.5);
     }
   }
 
   // ---- Eucalyptus: tall pale trunks peeling in strips, then the crowns.
   for (var i = 0; i < 10; i++) {
     let fi = f32(i);
-    let bx = 0.15 + fi * 0.068 + 0.02 * sin(fi * 3.1);
-    let b0 = vec2f(bx, fieldTop(bx) + 0.008);
-    let sw = wind * 0.006 * sin(t * 0.9 + fi);
-    let b1 = vec2f(bx + 0.03 * sin(fi * 1.7) + sw, -0.2 - 0.04 * hash1(fi));
+    let b0 = eucFoot(i);
+    let b1 = eucTop(i, t);
     let e = b1 - b0;
     let L = length(e);
     let along = dot(p - b0, e / L);
@@ -572,10 +626,14 @@ const DOT = 0.0011;
       tsh = max(tsh, softA(cypressD(canopyAt(pq, ft - 0.004)), 0.01 + dy * 0.12) * LI);
       for (var i = 0; i < 10; i++) {
         let fi = f32(i);
-        let bx = 0.15 + fi * 0.068 + 0.02 * sin(fi * 3.1);
-        let b0 = vec2f(bx, fieldTop(bx) + 0.008);
-        let b1 = vec2f(bx + 0.03 * sin(fi * 1.7) + wind * 0.006 * sin(t * 0.9 + fi), -0.2 - 0.04 * hash1(fi));
+        let b0 = eucFoot(i);
+        let b1 = eucTop(i, t);
         tsh = max(tsh, stemShadow(ps, b0, b1, 0.004, px));
+      }
+      for (var i = 6; i < 9; i++) {
+        let c = cypressT(i);
+        tsh = max(tsh, stemShadow(ps, c.xy, c.xy - vec2f(0.0, c.z * 0.15), c.w * 0.3, px));
+        tsh = max(tsh, blobShadowQ(pq, ps, c.xy - vec2f(0.0, c.z * 0.45), c.w * 1.05, c.y, px));
       }
       fc = mix(fc, fc * 0.6, tsh * 0.75);
     }
@@ -597,7 +655,7 @@ const DOT = 0.0011;
         let cx = (si - rr * 0.37 + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * sw;
         let cy = ft + rdy;
         let r = 0.014 + 0.03 * clamp(rdy / 0.45, 0.0, 1.0) + 0.008 * h;
-        msh = max(msh, blobShadowQ(pq, ps, vec2f(cx, cy - r * 0.1), r * 1.1, cy + r * 0.5, px));
+        msh = max(msh, blobShadowQ(pq, ps, vec2f(cx, cy - r * 0.1), r * (1.0 + 0.5 * hash21(id + 9.0)), cy + r * 0.5, px));
       }
     }
     fc = mix(fc, mix(C(24), C(31), 0.55), msh * 0.7);
@@ -615,23 +673,36 @@ const DOT = 0.0011;
         let cy = ft + rdy;
         let r = 0.014 + 0.03 * clamp(rdy / 0.45, 0.0, 1.0) + 0.008 * h;
         let v = p - vec2f(cx, cy);
-        if (abs(v.x) > r * 1.8 || abs(v.y) > r * 1.3) { continue; }
-        let sd = max(length(v / vec2f(1.45, 1.0)) - r * (1.0 + 0.1 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.5);
-        let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * 1.45, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.5, v.y) * 0.6);
+        if (abs(v.x) > r * 2.8 || abs(v.y) > r * 1.6) { continue; }
+        let sd = moundD(v, r, id);
+        let wx = 1.2 + 0.9 * hash21(id + 9.0);
+        let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * wx, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.5, v.y) * 0.6);
         fc = mix(fc, moonCast(stippleBush(p, 0.05 + 0.95 * blit, 0.0028 + r * 0.08, px, C(14), C(15), C(16), C(17), C(25), h * 13.0), blit), fillA(sd, px));
-        fc = mix(fc, C(31), dotRing(sd, v, r * 1.2, DOT * 0.8, px, h * 29.0) * 0.5);
+        fc = mix(fc, C(31), dotRing(sd, v, r * 1.4, DOT * 0.8, px, h * 29.0) * 0.5);
       }
     }
     fc = moonCast(fc, fl);
     col = mix(col, fc, fillA(ft - p.y, px));
   }
   col = mix(col, C(31), dotLine(p.y - ft, p.x, DOT, px, 6.0) * 0.6);
+  // Cypresses standing out in the field, nearer and bigger.
+  {
+    let cn4 = cypressNear(p, 6, 9);
+    if (cn4.x < px * 2.0 + DOT * 2.0) {
+      col = mix(col, cypressCol(p, cn4, px), fillA(cn4.x, px));
+      col = mix(col, C(31), dotLine(cn4.x, p.y + cn4.y * 0.01, DOT, px, cn4.w) * 0.55);
+    }
+  }
   // Big poppies nearer in: two staggered layers of perspective rows. Each
   // cup is a bowl lit round its curve; stems sway from their feet.
   if (p.y - ft > 0.05) {
     let dy = p.y - ft;
     let pop = u.e.y;
     let rowF = log(1.0 + dy / 0.1) / 0.16;
+    // Poppies standing behind a near cypress are hidden by it.
+    let nc = cypressNear(p, 6, 9);
+    let ncBase = cypressT(i32(nc.w)).y;
+    let ncA = fillA(nc.x, px);
     for (var L2 = 0; L2 <= 1; L2++) {
     for (var j = 0; j <= 1; j++) {
       let rr = floor(rowF - f32(L2) * 0.5) - f32(j) + f32(L2) * 0.5;
@@ -646,6 +717,7 @@ const DOT = 0.0011;
       let rad = pc * (0.2 + 0.1 * h);
       let sway = ((0.14 + 0.1 * h) * sin(t * 1.3 + c.x * 4.0 + h * 5.0) + 0.12 * sin(t * 0.5 - c.x * 2.5)) * wind;
       let foot = c + vec2f(0.0, pc * 0.95);
+      let pre = col;
       let v = rot2(p - foot, -sway) + (foot - c);
       let mid = vec2f(rad * 0.25 * sin(h * 9.0), pc * 0.5);
       let stem = min(sdSeg(v, vec2f(0.0, rad * 0.4), mid), sdSeg(v, mid, vec2f(0.0, pc * 0.95))) - rad * 0.07;
@@ -666,6 +738,7 @@ const DOT = 0.0011;
       col = mix(col, C(26), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.35)) - rad * 0.55 * open, px) * fillA(cup, px) * 0.8);
       col = mix(col, C(28), fillA(length((v - vec2f(0.0, rim)) / vec2f(1.0, 0.5)) - rad * 0.2 * open, px) * fillA(cup, px));
       col = mix(col, C(31), dotRing(cup, v, rad, DOT * 0.8, px, h * 37.0) * 0.9);
+      col = mix(col, pre, ncA * step(foot.y, ncBase));
     }
     }
   }
@@ -718,7 +791,7 @@ var<private> LSRC: vec2f;   // where the source sits on screen
 @diagnostic(off, derivative_uniformity) fn heightN(hx: f32, hy: f32, k: f32) -> vec3f { return normalize(vec3f(-hx * k, 1.0, -hy * k)); }
 // Moonlit faces take a cool silver cast.
 @diagnostic(off, derivative_uniformity) fn moonCast(col: vec3f, lit: f32) -> vec3f {
-  return mix(col, col * vec3f(0.85, 1.0, 1.3) + vec3f(0.05, 0.075, 0.13), clamp(LMOON * lit * 1.7, 0.0, 1.0));
+  return mix(col, col * vec3f(0.88, 0.98, 1.18) + vec3f(0.03, 0.045, 0.08), clamp(LMOON * lit * 1.2, 0.0, 1.0));
 }
 
 // ---- Shadows. FORE squashes ground depth onto the screen.
@@ -907,7 +980,7 @@ const FORE = 0.45;
         let dcy = cy - (row + 0.5) * rowH * 0.85 + (hash1(di * 2.1 + row * 5.0 + fk) - 0.5) * rowH * 0.3;
         let q = vec2f(p.x - dcx, p.y - dcy);
         let tx = clamp(abs(q.x) / hl, 0.0, 1.0);
-        // Tapered stroke, a touch fuller along its top edge.
+        // A brush dab: full in the middle, drawn out to a point at each end.
         let hy = hh * (1.0 - 0.85 * pow(tx, 1.5)) * select(1.0, 0.8, q.y > 0.0);
         let dd = (length(vec2f(q.x / hl, q.y / max(hy, 1e-5))) - 1.0) * hy;
         // Solid body; the edge breaks up into a fringe of dots.
@@ -1067,14 +1140,36 @@ const FORE = 0.45;
   }
   col = mix(col, C(3), fillA(length(sv) - 0.045, px));
   col = mix(col, C(4), dotRing(hr - 0.064, sv, 0.064, 0.0011, px, 3.0) * 0.75 * sunUp);
+  // The moon: a lit sphere with darker seas and bright craters, laid on in
+  // stipple, and a soft glow that falls away into scattered dots of light.
   let mv = p0 - moon;
-  let mr = haloR(mv, t, 7.9);
-  let mc = mix(lampC, vec3f(0.95, 0.94, 0.88), 0.6);
-  // Moonglow: a cool light added to the sky in wandering steps.
-  col += vec3f(0.05, 0.07, 0.12) * post(exp(-mr * 12.0) * dark, 3.0);
-  col = mix(col, mc, fillA(length(mv) - 0.032, px));
-  col = mix(col, mc * 0.82, fillA(length(mv - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(mv - vec2f(-0.008, 0.01)) - 0.006, px));
-  col = mix(col, mix(col, mc, 0.6), dotRing(mr - 0.05, mv, 0.05, 0.0009, px, 5.0) * dark * 0.6);
+  let md = length(mv);
+  let MR = 0.034;
+  let gl = (exp(-md * 16.0) * 0.7 + exp(-md * 45.0) * 0.6) * dark;
+  col += vec3f(0.07, 0.09, 0.14) * gl;
+  let gcell = max(0.0026, px * 2.2);
+  col = mix(col, mix(col, lampC, 0.35), cloudDots(p0, gcell, px, smoothstep(0.02, 0.9, gl) * 0.55, 21.0) * step(MR, md));
+  if (md < MR + px * 2.0) {
+    let q = mv / MR;
+    let z = sqrt(max(1.0 - dot(q, q), 0.0));
+    let mc = mix(lampC, vec3f(0.96, 0.95, 0.9), 0.65);
+    // Seas: the darker plains, fixed to the moon's face.
+    let sea = smoothstep(0.48, 0.62, fbm(q * 1.7 + vec2f(3.1, 7.2)));
+    var m = mix(mc, mc * vec3f(0.7, 0.71, 0.76), sea * 0.85);
+    // Small bright craters with rays, a few dark pits.
+    let cr = vnoise(q * 9.0 + 4.0);
+    m = mix(m, mc * 1.06, smoothstep(0.78, 0.9, cr) * 0.6);
+    m = mix(m, m * 0.85, smoothstep(0.25, 0.12, vnoise(q * 13.0 + 11.0)) * 0.5);
+    // A sphere: dimmer toward the limb.
+    m *= 0.72 + 0.28 * pow(z, 0.5);
+    // Stipple: the tone built from dots, darker in the seas.
+    let mcell = max(0.0021, px * 1.8);
+    m = mix(m, m * 0.8, cloudDots(p0, mcell, px, 0.25 + sea * 0.45, 5.0));
+    m = mix(m, min(m * 1.12, vec3f(1.0)), cloudDots(p0 + 0.43 * mcell, mcell * 0.9, px, 0.3 * (1.0 - sea), 8.0));
+    // The rim breaks into dots instead of a hard line.
+    let rim = cloudDots(p0 + vec2f(0.17, 0.31) * mcell, mcell * 0.8, px, smoothstep(MR + 0.003, MR - 0.003, md), 13.0);
+    col = mix(col, m, max(fillA(md - MR + 0.0025, px), rim * step(MR - 0.004, md)));
+  }
   // Clouds catch whichever light is up.
   let src = select(moon, sun, u.c.z > -0.05);
   let low = select(1.0, 1.0 - smoothstep(0.1, 0.5, u.c.z), u.c.z > -0.05);

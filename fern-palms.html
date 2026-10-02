@@ -670,7 +670,7 @@ var<private> LSRC: vec2f;   // where the source sits on screen
 @diagnostic(off, derivative_uniformity) fn heightN(hx: f32, hy: f32, k: f32) -> vec3f { return normalize(vec3f(-hx * k, 1.0, -hy * k)); }
 // Moonlit faces take a cool silver cast.
 @diagnostic(off, derivative_uniformity) fn moonCast(col: vec3f, lit: f32) -> vec3f {
-  return mix(col, col * vec3f(0.85, 1.0, 1.3) + vec3f(0.05, 0.075, 0.13), clamp(LMOON * lit * 1.7, 0.0, 1.0));
+  return mix(col, col * vec3f(0.88, 0.98, 1.18) + vec3f(0.03, 0.045, 0.08), clamp(LMOON * lit * 1.2, 0.0, 1.0));
 }
 
 // ---- Shadows. FORE squashes ground depth onto the screen.
@@ -859,7 +859,7 @@ const FORE = 0.45;
         let dcy = cy - (row + 0.5) * rowH * 0.85 + (hash1(di * 2.1 + row * 5.0 + fk) - 0.5) * rowH * 0.3;
         let q = vec2f(p.x - dcx, p.y - dcy);
         let tx = clamp(abs(q.x) / hl, 0.0, 1.0);
-        // Tapered stroke, a touch fuller along its top edge.
+        // A brush dab: full in the middle, drawn out to a point at each end.
         let hy = hh * (1.0 - 0.85 * pow(tx, 1.5)) * select(1.0, 0.8, q.y > 0.0);
         let dd = (length(vec2f(q.x / hl, q.y / max(hy, 1e-5))) - 1.0) * hy;
         // Solid body; the edge breaks up into a fringe of dots.
@@ -1019,14 +1019,36 @@ const FORE = 0.45;
   }
   col = mix(col, C(3), fillA(length(sv) - 0.045, px));
   col = mix(col, C(4), dotRing(hr - 0.064, sv, 0.064, 0.0011, px, 3.0) * 0.75 * sunUp);
+  // The moon: a lit sphere with darker seas and bright craters, laid on in
+  // stipple, and a soft glow that falls away into scattered dots of light.
   let mv = p0 - moon;
-  let mr = haloR(mv, t, 7.9);
-  let mc = mix(lampC, vec3f(0.95, 0.94, 0.88), 0.6);
-  // Moonglow: a cool light added to the sky in wandering steps.
-  col += vec3f(0.05, 0.07, 0.12) * post(exp(-mr * 12.0) * dark, 3.0);
-  col = mix(col, mc, fillA(length(mv) - 0.032, px));
-  col = mix(col, mc * 0.82, fillA(length(mv - vec2f(0.009, -0.006)) - 0.009, px) + fillA(length(mv - vec2f(-0.008, 0.01)) - 0.006, px));
-  col = mix(col, mix(col, mc, 0.6), dotRing(mr - 0.05, mv, 0.05, 0.0009, px, 5.0) * dark * 0.6);
+  let md = length(mv);
+  let MR = 0.034;
+  let gl = (exp(-md * 16.0) * 0.7 + exp(-md * 45.0) * 0.6) * dark;
+  col += vec3f(0.07, 0.09, 0.14) * gl;
+  let gcell = max(0.0026, px * 2.2);
+  col = mix(col, mix(col, lampC, 0.35), cloudDots(p0, gcell, px, smoothstep(0.02, 0.9, gl) * 0.55, 21.0) * step(MR, md));
+  if (md < MR + px * 2.0) {
+    let q = mv / MR;
+    let z = sqrt(max(1.0 - dot(q, q), 0.0));
+    let mc = mix(lampC, vec3f(0.96, 0.95, 0.9), 0.65);
+    // Seas: the darker plains, fixed to the moon's face.
+    let sea = smoothstep(0.48, 0.62, fbm(q * 1.7 + vec2f(3.1, 7.2)));
+    var m = mix(mc, mc * vec3f(0.7, 0.71, 0.76), sea * 0.85);
+    // Small bright craters with rays, a few dark pits.
+    let cr = vnoise(q * 9.0 + 4.0);
+    m = mix(m, mc * 1.06, smoothstep(0.78, 0.9, cr) * 0.6);
+    m = mix(m, m * 0.85, smoothstep(0.25, 0.12, vnoise(q * 13.0 + 11.0)) * 0.5);
+    // A sphere: dimmer toward the limb.
+    m *= 0.72 + 0.28 * pow(z, 0.5);
+    // Stipple: the tone built from dots, darker in the seas.
+    let mcell = max(0.0021, px * 1.8);
+    m = mix(m, m * 0.8, cloudDots(p0, mcell, px, 0.25 + sea * 0.45, 5.0));
+    m = mix(m, min(m * 1.12, vec3f(1.0)), cloudDots(p0 + 0.43 * mcell, mcell * 0.9, px, 0.3 * (1.0 - sea), 8.0));
+    // The rim breaks into dots instead of a hard line.
+    let rim = cloudDots(p0 + vec2f(0.17, 0.31) * mcell, mcell * 0.8, px, smoothstep(MR + 0.003, MR - 0.003, md), 13.0);
+    col = mix(col, m, max(fillA(md - MR + 0.0025, px), rim * step(MR - 0.004, md)));
+  }
   // Clouds catch whichever light is up.
   let src = select(moon, sun, u.c.z > -0.05);
   let low = select(1.0, 1.0 - smoothstep(0.1, 0.5, u.c.z), u.c.z > -0.05);
