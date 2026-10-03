@@ -305,8 +305,8 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 // with scrub hanging from the brink and surf at their feet; boulders crowd
 // the water's edge, each wrapped in rings of foam; sets of swell roll in
 // and break white; a glitter path runs to the sun. Harakeke (flax) blades
-// and dune grass sway in the foreground, a lighthouse stands on the point,
-// a fence runs along the cliff top, and a couple of gulls hang in the wind.
+// and dune grass sway in the foreground, and a couple of gulls hang in the
+// wind.
 // One light, the sun, shades every surface from its own normal and throws
 // every shadow the same way; it drifts slowly on its own and can be dragged.
 // Lines are laid down in dots.
@@ -802,44 +802,6 @@ var<private> HLAND: array<vec3f, 3>;
       rc = mix(rc, mix(C(11), C(10), 0.4), smoothstep(rs * 0.05, rs * 0.5, q.y) * 0.6);
       col = mix(col, rc, fillA(rd, px));
       col = mix(col, C(12), dotRing(rd, q, rs, DOT * 0.8, px, fk * 3.0 + 1.0) * 0.5);
-    }
-  }
-
-  // A lighthouse out on the point and a fence along the cliff top, standing
-  // up behind the brink: drawn only where no nearer land hides them.
-  if (inBand) {
-    let zl = 5.9;
-    let cl = coastBare(zl);
-    let xl = cl.x - 0.16;
-    let s = 1.0 / zl;
-    let lb = vec2f(xl * s, HY + (EYE - landTop(xl, zl)) * s);
-    let lq = (p - lb) / s;
-    if (abs(lq.x) < 0.2 && lq.y > -0.4 && lq.y < 0.05 && (!landSeen || zHit > zl)) {
-      let tower = sdBox(lq - vec2f(0.0, -0.13), vec2f(0.026 + lq.y * 0.03, 0.13)) * s;
-      let tl = lambert(roundN(vec2f(lq.x, 0.0), vec2f(0.03, 1.0)), 0.45);
-      col = mix(col, C(5) * mix(0.62, 1.02, tl), fillA(tower, px));
-      col = mix(col, C(12), fillA(sdBox(lq - vec2f(0.0, -0.275), vec2f(0.036, 0.018)) * s, px));
-      col = mix(col, C(12), fillA(sdBox(lq - vec2f(0.0, -0.08), vec2f(0.03, 0.009)) * s, px));
-      col = mix(col, C(2), fillA((length(lq - vec2f(0.0, -0.235)) - 0.02) * s, px));
-    }
-    let beam = 0.5 + 0.5 * sin(t * 1.5);
-    let bq = p - (lb + vec2f(0.0, -0.235 * s));
-    col = mix(col, C(2), fillA(sdTri(bq, vec2f(0.0), vec2f(0.12, -0.012 - 0.01 * beam), vec2f(0.12, 0.012 + 0.01 * beam)), px) * 0.18 * beam * select(1.0, 0.0, landSeen));
-    // Fence: posts every so far along a line set back from the brink.
-    if (p.y < HY && p.x < -0.12) {
-      let zf = reachCoast(p.x, -0.13, 4.6);
-      if (zf > 1.7 && (!landSeen || zHit > zf)) {
-        let sf = 1.0 / zf;
-        let yb = HY + (EYE - landTop(p.x * zf, zf)) * sf;
-        let hgt = 0.032 * sf;
-        let sp = 0.11;
-        let cf = coastBare(zf);
-        let dxdz = abs((cf.slope * zf - (cf.x - 0.13)) * sf * sf);
-        let dPost = abs(zf - (floor(zf / sp) + 0.5) * sp) * dxdz - 0.003 * sf;
-        let inH = step(yb - hgt, p.y) * step(p.y, yb);
-        col = mix(col, C(12), fillA(dPost, px) * inH * 0.9);
-        col = mix(col, C(12), dotLine(p.y - (yb - hgt * 0.7), p.x, DOT * 0.6, px, 12.0) * step(p.y, yb) * 0.7);
-      }
     }
   }
 
