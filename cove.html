@@ -47,10 +47,10 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Palette</label>
     <select id="palette">
-      <option value="morning" selected>Morning</option>
+      <option value="morning">Morning</option>
       <option value="earle">Earle</option>
       <option value="mist">Mist</option>
-      <option value="dusk">Dusk</option>
+      <option value="dusk" selected>Dusk</option>
     </select>
   </div>
   <div class="control-group"><label>Swell <span class="val" id="swellVal">55</span></label><input type="range" id="swell" min="0" max="100" value="55"></div>
@@ -1370,10 +1370,12 @@ function readControls() {
 }
 // The sun wanders slowly by itself along a low arc (x across the frame from
 // -1 to 1); a drag takes it anywhere in the sky, and it wanders on from there.
-const drift = sunDrift({ x0: -0.85, x1: 0.92, yLow: -0.16, yHigh: -0.36, period: 220, start: [0.3, -0.26], yMax: -0.13 });
+const drift = sunDrift({ x0: -0.85, x1: 0.92, yLow: -0.16, yHigh: -0.36, period: 220, start: [0.57, -0.155], yMax: -0.13 });
 // Half the frame's width in the scene's squeezed units.
 const halfW = () => 0.31 * aspect / Math.min(aspect, 1);
-let ft = 0, sun = [0.14, -0.26];
+// It opens at dusk, the sun low over the sea right of centre; the first
+// frame puts it there outright rather than easing it in.
+let ft = 0, sun = [0.31, -0.155], sunSet = false;
 function generate() { ft = Math.random() * 100; }
 function uniforms() {
   return {
@@ -1387,6 +1389,7 @@ function uniforms() {
 function step(dt) {
   ft += dt * (0.5 + p.swell * 1.5);
   drift.step(dt, 1);
+  if (!sunSet) { sun = [drift.pos[0] * halfW(), drift.pos[1]]; sunSet = true; }
   const k = 1 - Math.exp(-dt * (drift.held ? 8 : 4));
   sun[0] += (drift.pos[0] * halfW() - sun[0]) * k; sun[1] += (drift.pos[1] - sun[1]) * k;
 }
