@@ -304,8 +304,8 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 // into buttresses and gullies, running out past headlands to the point,
 // with scrub hanging from the brink and surf at their feet; boulders crowd
 // the water's edge, each wrapped in rings of foam; sets of swell roll in
-// and break white; a glitter path runs to the sun. Chaparral yucca in
-// flower and dune grass stand in the foreground, and a couple of gulls hang
+// and break white; a glitter path runs to the sun. Chaparral yucca, most
+// in flower, stand among the dune grass in the foreground, and a couple of gulls hang
 // in the wind.
 // One light, the sun, shades every surface from its own normal and throws
 // every shadow the same way; it drifts slowly on its own and can be dragged.
@@ -832,52 +832,79 @@ var<private> HLAND: array<vec3f, 3>;
     col = mix(col, select(C(16), C(15), hh > 0.4), fillA(tip * 0.005, px) * step(p0.y, fg) * step(fg - len, p0.y));
   }
   // Chaparral yucca (Our Lord's Candle), native to the dry slopes above Big
-  // Sur: a round rosette of stiff, blue-grey, dagger-tipped leaves, and from
-  // its heart a tall stalk crowded with cream bell flowers in a long plume.
-  for (var k = 0; k < 2; k++) {
+  // Sur, scattered through the grass: a round rosette of stiff, blue-grey,
+  // dagger-tipped leaves, and on most a tall stalk crowded with cream bell
+  // flowers in a long plume. Drawn far to near, smaller as they recede; each
+  // is drawn in its own units (s to the screen) so one shape serves all.
+  let NY = 18;
+  for (var k = 0; k < NY; k++) {
     let fk = f32(k);
-    let base = vec2f(select(-0.36, 0.32, k == 1) * min(asp, 1.2) * 0.9 + tilt.x * 0.02, 0.45 + 0.02 * fk);
-    let q = p0 - base;
+    let hk = hash1(fk * 7.13 + u.a.w * 1.7);
+    let rowT = (fk + 0.6 * hk) / f32(NY);
+    let s = 0.3 + 0.75 * rowT * rowT;
+    let bx = (hash1(fk * 3.91 + u.a.w) - 0.5) * asp * 1.05 + tilt.x * 0.02 * s;
+    let base = vec2f(bx, 0.34 + 0.03 * sin(bx * 4.0 + u.a.w) + tilt.y * 0.01 + 0.005 + 0.13 * rowT);
+    let lpx = px / s;
+    let q = (p0 - base) / s;
+    let bloom = hash1(fk * 5.3 + u.a.w * 2.3) > 0.22;
+    let tall = 0.3 + 0.26 * hash1(fk * 9.7 + u.a.w);
+    // Each plant its own: how many leaves, how long and broad, how flat the
+    // rosette sits, its green; where the plume starts, how broad and full it
+    // is, how much purple in it; and a few carry last year's dry stalk.
+    let nLeaf = 20 + i32(16.0 * hash1(fk * 2.17 + u.a.w * 3.3));
+    let lLen = 0.75 + 0.5 * hash1(fk * 4.41 + u.a.w * 1.1);
+    let lWid = 0.7 + 0.6 * hash1(fk * 6.07 + u.a.w * 2.9);
+    let flat = 0.7 + 0.45 * hash1(fk * 8.33 + u.a.w * 0.7);
+    let spread = 1.25 + 0.35 * hash1(fk * 1.59 + u.a.w * 4.1);
+    let hue = hash1(fk * 12.7 + u.a.w * 5.3);
+    let pStart = 0.3 + 0.25 * hash1(fk * 13.9 + u.a.w * 0.3);
+    let pWide = 0.022 + 0.018 * hash1(fk * 15.1 + u.a.w * 6.1);
+    let pFull = 0.04 + 0.3 * hash1(fk * 17.3 + u.a.w * 2.2);
+    let blush = 0.5 + 0.45 * hash1(fk * 19.9 + u.a.w * 3.7);
+    let dry = hash1(fk * 21.7 + u.a.w * 1.9) > 0.85;
+    // (Nothing of a plant lies outside its rosette and its stalk.)
+    if (abs(q.x) > 0.26 || q.y > 0.04 || q.y < -select(0.24, tall + 0.08, bloom)) { continue; }
     // Leaves, the low outer ones first and the upright ones at the heart last.
-    if (length(q) < 0.2) {
-      for (var j = 0; j < 32; j++) {
+    if (length(q) < 0.25) {
+      for (var j = 0; j < 36; j++) {
+        if (j >= nLeaf) { break; }
         let fj = f32(j);
         let hj = hash1(fj * 3.7 + fk * 11.0);
         // Spread from nearly level on either side to upright in the middle.
-        let o = (fj - 15.5) / 15.5;
+        let o = (fj - f32(nLeaf - 1) * 0.5) / (f32(nLeaf - 1) * 0.5);
         let side = select(-1.0, 1.0, j % 2 == 0);
         let fan = (1.0 - abs(o)) * side;
-        let ang = -1.5708 + fan * 1.45 + (hj - 0.5) * 0.2 + sin(t * 0.9 + fj + fk * 3.0) * 0.012 * wind;
-        let L = 0.1 + 0.05 * hj + 0.03 * abs(o);
-        let dirV = vec2f(cos(ang), sin(ang)) * L;
+        let ang = -1.5708 + fan * spread + (hj - 0.5) * 0.2 + sin(t * 0.9 + fj + fk * 3.0) * 0.012 * wind;
+        let L = (0.1 + 0.05 * hj + 0.03 * abs(o)) * lLen;
+        let dirV = vec2f(cos(ang), sin(ang) * flat) * L;
         let hh = clamp(dot(q, dirV) / dot(dirV, dirV), 0.0, 1.0);
         let off = q - dirV * hh;
-        let wdt = 0.0072 * (1.0 - hh) + 0.0004;
+        let wdt = 0.0072 * lWid * (1.0 - hh) + 0.0004;
         let d = length(off) - wdt;
-        if (d > px * 2.0) { continue; }
+        if (d > lpx * 2.0) { continue; }
         let nrm = normalize(vec2f(-dirV.y, dirV.x));
         let ll = lambert(roundN(off, vec2f(wdt)), 0.4);
-        let leaf = mix(mix(C(14), C(3), 0.35), C(16), 0.25 * hj);
+        let leaf = mix(mix(C(14), C(3), 0.2 + 0.3 * hue), C(16), 0.15 * hj + 0.3 * (1.0 - hue));
         var lc = mix(leaf * 0.55, mix(leaf, C(2), 0.25), post(ll * 1.2, 3.0));
         // A pale margin down one edge.
         lc = mix(lc, mix(leaf, C(2), 0.45), smoothstep(wdt * 0.35, wdt * 0.8, dot(off, nrm)) * 0.6);
-        col = mix(col, lc, fillA(d, px));
-        col = mix(col, C(12), strokeA(d, px * 0.35, px) * 0.35);
+        col = mix(col, lc, fillA(d, lpx));
+        col = mix(col, C(12), strokeA(d, lpx * 0.35, lpx) * 0.35);
       }
     }
-    // The stalk, then its plume of flowers over the upper half.
-    let sb = base + vec2f(0.0, -0.03);
-    let st = sb + vec2f(0.012 * sin(t * 0.7 + fk) * wind, -0.5);
+    if (!bloom) { continue; }
+    // The stalk, leaning a little, then its plume of flowers over the upper half.
+    let sb = vec2f(0.0, -0.03);
+    let st = sb + vec2f((hk - 0.5) * 0.08 + 0.012 * sin(t * 0.7 + fk) * wind, -tall);
     let ax = st - sb;
     let alen = length(ax);
     let ad = ax / alen;
     let an = vec2f(-ad.y, ad.x);
-    let qs = p0 - sb;
-    let along = dot(qs, ad) / alen;
-    let across = dot(qs, an);
+    let along = dot(q - sb, ad) / alen;
+    let across = dot(q - sb, an);
     if (along > -0.05 && along < 1.08 && abs(across) < 0.05) {
-      let stt = tube(p0, sb, st, 0.0035 * (1.0 - along * 0.6));
-      col = mix(col, mix(C(12), C(16), lambert(roundN(stt.yz, vec2f(0.003)), 0.4) * 0.8), fillA(stt.x, px));
+      let stt = tube(q, sb, st, 0.0035 * (1.0 - along * 0.6));
+      col = mix(col, mix(C(12), select(C(16), C(9), dry), lambert(roundN(stt.yz, vec2f(0.003)), 0.4) * 0.8), fillA(stt.x, lpx));
       // The plume: bells packed in a spindle over the stalk's upper half,
       // widest a little above its middle and tapering to a point.
       let cell = 0.0062;
@@ -889,19 +916,21 @@ var<private> HLAND: array<vec3f, 3>;
           let hf = hash21(id + fk * 31.0);
           let c = (id + 0.5 + (vec2f(hash21(id + 3.3 + fk), hash21(id + 7.1 + fk)) - 0.5) * 0.7) * cell;
           let ca = c.y / alen;
-          let cpf = clamp((ca - 0.42) / 0.58, 0.0, 1.0);
-          let cenv = 0.032 * pow(sin(3.14159 * pow(cpf, 0.8)), 0.7) * step(0.42, ca);
-          if (abs(c.x) > cenv || hf < 0.12) { continue; }
+          let cpf = clamp((ca - pStart) / (1.0 - pStart), 0.0, 1.0);
+          let cenv = pWide * pow(sin(3.14159 * pow(cpf, 0.8)), 0.7) * step(pStart, ca);
+          if (abs(c.x) > cenv || hf < pFull) { continue; }
           // A nodding bell: a little longer than wide, hanging from its tip.
           let v = vec2f(across, along * alen) - c;
-          let r = 0.0032 * (0.8 + 0.4 * hf);
+          let r = 0.0032 * (0.8 + 0.4 * hf) * select(1.0, 0.85, dry);
           let bd = length(v / vec2f(1.0, 1.3)) - r;
           let bl = lambert(roundN(vec2f(v.x, -v.y), vec2f(r)), 0.5);
           var fc = mix(mix(C(1), C(8), 0.25), mix(C(2), C(5), 0.4), post(0.35 + bl, 3.0));
           // A blush of purple at the base of some.
-          fc = mix(fc, mix(fc, vec3f(0.55, 0.38, 0.55), 0.5), step(0.75, hf) * smoothstep(-r, r, -v.y) * 0.6);
-          col = mix(col, fc, fillA(bd, px));
-          col = mix(col, C(12), strokeA(bd, px * 0.3, px) * 0.25);
+          fc = mix(fc, mix(fc, vec3f(0.55, 0.38, 0.55), 0.5), step(blush, hf) * smoothstep(-r, r, -v.y) * 0.6);
+          // Or, on a dry stalk, split brown seed capsules.
+          if (dry) { fc = mix(mix(C(7), C(9), 0.5) * 0.8, mix(C(9), C(8), 0.4), post(0.3 + bl, 3.0)); }
+          col = mix(col, fc, fillA(bd, lpx));
+          col = mix(col, C(12), strokeA(bd, lpx * 0.3, lpx) * 0.25);
         }
       }
     }
