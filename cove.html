@@ -908,54 +908,88 @@ const FORE = 0.45;
   }
   return col;
 }
-// Mottled patches with drips: flat blotches of two or three tones in an
-// irregular mottle, with runs of paint hanging from the undersides, each
-// a dotted trickle ending in a bead.
-@diagnostic(off, derivative_uniformity) fn dripClouds(base: vec3f, p: vec2f, sun: vec2f, low: f32, t: f32, px: f32, y0: f32, y1: f32, xr: f32, n: i32, amt: f32, cLit: vec3f, cShade: vec3f, cGlow: vec3f, seed: f32) -> vec3f {
+// Heaped clouds: billows of different sizes piled on a flat base, the
+// biggest toward the middle, with a crown and a smaller billow on top. The
+// surface is the soft roof over the billows' domes, so the light runs round
+// each one and dips into the creases between them; mottled, laid on in a
+// few tone steps and stippled.
+@diagnostic(off, derivative_uniformity) fn heapClouds(base: vec3f, p: vec2f, sun: vec2f, low: f32, t: f32, px: f32, y0: f32, y1: f32, xr: f32, n: i32, amt: f32, cLit: vec3f, cShade: vec3f, cGlow: vec3f, seed: f32) -> vec3f {
   var col = base;
   let cell = max(0.003, px * 2.3);
   for (var k = 0; k < 8; k++) {
     if (k >= n) { break; }
     let fk = f32(k);
-    let cy = mix(y0, y1, (fk + 0.3 + 0.4 * hash1(fk * 7.13 + seed)) / f32(n));
-    let W = (0.08 + 0.1 * hash1(fk + seed * 1.7)) * (0.6 + 0.6 * amt);
-    let H = W * (0.22 + 0.1 * hash1(fk * 4.1 + seed));
-    let span = 2.0 * (xr + W * 1.3);
-    let cx = fract(hash1(fk * 3.1 + seed) + t * 0.003 * (1.0 + fk * 0.2) / span) * span - (xr + W * 1.3);
-    let q = p - vec2f(cx, cy);
-    if (abs(q.x) > W * 1.2 || q.y < -H * 1.6 || q.y > H * 2.6) { continue; }
-    // Blotch: a wide lens, rounded on top, nearly flat below, ragged edge.
-    var d = (length(q / vec2f(W, select(H * 0.45, H, q.y < 0.0))) - 1.0) * H;
-    d += H * 0.35 * (fbm(q / W * vec2f(3.0, 6.0) + fk * 2.7 + seed) - 0.5);
-    let toSun = sun - vec2f(cx, cy);
-    let side = clamp(q.x / W * sign(toSun.x) * 0.5 + 0.5, 0.0, 1.0);
-    let up = clamp(-q.y / H * 0.5 + 0.5, 0.0, 1.0);
-    let lit = clamp(mix(up, 1.0 - up, low * 0.6) * 0.6 + side * 0.4, 0.0, 1.0);
-    // Mottle: the tone steps follow a slow noise, shifted toward the light.
-    let m = vnoise(q / W * vec2f(5.0, 9.0) + fk * 1.9 + seed + vec2f(t * 0.01, 0.0));
-    let tone = post(clamp(m * 0.55 + lit * 0.6 - 0.05, 0.0, 1.0), 3.0);
-    var cc = mix(cShade, cLit, tone);
-    cc = mix(cc, cGlow, low * (1.0 - up) * 0.5 * exp(-length(toSun) * 1.5));
-    cc = mix(cc, mix(cc, cLit * 1.05, 0.7), cloudDots(p, cell, px, lit * 0.4, fk));
-    cc = mix(cc, cShade * 0.88, cloudDots(p + 0.43 * cell, cell * 0.85, px, (1.0 - lit) * 0.35, fk + 4.0));
-    col = mix(col, cc, fillA(d, px));
-    // Drips: dotted trickles from the underside, each ending in a bead.
-    let dw = W * 0.09;
-    let di = floor(q.x / dw);
-    let hd = hash1(di * 1.37 + fk * 11.0 + seed);
-    if (hd > 0.45 && q.y > 0.0) {
-      let dx = (di + 0.5 + (hash1(di * 2.9 + fk) - 0.5) * 0.4) * dw;
-      let yb = H * 0.45 * sqrt(max(1.0 - pow(dx / W, 2.0), 0.0)) * 0.85;
-      if (abs(dx) < W * 0.85) {
-        let len = H * (0.5 + 1.8 * hash1(di * 5.3 + fk) * hash1(di * 1.1 + fk * 3.0)) * (0.7 + 0.3 * sin(t * 0.3 + di));
-        let wdt = max(0.0011, px * 0.8) * (1.0 + hash1(di * 3.3) * 0.5);
-        let along = q.y - yb;
-        let trick = dotLine(q.x - dx, along, wdt, px, di + fk * 7.0) * step(0.0, along) * step(along, len);
-        let bead = fillA(length(vec2f(q.x - dx, along - len)) - wdt * 1.9, px);
-        let dc = mix(cShade, cc, 0.3);
-        col = mix(col, dc, max(trick, bead));
+    // Its base line, half its width and how squat it is; q measures from
+    // the middle of the base in half widths.
+    let by = mix(y0, y1, (fk + 0.3 + 0.4 * hash1(fk * 7.13 + seed)) / f32(n));
+    let W = (0.07 + 0.09 * hash1(fk + seed * 1.7)) * (0.6 + 0.6 * amt);
+    let sq = 0.5 + 0.2 * hash1(fk * 6.7 + seed);
+    let span = 2.0 * (xr + W * 1.2);
+    let cx = fract(hash1(fk * 3.1 + seed) + t * 0.003 * (1.0 + fk * 0.2) / span) * span - (xr + W * 1.2);
+    let q = (p - vec2f(cx, by)) / vec2f(W, W * sq);
+    if (abs(q.x) > 1.2 || q.y < -1.1 || q.y > 0.08) { continue; }
+    // Four billows along the base and two on top, each a dome standing out
+    // toward us (the front row a little further). The outline is their
+    // smooth union; the surface leans the way of whichever domes are
+    // highest there, blending softly where two meet.
+    var d = 1e3;
+    var nsum = vec3f(0.0);
+    var zTop = -1.0;
+    var z2 = -1.0;
+    var dn = 1e3;
+    var away = vec2f(0.0, -1.0);
+    let crown = (hash1(fk * 9.1 + seed) - 0.5) * 0.6;
+    for (var i = 0; i < 6; i++) {
+      let fi = f32(i);
+      let h1 = hash1(fi * 4.7 + fk * 1.3 + seed);
+      let h2 = hash1(fi * 2.3 + fk * 5.1 + seed + 0.5);
+      var r = 0.3 + 0.14 * h1;
+      var c = vec2f(crown, -0.5 - r * 0.25);
+      var zo = 0.0;
+      if (i < 4) {
+        let s = fi / 1.5 - 1.0;
+        r = (0.27 + 0.13 * h1) * (1.4 - 0.5 * s * s);
+        c = vec2f(s * 0.66 + (h2 - 0.5) * 0.14, -r * 0.45);
+        zo = 0.1;
+      } else if (i == 5) {
+        r = 0.17 + 0.09 * h1;
+        c = vec2f(crown - sign(crown + 1e-3) * (0.34 + 0.1 * h2), -0.45 - r * 0.2);
+      }
+      let dq = q - c;
+      let di = length(dq) - r;
+      if (di < dn) { dn = di; away = dq / max(length(dq), 1e-4); }
+      let hs = clamp(0.5 + 0.5 * (d - di) / 0.08, 0.0, 1.0);
+      d = mix(d, di, hs) - 0.08 * hs * (1.0 - hs);
+      let s2 = r * r - dot(dq, dq);
+      if (s2 > 0.0) {
+        let z = sqrt(s2);
+        let zz = z + zo;
+        if (zz > zTop) { z2 = zTop; zTop = zz; } else if (zz > z2) { z2 = zz; }
+        nsum += exp((zz - 0.8) / 0.06) * smoothstep(0.0, 0.01, s2) * vec3f(dq.x, -dq.y, z) / r;
       }
     }
+    // Past every dome (the fillets and ragged edge) it faces outward.
+    nsum += exp(-0.8 / 0.06) * normalize(vec3f(away.x, -away.y, 0.15));
+    d = max(d, q.y);
+    d += 0.045 * (fbm(q * vec2f(3.0, 5.0) + fk * 2.7 + seed) - 0.5);
+    let ds = d * W * sq;
+    if (ds > px * 2.0) { continue; }
+    var nv = normalize(nsum);
+    // The flat base turns down and away.
+    nv = normalize(mix(nv, vec3f(0.0, -1.0, 0.3), smoothstep(-0.25, 0.0, q.y) * 0.65));
+    // The creases where two billows meet sink into shade, fading out
+    // toward the base where they run together.
+    let crease = (1.0 - smoothstep(0.0, 0.1, zTop - z2)) * step(0.0, z2) * smoothstep(0.0, -0.3, q.y);
+    let ts = normalize(sun - vec2f(cx, by - W * sq * 0.5));
+    let Lc = normalize(vec3f(ts.x, -ts.y, 0.55));
+    // Mottle: a slow noise nudging the tone steps.
+    let m = vnoise(q * vec2f(5.0, 8.0) + fk * 1.9 + seed + vec2f(t * 0.01, 0.0));
+    let lit = clamp(dot(nv, Lc) * 0.6 + 0.4 + (m - 0.5) * 0.28 - crease * 0.16, 0.0, 1.0);
+    var cc = mix(cShade, cLit, post(lit, 4.0));
+    cc = mix(cc, cGlow, low * smoothstep(-0.1, 0.7, -nv.y) * 0.55 * exp(-length(sun - vec2f(cx, by)) * 1.3));
+    cc = mix(cc, mix(cc, cLit * 1.05, 0.7), cloudDots(p, cell, px, lit * 0.4, fk));
+    cc = mix(cc, cShade * 0.88, cloudDots(p + 0.43 * cell, cell * 0.85, px, (1.0 - lit) * 0.35, fk + 4.0));
+    col = mix(col, cc, fillA(ds, px));
   }
   return col;
 }
