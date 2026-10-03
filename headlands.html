@@ -366,7 +366,7 @@ const DOT = 0.0011;
     var fc = stippleBush(q, 0.05 + 0.95 * plit, max(0.0024 * s, px * 2.4), px, mix(C(11), C(12), 0.15), C(12), C(13), mix(C(13), C(12), 0.45), C(10), sd * 3.0 + fk);
     acc = over(acc, fc, inPad);
     // Dotted rim, brightest where the pad turns to the light.
-    acc = over(acc, mix(C(12), C(13), smoothstep(0.3, 0.7, plit)), dotLine(pad, v.x + select(0.0, 40.0, v.y > 0.0), DOT * 0.8, px, sd + fk * 5.0) * 0.8);
+    acc = over(acc, mix(C(12), C(13), smoothstep(0.3, 0.7, plit)), dotLine(pad, v.x + select(0.0, 40.0, v.y > 0.0), DOT * 0.8, px, sd + fk * 5.0) * 0.45);
   }
   return unpremul(acc);
 }
@@ -377,6 +377,67 @@ const DOT = 0.0011;
   var sh = stemShadow(pp, b, top, 0.004 * s, px);
   sh = max(sh, blobShadowQ(pq, pp, b + vec2f(lean * h * 0.3, -h * 0.62), h * 0.42, b.y, px));
   return sh;
+}
+
+// Where the bridge stands on ridge i: the middle of its deck on screen,
+// half the ravine's width at the deck, and the deck's height above the creek.
+// It goes where the slope stands tall enough to carry the deck clear of the
+// fog that pools at the ridge's feet.
+@diagnostic(off, derivative_uniformity) fn bridgeAt(i: i32, ti: f32, tiltX: f32) -> vec4f {
+  let base = ridgeBase(i);
+  let e = mix(1.4, 0.35, ti);
+  var Xb = e - 0.5;
+  var top = ridgeTop(i, Xb);
+  for (var k = 1; k < 4; k++) {
+    if (base - top > 0.09) { break; }
+    let x2 = e - 0.5 - 0.15 * f32(k);
+    let t2 = ridgeTop(i, x2);
+    if (t2 < top) { Xb = x2; top = t2; }
+  }
+  let deck = mix(top, base, 0.38);
+  let dh = base - deck;
+  return vec4f((Xb - tiltX * 0.03 * ti) * 0.5 * u.a.y, deck, clamp(dh * 1.2, 0.035, 0.07), dh);
+}
+// The bridge: a concrete arch springing from the ravine's walls well down,
+// its crown just under the deck, slender columns standing on it and taller
+// piers on the walls either side carrying the deck across. q is measured
+// from the middle of the deck (y down); w and dh as bridgeAt gives them.
+// Returns colour and coverage.
+@diagnostic(off, derivative_uniformity) fn bridge(q: vec2f, w: f32, dh: f32, px: f32, lit: vec3f, shade: vec3f) -> vec4f {
+  if (abs(q.x) > w * 1.2 || q.y < -0.004 || q.y > dh) { return vec4f(0.0); }
+  // The deck, carried a little onto the slopes either side.
+  let deckD = sdBox(q - vec2f(0.0, 0.0005), vec2f(w * 1.12, 0.0021));
+  // The arch: a parabola from its feet on the walls up to its crown,
+  // thickening toward its feet.
+  let ya = dh * 0.62;
+  let a = w * (1.02 - 0.94 * 0.62);
+  let yc = 0.0032;
+  let xa = clamp(q.x / a, -1.0, 1.0);
+  let yArch = yc + (ya - yc) * xa * xa;
+  let sl = 2.0 * (ya - yc) * xa / a;
+  let th = 0.0015 + 0.0013 * xa * xa;
+  let archD = max(abs(q.y - yArch) / sqrt(1.0 + sl * sl) - th, abs(q.x) - a);
+  // Columns at a steady spacing: on the arch inside it, down to the walls
+  // outside it.
+  let sp = w * 0.15;
+  let cx = round(q.x / sp) * sp;
+  let ytop = 0.0025;
+  var colD = 1e3;
+  if (abs(cx) < a * 0.93) {
+    let yb = yc + (ya - yc) * (cx / a) * (cx / a);
+    colD = sdBox(q - vec2f(cx, (ytop + yb) * 0.5), vec2f(0.00065, max((yb - ytop) * 0.5, 0.0)));
+  } else if (abs(cx) < w) {
+    let yb = clamp(dh * (1.02 - abs(cx) / w) / 0.94, ytop, dh);
+    colD = sdBox(q - vec2f(cx, (ytop + yb) * 0.5), vec2f(0.0009, max((yb - ytop) * 0.5, 0.0)));
+  }
+  // The columns stand in the deck's shadow; the arch is lit along its back
+  // and shaded underneath, the deck lit on its face and dark below.
+  var c = mix(lit, shade, 0.35);
+  var d = colD;
+  if (archD < d) { d = archD; c = mix(lit, shade, smoothstep(-th, th, q.y - yArch) * 0.6); }
+  if (deckD < d + px) { c = mix(lit, shade, smoothstep(-0.001, 0.0026, q.y) * 0.5); }
+  d = min(d, deckD);
+  return vec4f(c, fillA(d, px));
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
@@ -446,33 +507,69 @@ const DOT = 0.0011;
     let tp = ridgeTop(i, X);
     let base = ridgeBase(i);
     if (p.y > tp - px * 2.0 - DOT * 2.0 && p.y < base + px * 2.0 + DOT * 2.0) {
-      var rc = mix(C(5), C(6), ti);
+      let rc0 = mix(C(5), C(6), ti);
       let depth = clamp((p.y - tp) / max(base - tp, 1e-3), 0.0, 1.0);
-      let gv = X * (24.0 + 34.0 * ti) + 2.8 * fbm(vec2f(X * 5.0 + f32(i), p.y * 28.0));
-      let gully = smoothstep(0.7, 0.88, fract(gv));
-      // The ridge's flank and its gullies: every little face lit from its
-      // own slope, so light ripples across the range as the sun moves.
+      // The ridge's flank lit from its own slope, so light slides across the
+      // range as the sun moves.
       let rs = (ridgeTop(i, X + 0.01) - ridgeTop(i, X - 0.01)) / 0.02 / (0.5 * asp);
-      let face = select(-0.8, 0.8, fract(gv) > 0.79) * (1.0 - depth * 0.6);
-      let rl = lambert(groundN(rs * 1.8 + face, depth * 1.5 + 0.2), 0.45);
-      rc = mix(rc * mix(0.72, 0.85, 1.0 - ti), mix(rc, C(2), 0.22 + 0.1 * ti), post(rl * 1.1, 3.0));
-      rc = mix(rc, rc * 0.8, gully * (1.0 - depth) * 0.5);
+      let rl = lambert(groundN(rs * 1.8, depth * 1.5 + 0.2), 0.45);
+      var rc = mix(rc0 * mix(0.72, 0.85, 1.0 - ti), mix(rc0, C(2), 0.22 + 0.1 * ti), post(rl * 1.1, 3.0));
+      // Gullies combed down it: broad folds, one face of each turned a little
+      // to the light and the other away, faint enough to read as folds in
+      // the slope rather than lines drawn on it.
+      let gv = X * (15.0 + 22.0 * ti) + 2.2 * fbm(vec2f(X * 4.0 + f32(i), p.y * 20.0));
+      let turn = select(0.7, -0.7, fract(gv) > 0.65);
+      let fl = lambert(groundN(rs * 1.8 + turn, depth * 1.5 + 0.2), 0.45) - rl;
+      rc *= 1.0 + clamp(fl, -0.4, 0.4) * 0.13 * (1.0 - depth * 0.6);
+      // The bridge's ridge, and the stretch of it the bridge and the
+      // highway's approach to it could reach.
+      let onBridge = i == n - 2 && u.e.y > 0.5;
+      let nearBridge = onBridge && abs(p.x - (mix(1.4, 0.35, ti) - 0.725 - tilt.x * 0.03 * ti) * 0.5 * asp) < 0.1125 * asp + 0.25;
+      var bg = vec4f(0.0);
+      if (nearBridge) {
+        bg = bridgeAt(i, ti, tilt.x);
+        let q = p - bg.xy;
+        let w = bg.z; let dh = bg.w;
+        if (abs(q.x) < w * 1.25 && q.y > -0.004) {
+          // The ravine a creek has cut down to the sea under the span: its
+          // walls lit by the way they face, darkening down to the creek.
+          let hw = w * (1.02 - 0.94 * q.y / dh) * (1.0 + 0.12 * (fbm(vec2f(q.y * 90.0, f32(i))) - 0.5));
+          let rav = fillA(abs(q.x) - hw, px) * step(-0.002, q.y);
+          if (rav > 0.0) {
+            let wn = normalize(vec3f(-sign(q.x) * 0.85, 0.2, 0.5));
+            var wc = mix(rc0 * 0.62, mix(rc0, C(2), 0.2), post(lambert(wn, 0.45) * 1.1, 3.0));
+            wc = mix(wc, rc0 * 0.42, clamp(smoothstep(0.2, 1.0, q.y / dh) * 0.6 + (1.0 - smoothstep(0.0, 0.7, abs(q.x) / max(hw, 1e-4))) * 0.3, 0.0, 0.85));
+            rc = mix(rc, wc, rav);
+          }
+          // The bridge across it, in pale concrete.
+          let conc = mix(C(3), rc0, 0.25);
+          let br = bridge(q, w, dh, px, mix(conc, C(2), 0.25), mix(conc, rc0 * 0.55, 0.55));
+          rc = mix(rc, br.rgb, br.a);
+        }
+      }
       rc = mix(rc, C(7), post(smoothstep(0.25, 1.0, depth) * u.b.x * 0.9, 4.0));
       rc = mix(rc, C(7), (1.0 - ti) * 0.55 * u.b.x);
       let a = fillA(tp - p.y, px) * fillA(p.y - base, px);
       col = mix(col, rc, a);
-      col = mix(col, C(13), dotLine(p.y - tp, p.x, DOT * 0.9, px, f32(i) * 7.0 + 1.0) * (0.35 + 0.5 * ti) * step(p.y, base));
+      col = mix(col, C(13), dotLine(p.y - tp, p.x, DOT * 0.9, px, f32(i) * 7.0 + 1.0) * (0.12 + 0.22 * ti) * step(p.y, base));
       // Surf line where the ridge meets the sea.
       let land = step(tp, base - 0.003);
       let foam = step(0.45, fbm(vec2f(X * 50.0 + t * 0.3, f32(i))));
-      col = mix(col, C(10), dotLine(p.y - base, p.x, DOT, px, f32(i) * 3.0 + 2.0) * land * foam * 0.8);
-      // Highway 1, cut into the nearer slopes: a pale line with a dark shoulder.
+      col = mix(col, C(10), dotLine(p.y - base, p.x, DOT, px, f32(i) * 3.0 + 2.0) * land * foam * 0.5);
+      // Highway 1, cut into the nearer slopes: a pale line with a dark
+      // shoulder. Near the bridge it runs level into the deck, which carries
+      // it over the ravine.
       if (ti > 0.45) {
-        let ry = mix(tp, base, 0.55 + 0.08 * sin(X * 9.0 + f32(i))) ;
+        var ry = mix(tp, base, select(0.55, 0.38, onBridge) + 0.08 * sin(X * 9.0 + f32(i)));
+        var on = step(tp + 0.01, ry) * step(ry, base - 0.006);
+        if (nearBridge) {
+          let bd = abs(p.x - bg.x);
+          ry = mix(ry, bg.y, 1.0 - smoothstep(bg.z * 1.1, bg.z * 3.5, bd));
+          on = mix(on, 1.0, 1.0 - smoothstep(bg.z * 1.1, bg.z * 3.5, bd)) * step(bg.z * 1.1, bd);
+        }
         let rd = p.y - ry;
-        let on = step(tp + 0.01, ry) * step(ry, base - 0.006);
-        col = mix(col, mix(rc, C(11), 0.5), dotLine(rd - DOT * 1.6, p.x, DOT * 0.6, px, f32(i) + 30.0) * on * a);
-        col = mix(col, C(3), dotLine(rd, p.x, DOT * 0.7, px, f32(i) + 40.0) * on * a);
+        col = mix(col, mix(rc, C(11), 0.5), dotLine(rd - DOT * 1.6, p.x, DOT * 0.6, px, f32(i) + 30.0) * on * a * 0.6);
+        col = mix(col, mix(rc, C(3), 0.7), dotLine(rd, p.x, DOT * 0.7, px, f32(i) + 40.0) * on * a * 0.65);
       }
     }
     // Sea stacks: a few jagged rocks off the nearer points, ringed with foam.
@@ -494,29 +591,6 @@ const DOT = 0.0011;
       col = mix(col, C(13), dotLine(edge - q.y, q.x, DOT * 0.7, px, fk + f32(i) * 3.0) * step(abs(q.x), ssz * 1.6) * 0.5);
       let R = ssz * (1.9 + 0.25 * sin(t * 1.5 + fk + f32(i)));
       col = mix(col, C(10), dotLine(ellD(q, vec2f(R, R * 0.22)), q.x, DOT * 0.75, px, fk * 5.0 + f32(i)) * step(0.0, q.y) * 0.8);
-    }
-    // The bridge on the second-nearest ridge.
-    if (i == n - 2 && u.e.y > 0.5) {
-      let ti2 = ridgeT(i);
-      let Xb = mix(1.4, 0.35, ti2) - 0.5;
-      let bx = (Xb - tilt.x * 0.03 * ti2) * 0.5 * asp;
-      let tb = ridgeTop(i, Xb);
-      let deck = mix(tb, base, 0.4);
-      let w = 0.045;
-      let q = p - vec2f(bx, deck);
-      // Canyon shadow under the span.
-      let canyon = sdTri(q, vec2f(-w, 0.0), vec2f(w, 0.0), vec2f(0.0, base - deck));
-      col = mix(col, mix(C(6), C(11), 0.5), fillA(canyon, px) * 0.7);
-      let archR = vec2f(w * 0.85, (base - deck) * 0.75);
-      let arch = abs(length((q - vec2f(0.0, archR.y)) / archR) - 1.0) * archR.y - 0.0012;
-      let archD = max(arch, q.y - archR.y);
-      var bd = min(archD, sdBox(q, vec2f(w, 0.0014)));
-      for (var k = -5; k <= 5; k++) {
-        let cx = f32(k) * w * 0.16;
-        let ay = archR.y * (1.0 - sqrt(max(0.0, 1.0 - pow(cx / archR.x, 2.0))));
-        bd = min(bd, sdSeg(q, vec2f(cx, 0.0), vec2f(cx, ay)) - 0.0006);
-      }
-      col = mix(col, C(3), fillA(bd, px));
     }
     // Fog drifting along the ridge's feet.
     let fy = base - 0.012 - 0.03 * ti;
@@ -579,11 +653,11 @@ const DOT = 0.0011;
         let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * 1.3, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.45, v.y) * 0.6);
         let bc = stippleBush(p, 0.05 + 0.95 * blit, 0.0026, px, mix(C(11), vec3f(0.0), 0.2), C(12), C(13), mix(C(13), C(12), 0.4), C(10), h * 13.0);
         hc = mix(hc, bc, fillA(sd, px));
-        hc = mix(hc, C(13) * 0.7, dotRing(sd, v, r * 1.1, DOT * 0.7, px, h * 19.0) * 0.4);
+        hc = mix(hc, C(13) * 0.7, dotRing(sd, v, r * 1.1, DOT * 0.7, px, h * 19.0) * 0.1);
       }
     }
     col = mix(col, hc, fillA(ht - p.y, px));
-    col = mix(col, C(13), dotLine(p.y - ht, p.x, DOT, px, 5.0) * 0.45);
+    col = mix(col, C(13), dotLine(p.y - ht, p.x, DOT, px, 5.0) * 0.25);
   }
   // Cypresses along the crest.
   for (var j = 0; j < 6; j++) {
