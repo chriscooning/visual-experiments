@@ -300,11 +300,13 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 }
 
 // Cove: looking along a Big Sur cliff at a low sun, after Eyvind Earle. The
-// cliff face is built from stacked, faceted strata with ledges of ice plant;
-// boulders crowd the water's edge, each wrapped in rings of foam; sets of
-// swell roll in and break white; a glitter path runs to the sun. Harakeke
-// (flax) blades and dune grass sway in the foreground, a lighthouse and
-// fence line top the far headland, and a couple of gulls hang in the wind.
+// cliffs are traced in perspective, as in Windswept: sheer sandstone cut
+// into buttresses and gullies, running out past headlands to the point,
+// with scrub hanging from the brink and surf at their feet; boulders crowd
+// the water's edge, each wrapped in rings of foam; sets of swell roll in
+// and break white; a glitter path runs to the sun. Harakeke (flax) blades
+// and dune grass sway in the foreground, a lighthouse stands on the point,
+// a fence runs along the cliff top, and a couple of gulls hang in the wind.
 // One light, the sun, shades every surface from its own normal and throws
 // every shadow the same way; it drifts slowly on its own and can be dragged.
 // Lines are laid down in dots.
@@ -323,16 +325,250 @@ const DOT = 0.0011;
 @diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
 @diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
 
-// Cliff edge: x of the cliff's right edge at height y, running from the far
-// point down toward the bottom-left.
-@diagnostic(off, derivative_uniformity) fn cliffEdge(y: f32) -> f32 {
-  if (y < HY) { return -0.02 - (HY - y) * 0.4 + 0.01 * sin(y * 60.0 + u.a.w); }
-  let s = clamp((y - HY) / (0.5 - HY), 0.0, 1.0);
-  let base = mix(-0.02, 0.28, pow(s, 0.8));
-  return base + 0.035 * sin(y * 30.0 + u.a.w) * s + 0.05 * (fbm(vec2f(y * 9.0, u.a.w)) - 0.5) * s;
+// ---- The cliffs in the round, traced as Windswept's headlands are. The
+// land is a height field over the sea, seen from an eye EYE above it: a
+// point X across, Y up and Z ahead lands on the screen at
+// (X / Z, HY + (EYE - Y) / Z). We stand out on the sand seaward of the
+// cliffs, so their faces turn to us as they run away to the point; the
+// cliff top stands higher than the eye, so only its brink shows against
+// the sky. Each pixel marches along its ray to the first land it meets, so
+// nearer headlands hide farther ones and every buttress and gully sits
+// where perspective puts it.
+const EYE = 0.42;
+const PLAT = 0.62;
+// Where the coast turns back behind the point.
+const CTURN = 6.6;
+// The coast where it passes depth Z: its waterline's x, the x of the broad
+// line it follows without its headlands, the width of the cliffs there
+// measured square to the coast, and the waterline's slope dx/dz with
+// k = sqrt(1 + slope^2), which turns distances along x into distances
+// square to the coast.
+struct Coast { x: f32, base: f32, w: f32, slope: f32, k: f32 }
+// The headlands for this seed, worked out once per pixel: the depth of each
+// one's middle, half its length, how far it reaches out to sea.
+var<private> HLAND: array<vec3f, 3>;
+@diagnostic(off, derivative_uniformity) fn coastSetup() {
+  let sd = u.a.w;
+  var hl = array<vec3f, 3>(vec3f(2.3, 0.36, 0.13), vec3f(3.7, 0.42, 0.09), vec3f(5.2, 0.48, 0.07));
+  for (var k = 0; k < 3; k++) {
+    let fi = f32(k);
+    HLAND[k] = vec3f(hl[k].x + (hash1(fi * 3.1 + sd) - 0.5) * 0.3, hl[k].y * (0.85 + 0.3 * hash1(fi * 5.3 + sd)),
+                     hl[k].z * (0.8 + 0.4 * hash1(fi * 7.7 + sd)));
+  }
 }
-// Cliff top profile above the horizon: the far headland.
-@diagnostic(off, derivative_uniformity) fn headTop(x: f32) -> f32 { return HY - 0.075 + 0.06 * smoothstep(-0.9, 0.0, x) - 0.035 * smoothstep(-0.2, -0.9, x) + 0.006 * sin(x * 30.0 + u.a.w) + 0.006 * (fbm(vec2f(x * 20.0, u.a.w)) - 0.5); }
+// The waterline without its slow waver: a broad line running away from us
+// to the point and turning back behind it, a small cove with a beach near
+// us, and headlands standing out from it, each one's near side a little
+// shorter than its far side.
+@diagnostic(off, derivative_uniformity) fn coastBare(Z: f32) -> Coast {
+  let sd = u.a.w;
+  let v = Z - CTURN;
+  let r = sqrt(v * v + 0.12);
+  var x = -0.43 + 0.026 * Z - (v + r);
+  var dx = 0.026 - (1.0 + v / r);
+  let bs = x;
+  let cv = (Z - 1.5) / 0.22;
+  let ce = 0.07 * exp(-cv * cv);
+  x -= ce;
+  dx += ce * 2.0 * cv / 0.22;
+  for (var k = 0; k < 3; k++) {
+    let hk = HLAND[k];
+    var q = (Z - hk.x) / hk.y;
+    var dq = 1.0 / hk.y;
+    if (q < 0.0) { q *= 1.25; dq *= 1.25; }
+    // (Past half again its length a headland is all but gone.)
+    if (abs(q) > 1.7) { continue; }
+    let b = exp(-q * q * q * q);
+    x += hk.z * b;
+    dx -= hk.z * b * 4.0 * q * q * q * dq;
+  }
+  var c: Coast;
+  c.x = x;
+  c.base = bs;
+  c.w = 0.12 + 0.04 * (0.5 + 0.5 * sin(Z * 2.3 + sd * 5.0));
+  c.slope = dx;
+  c.k = sqrt(1.0 + dx * dx);
+  return c;
+}
+// The waterline with its slow waver (never more than 0.015 in x).
+@diagnostic(off, derivative_uniformity) fn waver(c0: Coast, Z: f32) -> Coast {
+  var c = c0;
+  c.x += 0.03 * (vnoise(vec2f(Z * 5.0, u.a.w)) - 0.5);
+  return c;
+}
+@diagnostic(off, derivative_uniformity) fn coastAt(Z: f32) -> Coast { return waver(coastBare(Z), Z); }
+// Whether (X, Z) lies well out to sea of the coast c0 (before its waver):
+// the land never reaches more than 0.056 past it square to the coast.
+@diagnostic(off, derivative_uniformity) fn offshore(X: f32, c0: Coast) -> bool { return X > c0.x + 0.015 + 0.06 * c0.k; }
+// The point of the waterline square to the coast from (X, Z): the foot of
+// the cliff there.
+@diagnostic(off, derivative_uniformity) fn footOf(X: f32, Z: f32, c: Coast) -> vec2f {
+  let dl = (c.x - X) / (c.k * c.k);
+  return vec2f(X + dl, Z - c.slope * dl);
+}
+// Buttresses along the cliffs: each a column standing out from the face,
+// its front rounded and its edges cut sharp by the gullies either side;
+// some wide, some narrow, the big ones split by lesser gullies. Looked up
+// at the foot of the cliff F, so they run straight up the face: 0 in a
+// gully's crease, rising quickly across a buttress's front. butCell gives
+// the big buttress F belongs to, as two random numbers and how far F lies
+// from the gully at its edge; the shading reuses it.
+// How far along the coast the foot F lies (the coast runs mostly away from
+// us, across only round the headlands).
+@diagnostic(off, derivative_uniformity) fn alongOf(F: vec2f) -> f32 { return F.y - 0.3 * F.x; }
+@diagnostic(off, derivative_uniformity) fn butCell(F: vec2f) -> vec3f {
+  let uu = alongOf(F) / 0.16;
+  let g = floor(uu);
+  let f = uu - g;
+  var d1 = 9.0; var d2 = 9.0; var id = 0.0;
+  for (var j = -1; j <= 1; j++) {
+    let cj = g + f32(j);
+    let d = abs(f32(j) + 0.15 + 0.7 * hash1(cj * 1.37 + u.a.w * 3.1) - f);
+    if (d < d1) { d2 = d1; d1 = d; id = cj; } else if (d < d2) { d2 = d; }
+  }
+  return vec3f(hash1(id * 2.13 + u.a.w), hash1(id * 5.71 + u.a.w + 3.0), 0.5 * (d2 - d1));
+}
+@diagnostic(off, derivative_uniformity) fn butOf(F: vec2f, v: vec3f) -> f32 {
+  let big = sqrt(clamp(v.z * 2.2, 0.0, 1.0)) * (0.5 + 0.5 * v.x);
+  // The lesser gullies: sharp creases at a wavering spacing along the coast.
+  let small = pow(abs(sin(alongOf(F) * 55.0 + 2.5 * vnoise(F * 9.0 + u.a.w))), 0.35);
+  return big * (0.62 + 0.38 * small);
+}
+@diagnostic(off, derivative_uniformity) fn buttress(F: vec2f) -> f32 { return butOf(F, butCell(F)); }
+// How far inland of the waterline (X, Z) lies, square to the coast, its line
+// roughened and carved into buttresses and gullies; negative out at sea.
+@diagnostic(off, derivative_uniformity) fn landIn(X: f32, Z: f32, c: Coast) -> f32 {
+  let F = footOf(X, Z, c);
+  return (c.x - X) / c.k + 0.03 * (vnoise(F * 5.0 + u.a.w) - 0.5) + 0.06 * (buttress(F) - 0.6);
+}
+// Width of the sand at the foot of the cliff at depth Z: in the little cove
+// near us, none out on the headlands.
+@diagnostic(off, derivative_uniformity) fn beachW(Z: f32, c: Coast) -> f32 {
+  let cove = exp(-pow((Z - 1.5) / 0.25, 2.0));
+  return 0.06 * (1.0 - smoothstep(0.02, 0.08, c.x - c.base)) * max(smoothstep(0.5, 0.7, vnoise(vec2f(Z * 1.6, 11.0 + u.a.w))) * 0.6, cove);
+}
+// How high the top of the land stands: knobs along it, and the point
+// sinking a little toward its end.
+@diagnostic(off, derivative_uniformity) fn landTop(X: f32, Z: f32) -> f32 {
+  return PLAT * (1.0 - 0.22 * smoothstep(4.8, 6.6, Z)) + 0.06 * (vnoise(vec2f(X * 6.0, Z * 3.0) + u.a.w * 3.0) - 0.5);
+}
+// Height of the land at (X, Z): cliffs of bare rock dropping sheer to the
+// sea for most of their height under a steep, scrubby shoulder that rounds
+// over onto the top. Below zero out over the water.
+@diagnostic(off, derivative_uniformity) fn landHc(X: f32, Z: f32, c: Coast) -> f32 {
+  // Well inland the land stands at its full height, well out it's the sea:
+  // no need to carve the cliffs there.
+  let dB = (c.x - X) / c.k;
+  if (dB > c.w + 0.125) { return landTop(X, Z); }
+  if (dB < -0.06) { return dB + 0.06; }
+  let d0 = landIn(X, Z, c);
+  if (d0 <= 0.0) { return d0; }
+  // Sand rising gently from the water to the foot of the cliff.
+  let bw = beachW(Z, c);
+  if (d0 < bw) { return 0.008 * d0 / bw; }
+  let s = (d0 - bw) / c.w;
+  let lo = 0.74 + 0.08 * sin(Z * 1.7 + u.a.w * 9.0);
+  let sheer = 1.0 - pow(1.0 - min(s / 0.22, 1.0), 2.2);
+  let shoulder = smoothstep(0.12, 1.0, s);
+  return max(landTop(X, Z) * (lo * sheer + (1.0 - lo) * shoulder), 0.008 * step(0.0, bw - 1e-4));
+}
+@diagnostic(off, derivative_uniformity) fn landH(X: f32, Z: f32) -> f32 { return landHc(X, Z, coastAt(Z)); }
+// The depth at which the ray through column x first comes within reach of
+// the coast (xZ - off), scanning out from near us; -1 if it never does
+// before zMax. Coarse steps, then halved down to a fine one.
+@diagnostic(off, derivative_uniformity) fn reachCoast(x: f32, off: f32, zMax: f32) -> f32 {
+  var za = 0.3;
+  if (x * za <= coastBare(za).x + off) { return za; }
+  var zb = -1.0;
+  for (var i = 0; i < 40; i++) {
+    let z = za * 1.1;
+    if (z > zMax) { break; }
+    if (x * z <= coastBare(z).x + off) { zb = z; break; }
+    za = z;
+  }
+  if (zb < 0.0) { return -1.0; }
+  for (var i = 0; i < 5; i++) {
+    let z = 0.5 * (za + zb);
+    if (x * z <= coastBare(z).x + off) { zb = z; } else { za = z; }
+  }
+  return zb;
+}
+// March along the ray through screen point p to the first land it meets:
+// the depth it met it at, or -1 if it met only the sea or the sky.
+@diagnostic(off, derivative_uniformity) fn traceLand(p: vec2f) -> f32 {
+  let dy = p.y - HY;
+  // The ray reaches the water, or climbs past the highest land.
+  var zMax = 14.0;
+  if (dy > 1e-4) { zMax = min(zMax, EYE / dy); }
+  if (dy < -1e-4) { zMax = min(zMax, (PLAT + 0.04 - EYE) / -dy); }
+  let z0 = reachCoast(p.x, 0.075, zMax);
+  if (z0 < 0.0) { return -1.0; }
+  // Step along it: in long strides while it runs well out to sea of the
+  // coast, in short ones near and over the land, each crossing it square to
+  // the coast in small bites.
+  var za = z0;
+  var zb = -1.0;
+  var z = z0;
+  for (var i = 0; i < 80; i++) {
+    let cb = coastBare(z);
+    let rate = max(abs(p.x - cb.slope) / cb.k, 0.03);
+    let gap = (p.x * z - cb.x) / cb.k - 0.075;
+    if (gap <= 0.0) {
+      if (EYE - dy * z - landHc(p.x * z, z, waver(cb, z)) <= 1e-5) { zb = z; break; }
+    }
+    za = z;
+    z += clamp(max(gap, 0.0) / rate + 0.011 / rate, 0.006, 0.5);
+    if (z > zMax) { break; }
+  }
+  if (zb < 0.0) { return -1.0; }
+  for (var i = 0; i < 6; i++) {
+    let z = 0.5 * (za + zb);
+    if (EYE - dy * z - landH(p.x * z, z) <= 1e-5) { zb = z; } else { za = z; }
+  }
+  return zb;
+}
+// How far the land at P lies in the shadow of land between it and the
+// light, looked for along the light.
+@diagnostic(off, derivative_uniformity) fn landShadow(P: vec3f) -> f32 {
+  let L = normalize(vec3f(LD.x, LD.y, -LD.z));
+  var sh = 0.0;
+  var t = 0.015;
+  for (var i = 0; i < 5; i++) {
+    let q = P + L * t;
+    if (q.y > PLAT + 0.04) { break; }
+    let cb = coastBare(q.z);
+    if (!offshore(q.x, cb)) { sh = max(sh, smoothstep(0.0, 0.015, landHc(q.x, q.z, waver(cb, q.z)) - q.y)); }
+    t *= 2.1;
+  }
+  return sh;
+}
+// Rock breaks into blocks: a pattern of cells, each with its own two
+// random numbers, and how near q lies to the joint around its cell.
+@diagnostic(off, derivative_uniformity) fn rockCells(q: vec2f, seed: f32) -> vec3f {
+  let g = floor(q);
+  let f = fract(q);
+  var d1 = 8.0; var d2 = 8.0; var id = vec2f(0.0);
+  for (var j = -1; j <= 1; j++) {
+    for (var i = -1; i <= 1; i++) {
+      let b = vec2f(f32(i), f32(j));
+      let r = b + vec2f(hash21(g + b + seed), hash21(g + b + seed + 3.7)) - f;
+      let d = dot(r, r);
+      if (d < d1) { d2 = d1; d1 = d; id = g + b; } else if (d < d2) { d2 = d; }
+    }
+  }
+  return vec3f(hash21(id + seed * 1.3), hash21(id + seed * 2.1 + 5.0), sqrt(d2) - sqrt(d1));
+}
+// The cliff's sandstone, weathered and a little muted: pale in full light,
+// deep and cooled by the sky in shadow. Three flat tones with a narrow,
+// soft step between each.
+@diagnostic(off, derivative_uniformity) fn grey(c: vec3f, k: f32) -> vec3f { return mix(c, vec3f(dot(c, vec3f(0.3, 0.59, 0.11))), k); }
+@diagnostic(off, derivative_uniformity) fn rockStone() -> vec3f { return grey(mix(C(6), C(8), 0.3), 0.3) * 0.95; }
+@diagnostic(off, derivative_uniformity) fn rockLight() -> vec3f { return grey(mix(C(8), C(2), 0.35), 0.2); }
+@diagnostic(off, derivative_uniformity) fn rockShade() -> vec3f { return mix(mix(C(7), rockStone() * 0.45, 0.5), C(0) * 0.4, 0.22); }
+@diagnostic(off, derivative_uniformity) fn rockTone(l: f32) -> f32 {
+  let s = l * 2.0;
+  return (floor(s) + smoothstep(0.42, 0.58, fract(s))) / 2.0;
+}
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
   let t = u.a.x; let asp = u.a.y; let px = u.a.z; let ft = u.c.z;
@@ -398,156 +634,213 @@ const DOT = 0.0011;
   }
 
   col = mix(col, C(2), dotLine(p.y - HY, p.x, DOT * 0.8, px, 3.0) * 0.6);
-  // Rocks at the waterline, each ringed with foam that pulses with the swell.
+
+  // ---- The cliffs. Only the left of the frame, from above the highest
+  // brink down to the grass in front, can see any land.
+  let fgY = 0.34 + 0.03 * sin(p0.x * 4.0 + u.a.w) + tilt.y * 0.01;
+  let inBand = p.x < 0.0 && p.y > HY - 0.32 && p0.y < fgY + 0.01;
+  if (inBand) { coastSetup(); }
+  let dyH = p.y - HY;
+  var zHit = -1.0;
+  if (inBand) { zHit = traceLand(p); }
+  let landSeen = zHit > 0.0;
+  // 1 / the depth of what this pixel sees, for the ink between near and far.
+  var invZ = max(dyH, 0.0) / EYE;
+  if (landSeen) {
+    invZ = 1.0 / zHit;
+    let P = vec3f(p.x * zHit, EYE - dyH * zHit, zHit);
+    let e = 0.0025 * P.z;
+    let h0 = landH(P.x, P.z);
+    let nW = normalize(vec3f(-(landH(P.x + e, P.z) - h0) / e, 1.0, -(landH(P.x, P.z + e) - h0) / e));
+    let nS = vec3f(nW.x, nW.y, -nW.z);
+    let shade = landShadow(P);
+    let cP = coastAt(P.z);
+    let tp = landTop(P.x, P.z);
+    // Grass on the rounded top where it shows over the brink.
+    let grassW = smoothstep(0.82, 0.93, nW.y + 0.25 * (vnoise(P.xz * 9.0 + P.y * 4.0 + u.a.w) - 0.5)) * smoothstep(0.25, 0.45, P.y);
+    let sl = lambert(nS, 0.3) * (1.0 - shade);
+    var gc = vec3f(0.0);
+    if (grassW > 0.0) {
+      let gl = lambert(nS, 0.45) * (1.0 - shade);
+      gc = mix(mix(C(16), C(14), 0.5) * 0.68, mix(mix(C(16), C(14), 0.5), C(13), 0.5), post(gl * 1.1, 4.0));
+      let comb = fract(p.x / (0.0035 + 0.01 / P.z) + hash1(floor(P.z * 8.0)) * 3.0);
+      gc = mix(gc, C(17), step(0.78, comb) * 0.3);
+    }
+    var lc = gc;
+    if (grassW < 1.0) {
+      // Bare rock: buttresses broken into blocks and those into facets,
+      // each a flat face tipped its own way and lit from the one light in a
+      // few flat tones.
+      let FP = footOf(P.x, P.z, cP);
+      let across = alongOf(FP) / sqrt(1.0 + 0.09);
+      let cq = vec2f(across / 0.032, P.y / 0.05);
+      let big = rockCells(cq, 7.0 + u.a.w);
+      let small = rockCells(cq * vec2f(2.3, 2.6) + 0.37, 3.0 + u.a.w);
+      // How much ground a pixel covers here, foreshortened where the face is
+      // seen edge on: blocks and joints finer than that fade into the face.
+      let vd = normalize(vec3f(P.x, P.y - EYE, P.z));
+      let fpt = px * P.z / max(abs(dot(nW, vd)), 0.12);
+      let bigD = 1.0 - smoothstep(0.008, 0.024, fpt);
+      let smallD = 1.0 - smoothstep(0.004, 0.012, fpt);
+      let b3 = fract(big.x * 7.31 + big.y * 3.17);
+      let nf = normalize(nW + vec3f(big.x - 0.5, (big.y - 0.5) * 0.7, b3 - 0.5) * 0.5 * bigD
+                            + vec3f(small.x - 0.5, (small.y - 0.5) * 0.5, small.y - small.x) * 0.3 * smallD);
+      let nfS = vec3f(nf.x, nf.y, -nf.z);
+      let lit = rockTone(smoothstep(0.06, 0.34, lambert(nfS, 0.1) * (1.0 - shade) / max(LI, 0.05)) * LI);
+      // Where the sun doesn't reach, the sky and the sea light the rock from
+      // in front, so the fronts of the buttresses stand out from their sides.
+      let sky = post(clamp(0.5 + 0.5 * dot(nfS, vec3f(0.45, 0.4, 0.8)), 0.0, 1.0), 4.0);
+      let inShade = mix(rockShade(), grey(mix(rockStone(), C(0), 0.15), 0.25) * 0.78, sky);
+      // Weathered stone: bleached pale in places, rusty in others.
+      let wx = vnoise(vec2f(across * 9.0, P.y * 4.0) + u.a.w * 1.7);
+      let stone = mix(mix(rockStone(), rockLight(), smoothstep(0.55, 0.8, wx) * 0.5), rockStone() * vec3f(1.08, 0.9, 0.78), smoothstep(0.35, 0.15, wx) * 0.6);
+      var rc = mix(inShade * mix(vec3f(1.0), stone / max(rockStone(), vec3f(0.01)), 0.6), mix(stone, rockLight(), 0.6), lit);
+      rc *= 1.0 + 0.16 * (big.y - 0.5) * bigD;
+      // Bedding: faint layers across the face, dipping gently to the sea.
+      let bed = P.y / 0.035 + 0.6 * vnoise(vec2f(across * 6.0, P.y * 9.0) + u.a.w);
+      rc *= 1.0 - 0.08 * smoothstep(0.7, 0.95, fract(bed)) * (1.0 - smoothstep(0.004, 0.012, fpt));
+      // Stains down the faces and a fine grit.
+      let streak = smoothstep(0.55, 0.85, vnoise(vec2f(across * 22.0, u.a.w * 3.0))) * smoothstep(0.3, 0.7, vnoise(vec2f(across * 6.0, P.y * 5.0 + u.a.w)));
+      rc *= 1.0 - 0.16 * streak * (1.0 - smoothstep(0.008, 0.025, fpt));
+      let grit = hash21(floor(p / max(px * 1.4, 0.0012)) + 3.0);
+      rc *= 1.0 + step(0.9, grit) * 0.12 - step(grit, 0.08) * 0.14;
+      // Cracks: the joints between the blocks, open here and closed there.
+      let jOpen = smoothstep(0.45, 0.6, vnoise(cq * 0.9 + 5.0 + u.a.w));
+      rc = mix(rc, rockShade() * 0.7, (1.0 - smoothstep(0.015, 0.045, big.z)) * 0.55 * jOpen * bigD);
+      // Deep in the creases of the gullies the light hardly reaches.
+      let bid = butCell(FP);
+      let g = butOf(FP, bid);
+      rc *= mix(0.35, 1.0, smoothstep(0.0, 0.25, g));
+      // Scrub hangs from the brink down over the face, reaching lowest in
+      // the gullies, its lower edge ragged, the rock just under it in its
+      // shade; and it holds on the less steep rock, in patches.
+      let hf = P.y / max(tp, 0.06);
+      let tongue = smoothstep(0.62, 0.8, vnoise(vec2f(across * 26.0, P.y * 1.2 + 3.0 + u.a.w))) * (0.6 + 0.4 * vnoise(vec2f(across * 90.0, P.y * 30.0) + u.a.w));
+      let dl = 0.72 + 0.2 * (bid.y - 0.5) + 0.1 * (vnoise(vec2f(across * 30.0, 4.0 + u.a.w)) - 0.5)
+             - 0.5 * (1.0 - smoothstep(0.02, 0.08, g)) - 0.3 * tongue;
+      let hr = hf + 0.05 * (vnoise(vec2f(across * 25.0, P.y * 20.0) + u.a.w) - 0.5);
+      let drape = smoothstep(dl - 0.015, dl + 0.015, hr);
+      let dMain = dl + 0.3 * tongue;
+      rc *= 1.0 - 0.3 * smoothstep(dMain - 0.08, dMain - 0.01, hr) * (1.0 - smoothstep(dMain - 0.01, dMain + 0.02, hr)) * (1.0 - drape);
+      // Tufts along the odd ledge: thin runs, much wider than tall.
+      let ledgeTuft = smoothstep(0.76, 0.82, vnoise(vec2f(across * 14.0, P.y * 40.0) + u.a.w * 4.0)) * smoothstep(0.1, 0.3, hf) * smoothstep(0.45, 0.6, vnoise(vec2f(across * 50.0, P.y * 9.0) + 2.0));
+      let scrubW = max(max(drape, ledgeTuft), smoothstep(0.55, 0.7, nW.y + 0.4 * (vnoise(P.xz * 5.0 - P.y * 3.0 + u.a.w * 2.0) - 0.5)));
+      if (scrubW > 0.0) {
+        // Olive: the greens of the grass, dulled toward the stone.
+        let oD = mix(mix(C(16), C(7), 0.25), C(12), 0.5);
+        let oM = mix(C(16), C(7), 0.3) * 0.9;
+        let oL = mix(C(16), C(8), 0.25);
+        let oH = mix(C(13), C(8), 0.3);
+        let scrub = stippleBush(p, 0.08 + 0.75 * sl, 0.0026, px, oD, oM, oL, oH, C(8), 11.0);
+        rc = mix(rc, scrub, scrubW);
+      }
+      // Dark and wet at the foot, green with weed, where the swell washes it white.
+      rc = mix(rc, mix(rc * 0.5, C(11) * 0.6, 0.35), smoothstep(0.035, 0.0, P.y) * 0.85);
+      // The beach: pale sand, darker where the swash has wet it.
+      let beach = smoothstep(0.011, 0.008, P.y) * smoothstep(0.8, 0.95, nW.y);
+      if (beach > 0.0) {
+        var sc = mix(C(15), C(2), 0.25) * (0.75 + 0.3 * lambert(nS, 0.6));
+        sc = mix(sc, sc * 0.72, smoothstep(0.004, 0.0015, P.y));
+        rc = mix(rc, sc, beach);
+      }
+      let surge = 0.5 + 0.5 * sin(ft * 0.6 + u.a.w + P.z * 3.0);
+      let wet = exp(-P.y / (0.006 + 0.02 * surge * u.b.x));
+      rc = mix(rc, C(5), smoothstep(0.45, 0.5, wet * (0.6 + 0.8 * fbm(p * vec2f(80.0, 160.0) + vec2f(-ft * 0.1, 0.0) + u.a.w))) * 0.9 * u.b.y);
+      rc = moonCast(rc, lit);
+      lc = mix(rc, gc, grassW);
+    }
+    col = lc;
+  } else if (inBand && dyH > 0.002) {
+    // The sea along the foot of the cliffs: paler in the shallows, white
+    // where the swell breaks along the waterline and lacing out from it.
+    let zs = EYE / dyH;
+    let ds = -landH(p.x * zs, zs);
+    if (ds < 0.4) {
+      col = mix(col, mix(C(4), C(3), 0.5), (1.0 - smoothstep(0.0, 0.3, ds)) * 0.35);
+      let surge = 0.5 + 0.5 * sin(ft * 0.6 + u.a.w + zs * 3.0);
+      let reach = 0.03 + 0.07 * surge * u.b.x;
+      let lump = fbm(p * vec2f(70.0, 140.0) + vec2f(-ft * 0.1, ft * 0.03) + u.a.w);
+      let wash = smoothstep(0.45, 0.5, exp(-ds / reach) * (0.6 + 0.8 * lump));
+      let lace = cloudDots(p + vec2f(ft * 0.002, 0.0), 0.0026, px, smoothstep(0.4, 0.6, fbm(p * vec2f(40.0, 90.0) - vec2f(ft * 0.05, 0.0))) * (1.0 - smoothstep(reach, reach * 5.0, ds)), 17.0);
+      col = mix(col, C(5), max(wash, lace * 0.9) * u.b.y);
+    }
+  }
+  // Ink where land stands in front of what lies behind it, and along the
+  // brink against the sky.
+  let jump = fwidth(invZ) / max(invZ, 1e-3);
+  col = mix(col, C(12), smoothstep(0.05, 0.14, jump) * select(0.0, 1.0, landSeen) * 0.75);
+
+  // Rocks at the foot of the cliffs, each ringed with foam that pulses with
+  // the swell; farther ones first, each hidden by any land in front of it.
   let nr = i32(u.b.w);
-  for (var k = 0; k < 14; k++) {
-    if (k >= nr) { break; }
-    let fk = f32(k);
-    let ry = HY + 0.03 + pow(fk / 14.0, 1.3) * 0.46;
-    let rx = cliffEdge(ry) + 0.01 + (0.02 + 0.2 * (ry - HY)) * pow(hash1(fk * 3.1 + u.a.w), 1.5) * 3.0;
-    let rs = (0.006 + (ry - HY) * 0.1) * (0.4 + 1.1 * hash1(fk + u.a.w));
-    let q = p - vec2f(rx, ry);
-    // Foam rings.
-    let surge = 0.5 + 0.5 * sin(ft * 0.35 * 6.2831 / 1.0 + ry * 26.0 * 6.2831 * 0.0 - fk);
-    if (length(q) > rs * 5.0 + 0.02) { continue; }
-    for (var j = 0; j < 3; j++) {
-      let rr = rs * (1.3 + 0.35 * f32(j) + 0.25 * surge);
-      let ring = ellD(q, vec2f(rr, rr * 0.45));
-      col = mix(col, C(5), dotLine(ring, q.x, DOT * (1.0 - 0.2 * f32(j)), px, fk * 7.0 + f32(j)) * step(-rs * 0.2, q.y) * u.b.y * (1.0 - 0.3 * f32(j)));
+  if (inBand || p.x < 0.1) {
+    for (var kk = 13; kk >= 0; kk--) {
+      let k = kk;
+      if (k >= nr) { continue; }
+      let fk = f32(k);
+      let zr = 1.05 * pow(1.16, fk) * (1.0 + 0.08 * (hash1(fk * 5.7 + u.a.w) - 0.5));
+      let rx = (coastBare(zr).x + 0.02 + 0.14 * pow(hash1(fk * 3.1 + u.a.w), 1.5)) / zr;
+      let ry = HY + EYE / zr;
+      let rs = 0.042 * (0.4 + 1.1 * hash1(fk + u.a.w)) / zr;
+      let q = p - vec2f(rx, ry);
+      if (length(q) > rs * 5.0 + 0.02) { continue; }
+      if (landSeen && zHit < zr) { continue; }
+      let surge = 0.5 + 0.5 * sin(ft * 0.35 * 6.2831 - fk);
+      for (var j = 0; j < 3; j++) {
+        let rr = rs * (1.3 + 0.35 * f32(j) + 0.25 * surge);
+        let ring = ellD(q, vec2f(rr, rr * 0.45));
+        col = mix(col, C(5), dotLine(ring, q.x, DOT * (1.0 - 0.2 * f32(j)), px, fk * 7.0 + f32(j)) * step(-rs * 0.2, q.y) * u.b.y * (1.0 - 0.3 * f32(j)));
+      }
+      col = mix(col, col * 0.78, blobShadow(p, vec2f(rx, ry - rs * 0.3), rs * 0.9, ry + rs * 0.3, px) * 0.6);
+      // A rounded boulder of the cliff's stone: normal from its outline,
+      // lit from the sun's side in flat steps, darker and weedy toward the
+      // waterline.
+      let rd = (length(q / vec2f(1.0, 0.72)) - rs) * 0.8 + rs * 0.25 * (fbm(q / rs * 1.2 + fk) - 0.5);
+      let rl = rockTone(clamp(lambert(roundN(q, vec2f(rs, rs * 0.72)), 0.3) * 1.2, 0.0, 1.0));
+      var rc = mix(mix(rockShade(), grey(mix(rockStone(), C(0), 0.15), 0.25) * 0.78, 0.45), mix(rockStone(), rockLight(), 0.4), rl);
+      rc = stippleBush(q, rl * 0.8, max(rs * 0.12, px * 2.2), px, rockShade(), mix(rockShade(), rockStone(), 0.5), rockStone(), mix(rockStone(), rockLight(), 0.5), C(8), fk * 3.0) * 0.3 + rc * 0.7;
+      rc = mix(rc, mix(C(11), C(10), 0.4), smoothstep(rs * 0.05, rs * 0.5, q.y) * 0.6);
+      col = mix(col, rc, fillA(rd, px));
+      col = mix(col, C(12), dotRing(rd, q, rs, DOT * 0.8, px, fk * 3.0 + 1.0) * 0.5);
     }
-    col = mix(col, col * 0.78, blobShadow(p, vec2f(rx, ry - rs * 0.3), rs * 0.9, ry + rs * 0.3, px) * 0.6);
-    // Faceted rock: two tones split by a ridge, algae at the waterline.
-    let rd = (length(q / vec2f(1.0, 0.72)) - rs) * 0.8 + rs * 0.25 * (fbm(q / rs * 1.2 + fk) - 0.5);
-    // A rounded boulder: normal from its outline, lit from the sun's side
-    // in three flat steps, darker and weedy toward the waterline.
-    let rl = clamp(lambert(roundN(q, vec2f(rs, rs * 0.72)), 0.45) * 1.25, 0.0, 1.0);
-    var rc = mix(C(10), C(9), post(rl, 3.0));
-    rc = stippleBush(q, rl * 0.8, max(rs * 0.12, px * 2.2), px, C(10), mix(C(10), C(9), 0.5), C(9), mix(C(9), C(6), 0.35), C(8), fk * 3.0) * 0.35 + rc * 0.65;
-    rc = mix(rc, C(11), smoothstep(-rs * 0.05, rs * 0.45, q.y) * 0.75);
-    col = mix(col, rc, fillA(rd, px));
-    col = mix(col, C(12), dotRing(rd, q, rs, DOT * 0.8, px, fk * 3.0 + 1.0) * 0.5);
   }
 
-  // Cliff: a sandstone wall carved into buttresses and gullies, banded with
-  // strata that jut out as ledges. Every surface is lit from one sun
-  // direction by its own 3D normal, in a few flat steps, Earle-style.
-  let ce = cliffEdge(p.y);
-  let top = headTop(p.x);
-  if (p.x < ce + px * 2.0 + DOT * 2.0 && p.y > top - px * 2.0 - DOT * 2.0) {
-    let dEdge = ce - p.x;
-    // Buttresses: a ridged field across the face; its slope turns each
-    // column's sides toward or away from the light.
-    // Rounded columns: a sine ridge warped by noise, so each buttress has a
-    // lit flank, a crest, and a flank turned away into shade.
-    let bx = p.x * 11.0 + 1.4 * fbm(vec2f(p.y * 2.2, u.a.w)) + 1.2 * (p.y - HY);
-    let bw = sin(bx * 3.14159) * 0.6 + 0.4 * (fbm(vec2f(bx * 1.3, p.y * 1.5 + u.a.w * 2.0)) - 0.5) * 2.0;
-    let bSlope = cos(bx * 3.14159) * 1.9 + (fbm(vec2f(bx * 1.3 + 0.05, p.y * 1.5 + u.a.w * 2.0)) - fbm(vec2f(bx * 1.3, p.y * 1.5 + u.a.w * 2.0))) / 0.05 * 0.8;
-    let gully = smoothstep(-0.35, -0.75, bw);
-    // Strata: bands dipping gently toward the sea. Each band's top edge
-    // juts out as a lit ledge with a shadowed undercut beneath.
-    let strat = (p.y - p.x * 0.18) * 22.0 + 0.9 * fbm(vec2f(p.x * 4.0, p.y * 3.0 + u.a.w));
-    let sid = floor(strat);
-    let sf = fract(strat);
-    let ledgeTop = smoothstep(0.0, 0.12, sf) * smoothstep(0.3, 0.12, sf);
-    let undercut = smoothstep(0.7, 1.0, sf);
-    // The face turns toward the sea near its edge.
-    let turn = smoothstep(0.12, 0.0, dEdge);
-    let nrm = normalize(vec3f(clamp(bSlope * 0.75, -1.6, 1.6) + turn * 1.1, 0.15 + ledgeTop * 1.2 - undercut * 0.6, 1.0));
-    var lit = clamp(lambert(nrm, 0.55) * 1.35 + 0.06, 0.0, 1.0);
-    lit *= 1.0 - gully * 0.55;
-    // Base rock colour varies band by band.
-    let bh = hash1(sid * 1.37 + u.a.w);
-    var base = mix(C(6), C(8), step(0.55, bh) * 0.7);
-    base = mix(base, mix(C(6), vec3f(0.95, 0.85, 0.7), 0.35), step(0.85, bh) * 0.6);
-    var cc = mix(C(7), base, post(lit, 4.0));
-    cc = mix(cc, mix(base, vec3f(1.0, 0.95, 0.85), 0.35), post(ledgeTop * lit, 2.0) * 0.6);
-    // Fine bedding lines and a few joints, drawn thin.
-    cc = mix(cc, C(7) * 0.9, dotLine((fract(strat + 0.5) - 0.5) / 22.0, p.x, DOT * 0.7, px, floor(strat + 0.5)) * 0.5);
-    let jn = p.x * 26.0 + hash1(sid) * 7.0 + 0.5 * fbm(vec2f(p.y * 20.0, sid));
-    cc = mix(cc, C(7), dotLine((fract(jn + 0.5) - 0.5) / 26.0, p.y, DOT * 0.6, px, floor(jn + 0.5) + sid * 3.0) * step(0.72, hash21(vec2f(floor(jn + 0.5), sid))) * 0.45);
-    // Stippled rock texture: darker in shade, sandy in light.
-    cc = stippleBush(p, lit, 0.0034, px, C(7), mix(C(7), base, 0.6), base, mix(base, vec3f(1.0, 0.94, 0.82), 0.3), C(8), sid) * 0.4 + cc * 0.6;
-    // Plants: clumps on some ledges and down the gullies, dark cored.
-    // Clumps perched on the ledges and tumbling down the gullies: rounded
-    // mounds sitting on each band's lip, dark underneath.
-    {
-      let cw = 0.028;
-      let ci = floor(p.x / cw);
-      var pd = 1e3; var pv = vec2f(0.0); var pr = 1.0;
-      for (var o = -1; o <= 1; o++) {
-        for (var b2 = 0; b2 <= 1; b2++) {
-          let bi = sid + f32(b2);
-          let id = vec2f(ci + f32(o), bi);
-          let h = hash21(id + 3.0);
-          let cx = (ci + f32(o) + 0.5 + (hash21(id + 1.0) - 0.5) * 0.5) * cw;
-          let inG = smoothstep(-0.35, -0.75, sin((cx * 11.0 + 1.2 * (p.y - HY)) * 3.14159) * 0.6);
-          if (h < 0.78 - inG * 0.45) { continue; }
-          let cy = (bi / 22.0) + cx * 0.18 + 0.004;
-          let r = 0.007 + 0.007 * h;
-          let v = p - vec2f(cx, cy);
-          let d = max(length(v / vec2f(1.35, 1.0)) - r * (1.0 + 0.15 * sin(atan2(v.y, v.x) * 6.0 + h * 9.0)), v.y - r * 0.35);
-          if (d < pd) { pd = d; pv = v; pr = r; }
-        }
-      }
-      if (pd < px * 2.0) {
-        let plit = smoothstep(0.0, 0.6, lambert(roundN(pv, vec2f(pr * 1.35, pr)), 0.4)) * (1.0 - smoothstep(0.0, pr * 0.35, pv.y) * 0.6);
-        let pl = stippleBush(p, 0.05 + 0.95 * plit, 0.0024, px, mix(C(17), C(12), 0.45), C(17), C(14), C(13), C(8), sid * 2.0);
-        cc = mix(cc, mix(C(7), C(12), 0.4), blobShadow(p, p - pv, pr, p.y - pv.y + pr * 0.35, px) * 0.55);
-        cc = mix(cc, pl, fillA(pd, px));
-        cc = mix(cc, C(12), dotRing(pd, pv, pr * 1.1, DOT * 0.7, px, sid + pr * 99.0) * 0.5);
-      }
+  // A lighthouse out on the point and a fence along the cliff top, standing
+  // up behind the brink: drawn only where no nearer land hides them.
+  if (inBand) {
+    let zl = 5.9;
+    let cl = coastBare(zl);
+    let xl = cl.x - 0.16;
+    let s = 1.0 / zl;
+    let lb = vec2f(xl * s, HY + (EYE - landTop(xl, zl)) * s);
+    let lq = (p - lb) / s;
+    if (abs(lq.x) < 0.2 && lq.y > -0.4 && lq.y < 0.05 && (!landSeen || zHit > zl)) {
+      let tower = sdBox(lq - vec2f(0.0, -0.13), vec2f(0.026 + lq.y * 0.03, 0.13)) * s;
+      let tl = lambert(roundN(vec2f(lq.x, 0.0), vec2f(0.03, 1.0)), 0.45);
+      col = mix(col, C(5) * mix(0.62, 1.02, tl), fillA(tower, px));
+      col = mix(col, C(12), fillA(sdBox(lq - vec2f(0.0, -0.275), vec2f(0.036, 0.018)) * s, px));
+      col = mix(col, C(12), fillA(sdBox(lq - vec2f(0.0, -0.08), vec2f(0.03, 0.009)) * s, px));
+      col = mix(col, C(2), fillA((length(lq - vec2f(0.0, -0.235)) - 0.02) * s, px));
     }
-    // Cast shadow from the ledge above falling on the band below: deeper
-    // when the light is high and strong.
-    cc = mix(cc, cc * 0.72, undercut * (1.0 - gully) * (0.4 + 0.5 * LD.y) * LI);
-    // Grassy crown, and damp dark rock near the waterline.
-    cc = mix(cc, mix(C(13), C(14), 0.4), smoothstep(0.025, 0.0, p.y - top));
-    cc = mix(cc, mix(C(7), C(12), 0.4), smoothstep(0.36, 0.48, p.y) * 0.5);
-    let a = fillA(p.x - ce, px) * fillA(top - p.y, px);
-    col = mix(col, cc, a);
-    col = mix(col, C(12), dotLine(p.y - top, p.x, DOT * 0.8, px, 4.0) * step(p.x, ce) * 0.5);
-    col = mix(col, C(12), dotLine(p.x - ce, p.y, DOT * 0.9, px, 6.0) * step(top, p.y) * 0.5);
-    col = mix(col, C(5), dotLine(p.x - ce - 0.004, p.y - ft * 0.004, DOT * 1.1, px, 8.0) * step(HY + 0.01, p.y) * u.b.y * 0.8 * step(0.5, fbm(vec2f(p.y * 60.0 - ft * 0.3, 1.0))));
-  }
-
-  // Coastal scrub along the cliff crown: stippled clumps with dark cores.
-  {
-    let cw = 0.03;
-    let ci = floor(p.x / cw);
-    for (var o = -1; o <= 1; o++) {
-      let id = ci + f32(o);
-      let h = hash1(id * 1.9 + u.a.w);
-      if (h < 0.35) { continue; }
-      let cx = (id + 0.5 + (hash1(id * 4.1) - 0.5) * 0.4) * cw;
-      if (cx > cliffEdge(headTop(cx)) - 0.02 || abs(cx + 0.1) < 0.02) { continue; }
-      let r = 0.008 + 0.007 * h;
-      let cy = headTop(cx) + r * 0.25;
-      let v = p - vec2f(cx, cy);
-      let sd = max(length(v / vec2f(1.35, 1.0)) - r * (1.0 + 0.14 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.3);
-      let blit = smoothstep(0.0, 0.6, lambert(roundN(v, vec2f(r * 1.35, r)), 0.4)) * (1.0 - smoothstep(0.0, r * 0.3, v.y) * 0.6);
-      let bc = stippleBush(p, 0.05 + 0.95 * blit, 0.0024, px, mix(C(17), C(12), 0.4), C(17), C(13), C(14), C(8), h * 17.0);
-      col = mix(col, bc, fillA(sd, px));
-      col = mix(col, C(12), dotRing(sd, v, r * 1.1, DOT * 0.7, px, h * 23.0) * 0.4);
-    }
-  }
-  // Lighthouse near the point, fence posts along the cliff top.
-  {
-    let lx = -0.1;
-    let ly = headTop(lx);
-    let lq = p - vec2f(lx, ly);
-    let tower = sdBox(lq - vec2f(0.0, -0.02), vec2f(0.004 + lq.y * 0.03, 0.02));
-    let tl = lambert(roundN(vec2f(lq.x, 0.0), vec2f(0.004 + max(-lq.y, 0.0) * 0.03, 1.0)), 0.45);
-    col = mix(col, C(5) * mix(0.62, 1.02, tl), fillA(tower, px));
-    col = mix(col, C(12), fillA(sdBox(lq - vec2f(0.0, -0.043), vec2f(0.006, 0.003)), px));
-    col = mix(col, C(12), fillA(sdBox(lq - vec2f(0.0, -0.012), vec2f(0.0045, 0.0015)), px));
     let beam = 0.5 + 0.5 * sin(t * 1.5);
-    col = mix(col, C(2), fillA(length(lq - vec2f(0.0, -0.037)) - 0.003, px));
-    col = mix(col, C(2), fillA(sdTri(lq - vec2f(0.0, -0.037), vec2f(0.0), vec2f(0.12, -0.012 - 0.01 * beam), vec2f(0.12, 0.012 + 0.01 * beam)), px) * 0.18 * beam);
-    let fx = fract(p.x / 0.02);
-    let fh = headTop(p.x);
-    let fence = step(abs(fx - 0.5), 0.07) * step(fh - 0.009, p.y) * step(p.y, fh) * step(p.x, -0.16);
-    col = mix(col, C(12), fence * 0.85);
-    col = mix(col, C(12), dotLine(p.y - (fh - 0.006), p.x, DOT * 0.6, px, 12.0) * step(p.x, -0.16) * 0.7);
+    let bq = p - (lb + vec2f(0.0, -0.235 * s));
+    col = mix(col, C(2), fillA(sdTri(bq, vec2f(0.0), vec2f(0.12, -0.012 - 0.01 * beam), vec2f(0.12, 0.012 + 0.01 * beam)), px) * 0.18 * beam * select(1.0, 0.0, landSeen));
+    // Fence: posts every so far along a line set back from the brink.
+    if (p.y < HY && p.x < -0.12) {
+      let zf = reachCoast(p.x, -0.13, 4.6);
+      if (zf > 1.7 && (!landSeen || zHit > zf)) {
+        let sf = 1.0 / zf;
+        let yb = HY + (EYE - landTop(p.x * zf, zf)) * sf;
+        let hgt = 0.032 * sf;
+        let sp = 0.11;
+        let cf = coastBare(zf);
+        let dxdz = abs((cf.slope * zf - (cf.x - 0.13)) * sf * sf);
+        let dPost = abs(zf - (floor(zf / sp) + 0.5) * sp) * dxdz - 0.003 * sf;
+        let inH = step(yb - hgt, p.y) * step(p.y, yb);
+        col = mix(col, C(12), fillA(dPost, px) * inH * 0.9);
+        col = mix(col, C(12), dotLine(p.y - (yb - hgt * 0.7), p.x, DOT * 0.6, px, 12.0) * step(p.y, yb) * 0.7);
+      }
+    }
   }
 
   // Foreground: dune grass and flax, swaying.
