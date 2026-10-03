@@ -28,7 +28,7 @@ The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees dra
 
 - **Cove**
   - Striated cliff with a grassy crown, lighthouse and fence
-  - Boulders ringed in surf, swell, glitter path, gulls
+  - Boulders ringed in surf, swell, glitter path
   - Flax with seed pods and dune grass in the wind
 
 - **Golden Hills**
@@ -37,7 +37,7 @@ The Big Sur coast after Eyvind Earle: flat, graduated colour, stylized trees dra
 
 - **Headlands**
   - Receding ridges with combed gullies and drifting fog, stratus in dabbed streaks
-  - Arch bridge, Highway 1, sea stacks, boats, pelicans
+  - Arch bridge, Highway 1, sea stacks, boats
   - Windswept cypresses on the near headland
 
 **Print & Pattern · WebGPU** (newest first)
