@@ -833,6 +833,7 @@ const HOUSE_Z = 5.5;
   }
 
   // ---- Diving board reaching in from the foreground.
+  var boardA = 0.0;
   {
     let bottom = 0.5 * k;
     let wA = toScreen(vec2f(-0.13, 0.5));
@@ -846,7 +847,8 @@ const HOUSE_Z = 5.5;
     col = mix(col, C(33) * 0.8, fillA(max(max(abs(q.x - 0.01) - hw, tA.y + 0.012 - q.y), q.y - bottom), px) * 0.35 * lt);
     var bc = C(16) * mix(0.5, 1.0, lt);
     bc = mix(bc, C(28) * mix(0.5, 1.0, lt), smoothstep(hw * 0.78, hw * 0.82, abs(q.x)));
-    col = mix(col, bc, fillA(bd, px));
+    boardA = fillA(bd, px);
+    col = mix(col, bc, boardA);
     col = mix(col, C(16) * mix(0.4, 0.8, lt), fillA(max(bd, tA.y + 0.006 - q.y), px));
     col = mix(col, C(33), strokeA(bd, px * 0.5, px) * 0.8);
   }
@@ -854,7 +856,10 @@ const HOUSE_Z = 5.5;
   let wq = toWorld(p0);
   let inW = step(Y0 + F / HOUSE_Z, p0.y) * step(PX0, wq.x) * step(wq.x, PX1) * step(PZ0, wq.y) * step(wq.y, PZ1);
   let land = smoothstep(Y0 - 0.12, Y0 + 0.02, p0.y);
-  col = layerTex(p0, col, px, mix(0.12, 0.85, land) * (1.0 - inW * 0.8), mix(0.006, 0.013, clamp((p0.y + 0.05) * 1.6, 0.0, 1.0)), 9.0);
+  // The board keeps its own finer, fainter grit rather than the deck's.
+  var grit = layerTex(p0, col, px, mix(0.12, 0.85, land) * (1.0 - inW * 0.8), mix(0.006, 0.013, clamp((p0.y + 0.05) * 1.6, 0.0, 1.0)), 9.0);
+  if (boardA > 0.0) { grit = mix(grit, layerTex(p0, col, px, 0.3, 0.0035, 27.0), boardA); }
+  col = grit;
   return vec4f(paperize(col, pos.xy, u.b.z), 1.0);
 }
 
