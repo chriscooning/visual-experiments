@@ -290,13 +290,6 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
-// Small bird: two ink arcs.
-fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
-  let q = (p - c) / s;
-  let x = abs(q.x);
-  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
-  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
-}
 
 // Poppy Hill: after my poppy painting, drawn crisp in the manner of Eyvind
 // Earle. A golden hill with oaks sits behind a violet ridge whose crest is a
@@ -465,13 +458,6 @@ const DOT = 0.0011;
   dayLight();
 
   var col = paintSky(p0, HZ, px, t, C(32), -0.2, 1);
-  // Birds over the hills by day.
-  for (var i = 0; i < 5; i++) {
-    let fi = f32(i);
-    let bx = fract(0.2 + fi * 0.31 + t * (0.006 + 0.003 * hash1(fi)) * (1.0 + wind)) * 2.0 - 1.0;
-    let by = -0.42 + 0.1 * hash1(fi * 3.0 + u.a.w) + 0.008 * sin(t * 0.6 + fi);
-    col = mix(col, C(31), bird(p0, vec2f(bx, by), 0.012 + 0.005 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), px) * (1.0 - dark) * 0.85);
-  }
 
   // ---- Far mountains, faint in the haze.
   {

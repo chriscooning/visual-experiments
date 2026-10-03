@@ -297,20 +297,13 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
-// Small bird: two ink arcs.
-fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
-  let q = (p - c) / s;
-  let x = abs(q.x);
-  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
-  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
-}
 
 // Headlands: the Big Sur coast after Eyvind Earle. Ridges recede in flat,
 // graduated colour with gullies combed into their slopes and fog pooling at
 // their feet; a banded sky of stratus; a sea whose ripples crowd toward the
 // horizon and glitter under the sun. In front: a dark headland with
-// windswept cypresses, a concrete arch bridge on a far ridge, pelicans
-// and a couple of boats. One light, the sun, shades every ridge, pad and
+// windswept cypresses, a concrete arch bridge on a far ridge and a
+// couple of boats. One light, the sun, shades every ridge, pad and
 // clump from its own form and throws every shadow the same way; it drifts
 // slowly on its own and can be dragged. Lines are laid down in dots.
 struct U {
@@ -410,17 +403,6 @@ const DOT = 0.0011;
     // Stratus laid on in long dabbed streaks, lit toward the sun.
     let nc = 2 + i32(round(u.b.z * 6.0));
     col = streakClouds(col, p, sun, 1.0 - smoothstep(0.05, 0.35, HY - sun.y), ft * 1.5, px, -0.49, HY - 0.1, 0.5 * asp, nc, 0.4 + 0.6 * u.b.z, C(3), C(4), C(2), u.a.w);
-    // Pelicans gliding in a line, wings beating now and then.
-    for (var k = 0; k < 6; k++) {
-      let fk = f32(k);
-      let bp = vec2f(-0.65 * asp + fract(t * 0.01 + u.a.w * 0.1) * 1.5 * asp + fk * 0.028,
-                     -0.2 + fk * 0.007 + 0.012 * sin(t * 0.3 + fk * 0.4));
-      let flap = sin(t * 5.0 + fk * 0.6) * step(0.0, sin(t * 0.7 + fk * 0.3));
-      let w = 0.009;
-      let q = p - bp;
-      let bird = min(sdSeg(q, vec2f(0.0), vec2f(-w, -0.003 - flap * 0.004)), sdSeg(q, vec2f(0.0), vec2f(w, -0.003 - flap * 0.004)));
-      col = mix(col, C(11), strokeA(bird, px * 0.7, px) * 0.85);
-    }
   } else {
     // Sea.
     let yS = p.y - HY;
