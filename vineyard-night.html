@@ -294,13 +294,6 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
-// Small bird: two ink arcs.
-fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
-  let q = (p - c) / s;
-  let x = abs(q.x);
-  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
-  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
-}
 
 // Vineyard Night: a deep blue sky of vertical drips and purple speckle with
 // wandering trails of white dots, sage hills edged with dotted scrub, a

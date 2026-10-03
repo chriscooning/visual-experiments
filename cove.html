@@ -291,20 +291,13 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
-// Small bird: two ink arcs.
-fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
-  let q = (p - c) / s;
-  let x = abs(q.x);
-  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
-  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
-}
 
 // Cove: looking along a Big Sur cliff at a low sun, after Eyvind Earle. The
 // cliff face is built from stacked, faceted strata with ledges of ice plant;
 // boulders crowd the water's edge, each wrapped in rings of foam; sets of
 // swell roll in and break white; a glitter path runs to the sun. Harakeke
-// (flax) blades and dune grass sway in the foreground, a lighthouse and
-// fence line top the far headland, and a couple of gulls hang in the wind.
+// (flax) blades and dune grass sway in the foreground, and a lighthouse and
+// fence line top the far headland.
 // One light, the sun, shades every surface from its own normal and throws
 // every shadow the same way; it drifts slowly on its own and can be dragged.
 // Lines are laid down in dots.
@@ -367,15 +360,6 @@ const DOT = 0.0011;
     let ct = dot(p - ctA, vec2f(-ctv.y, ctv.x));
     let cta = dot(p - ctA, ctv);
     col = mix(col, C(2), dotLine(ct, cta, DOT * 0.9, px, 5.0) * step(0.0, cta) * step(cta, length(ctB - ctA)) * 0.4);
-    // Gulls.
-    for (var k = 0; k < 3; k++) {
-      let fk = f32(k);
-      let gp = vec2f(0.12 + fk * 0.08 + 0.03 * sin(t * 0.2 + fk * 2.0), -0.32 + fk * 0.03 + 0.01 * sin(t * 0.5 + fk));
-      let flap = sin(t * 3.0 + fk * 2.0) * 0.004;
-      let q = p - gp;
-      let gull = min(sdSeg(q, vec2f(0.0), vec2f(-0.012, -0.004 - flap)), sdSeg(q, vec2f(0.0), vec2f(0.012, -0.004 - flap)));
-      col = mix(col, C(12), strokeA(gull, px * 0.8, px) * 0.9);
-    }
   } else {
     // Sea: flat bands deepening toward the viewer.
     let yS = p.y - HY;

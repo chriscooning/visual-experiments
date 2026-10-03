@@ -289,13 +289,6 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
-// Small bird: two ink arcs.
-fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
-  let q = (p - c) / s;
-  let x = abs(q.x);
-  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
-  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
-}
 
 // Windswept: a Monterey cypress bent by the wind on a Big Sur bluff, drawn
 // crisp in the manner of Eyvind Earle. Shelves of foliage with lit rims and
@@ -845,13 +838,6 @@ var<private> HLAND: array<vec4f, 3>;
     col = paintSky(p0, HZ, px, t, C(25), HZ - 0.07, 0);
     // The wind's streaks, fainter at night.
     col = mix(col, mix(C(5), C(9), 0.3), windStreaks(p0, t, px) * (0.3 + 0.35 * min(wind, 1.0)) * (1.0 - 0.6 * dark));
-    // Gulls by day.
-    for (var i = 0; i < 4; i++) {
-      let fi = f32(i);
-      let bx = fract(0.2 + fi * 0.27 - t * (0.006 + 0.003 * hash1(fi)) * (1.0 + wind)) * 2.0 - 1.0;
-      let by = -0.28 - 0.14 * hash1(fi * 3.0 + u.a.w) + 0.01 * sin(t * 0.7 + fi);
-      col = mix(col, C(24), bird(p0, vec2f(bx, by), 0.014 + 0.006 * hash1(fi * 5.0), sin(t * 3.0 + fi * 2.0), px) * (1.0 - dark) * 0.85);
-    }
   } else {
     // ---- Sea: perspective rows of dotted wave dashes; a sheen and a
     // glitter path under the light, wherever it is.

@@ -291,13 +291,6 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   let d = length(vec2f(f, p.y - y0 - w * 0.5)) - w * 0.5;
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
-// Small bird: two ink arcs.
-fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
-  let q = (p - c) / s;
-  let x = abs(q.x);
-  let y = q.y + flap * 0.35 * x - 0.55 * x * (1.0 - x);
-  return strokeA(y * s, px * 0.6, px) * step(x, 1.0);
-}
 
 // Fern Palms: after my palm canvas, drawn crisp in the manner of Eyvind
 // Earle. Feather palms at several depths rise on scaly trunks out of banks
@@ -314,14 +307,14 @@ struct U {
   c: vec4f,   // sun x, sun y, sun height, dark
   d: vec4f,   // moon x, moon y, moon height, tilt x
   e: vec4f,   // palm count, fog, dots, _
-  cols: array<vec4f, 29>,
+  cols: array<vec4f, 28>,
 }
 @group(0) @binding(0) var<uniform> u: U;
 
 // 0-6 sky, 7 mountains, 8 mist, 9 mist light, 10 hill lit, 11 hill shade,
 // 12 bush dark, 13 bush mid, 14 bush hi, 15 bush hi 2, 16 dot cream,
 // 17 frond dark, 18 frond mid, 19 frond lit, 20 frond pale, 21 trunk dark,
-// 22 trunk mid, 23 trunk light, 24 crownshaft, 25 fern, 26 ink, 27 lamp, 28 parrot
+// 22 trunk mid, 23 trunk light, 24 crownshaft, 25 fern, 26 ink, 27 lamp
 @diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
 @diagnostic(off, derivative_uniformity) fn post(v: f32, n: f32) -> f32 { return floor(clamp(v, 0.0, 1.0) * n + 0.5) / n; }
 @diagnostic(off, derivative_uniformity) fn light() -> f32 { return smoothstep(-0.04, 0.2, u.c.z); }
@@ -430,14 +423,6 @@ const DOT = 0.0011;
   dayLight();
 
   var col = paintSky(p0, HZ, px, t, C(27), -0.15, 2);
-  // Parrots crossing in a loose flock by day.
-  for (var i = 0; i < 6; i++) {
-    let fi = f32(i);
-    let fl = fract(t * 0.011 + 0.6);
-    let c = vec2f(-1.3 + fl * 2.8, -0.4 + 0.05 * sin(fl * 8.0)) + vec2f((hash1(fi) - 0.5) * 0.12, (hash1(fi * 2.3) - 0.5) * 0.06 + 0.01 * sin(t * 2.0 + fi));
-    let bd = max(bird(p0, c, 0.011, sin(t * 9.0 + fi * 1.7), px), fillA(length((p0 - c) / vec2f(1.0, 0.6)) - 0.004, px));
-    col = mix(col, C(28) * mix(0.6, 1.0, lt), bd * (1.0 - dark));
-  }
 
   // ---- Far and near hills: raked light, gullies, cloud shadows, haze.
   {
@@ -1106,9 +1091,9 @@ const SKIES = {
   'morning':     ['#3a7ac8', '#5aa8c8', '#b8dcd8', '#fff8e4', '#f4f4dc', '#f8fcf8', '#a4bcc8', '#7494aa', '#c4dcdc', '#e4f0f0'],
 };
 // hill lit, hill shade, bush dark, bush mid, bush hi, bush hi 2, dot cream, frond dark, frond mid,
-// frond lit, frond pale, trunk dark, trunk mid, trunk light, crownshaft, fern, ink, lamp, parrot
+// frond lit, frond pale, trunk dark, trunk mid, trunk light, crownshaft, fern, ink, lamp
 const LAND = ['#8ab08a', '#4a7a70', '#0f2a24', '#1f4a3a', '#6a9a5a', '#a8c070', '#e8dcaa', '#1a4a3a', '#3a7a5a',
-  '#9ac06a', '#d8d8a0', '#3a2a22', '#7a5a42', '#b8946a', '#5a8a4a', '#4a9a4a', '#0e1614', '#ffd98a', '#5ac04a'];
+  '#9ac06a', '#d8d8a0', '#3a2a22', '#7a5a42', '#b8946a', '#5a8a4a', '#4a9a4a', '#0e1614', '#ffd98a'];
 const KEEP = [6, 16];
 
 const p = {};
