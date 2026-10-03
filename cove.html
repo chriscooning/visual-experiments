@@ -304,9 +304,9 @@ fn bird(p: vec2f, c: vec2f, s: f32, flap: f32, px: f32) -> f32 {
 // into buttresses and gullies, running out past headlands to the point,
 // with scrub hanging from the brink and surf at their feet; boulders crowd
 // the water's edge, each wrapped in rings of foam; sets of swell roll in
-// and break white; a glitter path runs to the sun. Harakeke (flax) blades
-// and dune grass sway in the foreground, and a couple of gulls hang in the
-// wind.
+// and break white; a glitter path runs to the sun. Chaparral yucca in
+// flower and dune grass stand in the foreground, and a couple of gulls hang
+// in the wind.
 // One light, the sun, shades every surface from its own normal and throws
 // every shadow the same way; it drifts slowly on its own and can be dragged.
 // Lines are laid down in dots.
@@ -805,7 +805,7 @@ var<private> HLAND: array<vec3f, 3>;
     }
   }
 
-  // Foreground: dune grass and flax, swaying.
+  // Foreground: dune grass, swaying, and the yuccas.
   let fg = 0.34 + 0.03 * sin(p0.x * 4.0 + u.a.w) + tilt.y * 0.01;
   if (p0.y > fg - 0.12) {
     // Grass tussock band.
@@ -831,40 +831,79 @@ var<private> HLAND: array<vec3f, 3>;
     let tip = abs(fract(bx2) - 0.5 - bend2 * up2 * up2) - 0.25 * (1.0 - up2);
     col = mix(col, select(C(16), C(15), hh > 0.4), fillA(tip * 0.005, px) * step(p0.y, fg) * step(fg - len, p0.y));
   }
-  // Flax: long sword leaves fanning from clumps, with a flower stalk.
+  // Chaparral yucca (Our Lord's Candle), native to the dry slopes above Big
+  // Sur: a round rosette of stiff, blue-grey, dagger-tipped leaves, and from
+  // its heart a tall stalk crowded with cream bell flowers in a long plume.
   for (var k = 0; k < 2; k++) {
     let fk = f32(k);
-    let base = vec2f(select(-0.36, 0.32, k == 1) * min(asp, 1.2) * 0.9 + tilt.x * 0.02, 0.5);
-    for (var j = 0; j < 7; j++) {
-      let fj = f32(j);
-      let ang = -1.57 + (fj - 3.0) * 0.16 + sin(t * 1.1 + fj + fk * 3.0) * 0.04 * wind;
-      let L = 0.18 + 0.08 * hash1(fj + fk * 7.0);
-      let tipP = base + vec2f(cos(ang), sin(ang)) * L + vec2f((fj - 3.0) * 0.012 * wind * sin(t * 0.9 + fj), 0.0);
-      let q = p0 - base;
-      let dirV = tipP - base;
-      let h = clamp(dot(q, dirV) / dot(dirV, dirV), 0.0, 1.0);
-      let wdt = 0.012 * (1.0 - h) + 0.0015;
-      let d = length(q - dirV * h) - wdt;
-      var lc = select(C(17), C(16), (j + k) % 2 == 0);
-      let ll = lambert(roundN(q - dirV * h, vec2f(wdt)), 0.4);
-      lc = mix(lc * 0.65, mix(lc, C(15), 0.35), post(ll * 1.2, 3.0));
-      // Midrib.
-      let rib = q - dirV * h;
-      lc = mix(lc, C(15), dotLine(dot(rib, normalize(vec2f(-dirV.y, dirV.x))), h * length(dirV), DOT * 0.55, px, fj + fk * 7.0) * 0.6);
-      col = mix(col, lc, fillA(d, px));
+    let base = vec2f(select(-0.36, 0.32, k == 1) * min(asp, 1.2) * 0.9 + tilt.x * 0.02, 0.45 + 0.02 * fk);
+    let q = p0 - base;
+    // Leaves, the low outer ones first and the upright ones at the heart last.
+    if (length(q) < 0.2) {
+      for (var j = 0; j < 32; j++) {
+        let fj = f32(j);
+        let hj = hash1(fj * 3.7 + fk * 11.0);
+        // Spread from nearly level on either side to upright in the middle.
+        let o = (fj - 15.5) / 15.5;
+        let side = select(-1.0, 1.0, j % 2 == 0);
+        let fan = (1.0 - abs(o)) * side;
+        let ang = -1.5708 + fan * 1.45 + (hj - 0.5) * 0.2 + sin(t * 0.9 + fj + fk * 3.0) * 0.012 * wind;
+        let L = 0.1 + 0.05 * hj + 0.03 * abs(o);
+        let dirV = vec2f(cos(ang), sin(ang)) * L;
+        let hh = clamp(dot(q, dirV) / dot(dirV, dirV), 0.0, 1.0);
+        let off = q - dirV * hh;
+        let wdt = 0.0072 * (1.0 - hh) + 0.0004;
+        let d = length(off) - wdt;
+        if (d > px * 2.0) { continue; }
+        let nrm = normalize(vec2f(-dirV.y, dirV.x));
+        let ll = lambert(roundN(off, vec2f(wdt)), 0.4);
+        let leaf = mix(mix(C(14), C(3), 0.35), C(16), 0.25 * hj);
+        var lc = mix(leaf * 0.55, mix(leaf, C(2), 0.25), post(ll * 1.2, 3.0));
+        // A pale margin down one edge.
+        lc = mix(lc, mix(leaf, C(2), 0.45), smoothstep(wdt * 0.35, wdt * 0.8, dot(off, nrm)) * 0.6);
+        col = mix(col, lc, fillA(d, px));
+        col = mix(col, C(12), strokeA(d, px * 0.35, px) * 0.35);
+      }
     }
-    // Flower stalk with dark seed pods.
-    let sb = base + vec2f(0.03 * (1.0 - 2.0 * fk), 0.0);
-    let st = sb + vec2f(0.03 * sin(t * 0.8 + fk) * wind, -0.34);
-    let sq = p0 - sb;
-    let stt = tube(p0, sb, st, 0.0022);
-    col = mix(col, mix(C(12), C(16), lambert(roundN(stt.yz, vec2f(0.0022)), 0.4) * 0.7), fillA(stt.x, px));
-    for (var j = 0; j < 6; j++) {
-      let fj = f32(j);
-      let hp = mix(sb, st, 0.45 + fj * 0.1);
-      let side = select(-1.0, 1.0, j % 2 == 0);
-      let pod = rot2(p0 - hp - vec2f(side * 0.012, 0.0), side * 0.6);
-      col = mix(col, C(12), fillA(sdBox(pod, vec2f(0.009, 0.0035)) - 0.001, px));
+    // The stalk, then its plume of flowers over the upper half.
+    let sb = base + vec2f(0.0, -0.03);
+    let st = sb + vec2f(0.012 * sin(t * 0.7 + fk) * wind, -0.5);
+    let ax = st - sb;
+    let alen = length(ax);
+    let ad = ax / alen;
+    let an = vec2f(-ad.y, ad.x);
+    let qs = p0 - sb;
+    let along = dot(qs, ad) / alen;
+    let across = dot(qs, an);
+    if (along > -0.05 && along < 1.08 && abs(across) < 0.05) {
+      let stt = tube(p0, sb, st, 0.0035 * (1.0 - along * 0.6));
+      col = mix(col, mix(C(12), C(16), lambert(roundN(stt.yz, vec2f(0.003)), 0.4) * 0.8), fillA(stt.x, px));
+      // The plume: bells packed in a spindle over the stalk's upper half,
+      // widest a little above its middle and tapering to a point.
+      let cell = 0.0062;
+      let g = vec2f(across, along * alen) / cell;
+      let gi = floor(g);
+      for (var dj = -1; dj <= 1; dj++) {
+        for (var di = -1; di <= 1; di++) {
+          let id = gi + vec2f(f32(di), f32(dj));
+          let hf = hash21(id + fk * 31.0);
+          let c = (id + 0.5 + (vec2f(hash21(id + 3.3 + fk), hash21(id + 7.1 + fk)) - 0.5) * 0.7) * cell;
+          let ca = c.y / alen;
+          let cpf = clamp((ca - 0.42) / 0.58, 0.0, 1.0);
+          let cenv = 0.032 * pow(sin(3.14159 * pow(cpf, 0.8)), 0.7) * step(0.42, ca);
+          if (abs(c.x) > cenv || hf < 0.12) { continue; }
+          // A nodding bell: a little longer than wide, hanging from its tip.
+          let v = vec2f(across, along * alen) - c;
+          let r = 0.0032 * (0.8 + 0.4 * hf);
+          let bd = length(v / vec2f(1.0, 1.3)) - r;
+          let bl = lambert(roundN(vec2f(v.x, -v.y), vec2f(r)), 0.5);
+          var fc = mix(mix(C(1), C(8), 0.25), mix(C(2), C(5), 0.4), post(0.35 + bl, 3.0));
+          // A blush of purple at the base of some.
+          fc = mix(fc, mix(fc, vec3f(0.55, 0.38, 0.55), 0.5), step(0.75, hf) * smoothstep(-r, r, -v.y) * 0.6);
+          col = mix(col, fc, fillA(bd, px));
+          col = mix(col, C(12), strokeA(bd, px * 0.3, px) * 0.25);
+        }
+      }
     }
   }
   let land = smoothstep(HY - 0.1, HY + 0.02, p0.y);
