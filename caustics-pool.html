@@ -687,7 +687,8 @@ const HOUSE_Z = 5.5;
     col = mix(col, C(33), strokeA(min(body, roof), px * 0.5, px) * 0.8);
     // Hedges either side of the house.
     let hgTop = baseY - 0.03 - 0.008 * abs(sin(p0.x * 45.0 + u.a.w)) - 0.004 * sin(p0.x * 11.0);
-    let outside = step(0.0, -(p0.x - hx0 + 0.01) * (p0.x - hx1 - 0.07));
+    // Butt the hedges right up against both walls so no hillside shows between.
+    let outside = 1.0 - clamp(fillA(p0.x - hx0, px) + fillA(hx1 - p0.x, px), 0.0, 1.0);
     let hgl = (0.15 + 0.85 * lt) * clamp((baseY - p0.y) / (baseY - hgTop) * 1.1 - 0.15, 0.0, 1.0);
     let hgc = stippleBush(p0, hgl, 0.0032, px, C(12), C(13), C(14), C(15), C(17), 21.0);
     col = mix(col, hgc, fillA(hgTop - p0.y, px) * fillA(p0.y - baseY - 0.002, px) * (1.0 - outside));
