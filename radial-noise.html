@@ -35,6 +35,8 @@
     cursor: crosshair;
   }
   canvas { display: block; border-radius: 4px; }
+  /* Inside the experiments viewer the canvas fills the frame. */
+  html.embed canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; border-radius: 0; }
 
   /* Radius HUD */
   .radius-hud {
@@ -178,7 +180,7 @@
       <option value="mono">Monochrome</option>
       <option value="cool">Cool Blues</option>
       <option value="warm">Warm Ember</option>
-      <option value="neon">Neon</option>
+      <option value="neon" selected>Neon</option>
       <option value="pastel">Pastel Bloom</option>
       <option value="electric">Electric Field</option>
     </select>
@@ -259,7 +261,8 @@ class PerlinNoise {
 // ═══════════════════════════════════════
 const shapeFns = {
   circle:()=>1,
-  triangle:(a)=>{const n=3,ang=((a%(Math.PI*2/n))-Math.PI/n);return Math.min(.75/Math.cos(ang),1.6);},
+  // (A corner points straight up: on screen, y runs down.)
+  triangle:(a)=>{const n=3,ang=(((a+Math.PI/2)%(Math.PI*2/n)+Math.PI*2/n)%(Math.PI*2/n)-Math.PI/n);return Math.min(.75/Math.cos(ang),1.6);},
   square:(a)=>Math.min(.88/Math.max(Math.abs(Math.cos(a)),Math.abs(Math.sin(a))),1.4),
   hexagon:(a)=>{const n=6,ang=((a%(Math.PI*2/n))-Math.PI/n);return Math.min(.85/Math.cos(ang),1.3);},
   star:(a)=>{const t=((a/(Math.PI*2))*5)%1;return(t<.5?.5+t:1.5-t)*.85;},
@@ -288,7 +291,14 @@ const palettes = {
 // ═══════════════════════════════════════
 const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
 let W,H;
+// On its own page the canvas is a square above the controls; framed in the
+// experiments viewer (another page's iframe, or ?embed for its thumbnails)
+// it fills the whole window, and the drawing, sized from the shorter side,
+// stays centred in it.
+const EMBED=window.self!==window.top||/[?&]embed\b/.test(location.search);
+if(EMBED)document.documentElement.classList.add('embed');
 function resize(){
+  if(EMBED){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;return;}
   const maxW=window.innerWidth-16,maxH=window.innerHeight*.52;
   const s=Math.min(maxW,maxH,720);
   W=canvas.width=Math.round(s);H=canvas.height=Math.round(s);
