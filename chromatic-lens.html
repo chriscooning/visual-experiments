@@ -47,7 +47,8 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Scene</label>
     <select id="palette">
-      <option value="neon" selected>Neon Rain</option>
+      <option value="monsoon" selected>Monsoon Street</option>
+      <option value="neon">Neon Rain</option>
       <option value="sodium">Sodium Street</option>
       <option value="blue">Blue Hour</option>
       <option value="silver">Silver</option>
@@ -202,6 +203,18 @@ fn staticDrops(uv0: vec2f, t: f32, cells: f32, keep: f32) -> f32 {
 
 // The water at screen point q: (field 0..1, trail), the drops' sizes set by
 // how much the coordinates are scaled.
+// The windshield leans back: a point on screen to where it lies on the glass,
+// in glass units (the bottom edge near and at the screen's scale, the top a
+// good way off, so drops there are smaller and squashed).
+const LEAN_S = 0.42;
+const LEAN_C = 0.907;
+fn toGlass(q: vec2f) -> vec2f {
+  let yb = 1.0 - q.y;
+  let s = yb / (LEAN_C - yb * LEAN_S);
+  let z = 1.0 + s * LEAN_S;
+  return vec2f((q.x - u.a.y * 0.5) * z, 1.0 - s);
+}
+
 fn water(q: vec2f) -> vec3f {
   let t = u.a.x * 0.2;
   let rain = u.b.x;
@@ -209,7 +222,7 @@ fn water(q: vec2f) -> vec3f {
   let since = u.a.x - lastCleared(q);
   let back = S(0.3, 5.0 / (0.3 + rain), since);
   let sc = 1.0 / (0.55 + u.b.y * 0.9);
-  let uv = (q - vec2f(u.a.y * 0.5, 0.5)) * sc;
+  let uv = (toGlass(q) - vec2f(0.0, 0.5)) * sc;
   let l0 = S(-0.5, 1.0, rain) * 2.0 * back;
   let l1 = S(0.25, 0.75, rain) * S(0.6, 3.5, since);
   let l2 = S(0.0, 0.5, rain) * S(0.6, 3.5, since);
@@ -229,30 +242,30 @@ fn street(q: vec2f, focus: f32) -> vec3f {
   let b = textureSampleLevel(softT, samp, uv, 0.0).rgb;
   let c = textureSampleLevel(blurT, samp, uv, 0.0).rgb;
   var col = mix(mix(a, b, S(0.0, 0.5, focus)), c, S(0.5, 1.0, focus));
-  // Cross traffic on the near street: each car a white headlight ahead and
-  // a red tail light behind, the nearer lane bigger and faster.
+  // Traffic up and down the street: headlights coming on the left, tail
+  // lights going away on the right, each laying a streak on the wet road.
   let t = u.a.x * u.c.x;
+  let Sx = 0.45 * u.a.y;
   for (var i = 0; i < 6; i++) {
     let fi = f32(i);
     let h = N(fi * 7.31 + u.a.w);
-    let near = i % 2 == 0;
-    let dir = select(-1.0, 1.0, (i / 2) % 2 == 0);
-    let y = select(0.665, 0.715, near) + h * 0.01;
-    let size = select(0.6, 1.0, near);
-    let span = u.a.y + 0.5;
-    let x0 = fract(t * (0.035 + 0.03 * h) * size + h) * span - 0.25;
-    let x = select(u.a.y - x0, x0, dir > 0.0);
-    let R = mix(0.003, 0.065, focus) * size;
+    let coming = i % 2 == 0;
+    var ph = fract(t * (0.03 + 0.03 * h) + h);
+    if (!coming) { ph = 1.0 - ph; }
+    let z = mix(32.0, 1.6, ph * ph);
+    let X = select(0.45 + 0.2 * h, -0.45 - 0.2 * h, coming);
+    let lc = select(u.lights[0].rgb, u.lights[1].rgb, coming);
+    let R = mix(0.012, 0.16, focus) / z + 0.0015;
+    let fade = S(32.0, 24.0, z) * S(1.6, 2.6, z);
     for (var k = 0; k < 2; k++) {
-      let lp = vec2f(x + dir * (f32(k) - 0.5) * 0.07 * size, y);
-      let lc = select(u.lights[0].rgb * 0.8, u.lights[1].rgb, k == 1);
+      let lp = vec2f(u.a.y * u.c.w + (X + (f32(k) - 0.5) * 0.4) * Sx / z, 0.45 + (0.6 - 0.3) * Sx / z);
       let d = length(q - lp) / R;
       let disc = (1.0 - S(0.8, 1.0, d)) * (0.75 + 0.25 * S(0.5, 0.95, d));
       let glow = exp(-d * d * 2.0) * (1.0 - focus);
-      col += lc * (disc * mix(1.5, 0.35, focus) + glow) * select(0.6, 1.0, near);
-      // and its smear on the wet road
-      let rd = vec2f((q.x - lp.x) / R, (q.y - lp.y - 0.02 * size) / (R * 4.0));
-      col += lc * exp(-dot(rd, rd)) * 0.12 * step(lp.y, q.y);
+      col += lc * (disc * mix(1.6, 0.4, focus) + glow) * fade;
+      let below = q.y - lp.y;
+      let rx = (q.x - lp.x) / (R * 1.5);
+      col += lc * exp(-rx * rx) * S(0.0, 0.02, below) * S(0.6, 0.0, below) * 0.18 * fade;
     }
   }
   return col;
@@ -326,12 +339,21 @@ fn street(q: vec2f, focus: f32) -> vec3f {
     }
   }
 
+  // The top of the dashboard along the bottom, and the faint sheen of the
+  // leaning glass.
+  let dash = 0.94 - 0.05 * pow(abs(uv.x - 0.5) * 2.0, 2.0);
+  col += vec3f(0.03, 0.04, 0.05) * S(0.5, 0.0, uv.y) * (1.0 - u.c.z * 0.3);
+  col = mix(col, vec3f(0.006, 0.007, 0.009), S(dash - 0.004, dash + 0.004, uv.y));
+  col += vec3f(0.05, 0.06, 0.07) * exp(-pow((uv.y - dash) / 0.006, 2.0)) * 0.6;
   // Corners fall dark; a little grain; a gentle curve so lights bloom.
   let vg = length((uv - 0.5) * vec2f(1.15, 1.0));
   col *= 1.0 - S(0.4, 0.9, vg) * 0.5;
   let gr = fract(sin(dot(floor(uv * vec2f(1400.0, 900.0)) + fract(t * 7.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
   col += gr * 0.015;
-  col = col / (1.0 + col * 0.25);
+  // Exposed up a little, the darks cooled toward teal.
+  col *= 1.45;
+  col += vec3f(0.0, 0.008, 0.014) * (1.0 - S(0.0, 0.25, dot(col, vec3f(0.33))));
+  col = col / (1.0 + col * 0.3);
   return vec4f(col, 1.0);
 }
 `;
@@ -341,6 +363,7 @@ fn street(q: vec2f, focus: f32) -> vec3f {
 // two softer focuses.
 // ═══════════════════════════════════════
 const SCENES = {
+  monsoon: { sky: ['#03050a', '#0a1322', '#1b2a40'], wall: '#05080d', win: ['#ffd9a0', '#bfe8ff', '#fff3dc', '#9ff0e6'], signs: ['#2fe3ff', '#ff3b5c', '#3d8bff', '#3dffa0', '#ffb347'], lamp: '#cfe4ff', tail: '#ff2a3a', head: '#fff0cf' },
   neon:   { sky: ['#05040c', '#1a0c2e', '#3a1446'], wall: '#0b0a12', win: ['#ffcf8a', '#9fe7ff', '#ff9ad5', '#fff1d6'], signs: ['#ff3fa4', '#31e5ff', '#8a5cff', '#ffd166', '#3dffb0'], lamp: '#ffc98a', tail: '#ff2a3a', head: '#f4f6ff' },
   sodium: { sky: ['#030406', '#14100a', '#3a2410'], wall: '#0b0906', win: ['#ffcf8a', '#ffe7b8', '#ffb35c', '#fff4dd'], signs: ['#ff8c1a', '#ff3b2f', '#ffd27a', '#3cff7a', '#ffb347'], lamp: '#ffa640', tail: '#ff2a1a', head: '#fff2d8' },
   blue:   { sky: ['#0a1a3a', '#2a4878', '#7a7fa8'], wall: '#101830', win: ['#ffd28a', '#ffe9b8', '#fff1c9', '#ffc070'], signs: ['#ff4d4d', '#8fd3ff', '#ffd28a', '#ff9d5c', '#c8a2ff'], lamp: '#ffd28a', tail: '#ff3a3a', head: '#f6f8ff' },
@@ -348,116 +371,177 @@ const SCENES = {
 };
 function rng(seed) { let s = (seed * 9301 + 49297) % 233280 || 1; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
 
-// What the camera sees past the glass: across a wet street, a block of lit
-// buildings in two depths, neon on the near ones, streetlights in a row,
-// and the road giving it all back. Bright things are also kept as lights,
-// [x, y, size 0..1, colour, strength], so the soft paintings can draw each
-// as a bokeh disc.
+// What the camera sees past the glass: a street running away under the
+// rain. Shopfronts down both sides, poles carrying lamps and a tangle of
+// wires, a lit hoarding at the far end, traffic, someone walking under an
+// umbrella, and the wet road giving every light back as a long broken streak.
+// Bright things are also kept as lights, [x, y, size 0..1, colour, strength],
+// so the soft paintings can draw each as a bokeh disc.
 let vanishX = 0.5;
+const VY = 0.45, CAM = 0.6;       // horizon (of the height) and eye height, in street half-widths
 function paintStreet(w, h, sc, seed) {
   const R = rng(Math.floor(seed * 1000) + 7);
   const pick = (a) => a[Math.floor(R() * a.length)];
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
   const g = cv.getContext('2d');
   const lights = [];
-  const k = h / 600, base = h * 0.64;
+  const k = h / 600, vx = w * 0.5, vy = h * VY, Sx = w * 0.45;
   vanishX = 0.5;
-  // The dark, and the city's glow low in it.
-  const sky = g.createLinearGradient(0, 0, 0, base);
-  sky.addColorStop(0, sc.sky[0]); sky.addColorStop(0.6, sc.sky[1]); sky.addColorStop(1, sc.sky[2]);
-  g.fillStyle = sky; g.fillRect(0, 0, w, base);
-  // Buildings: a far row, then a near row in front with gaps between.
-  const row = (far) => {
-    for (let x = -R() * 40 * k; x < w;) {
-      const bw = (far ? 40 + R() * 70 : 70 + R() * 130) * k;
-      const gap = far ? R() * 6 * k : (R() < 0.35 ? (20 + R() * 60) * k : 2 * k);
-      const top = far ? h * (0.12 + R() * 0.3) : h * (0.02 + R() * 0.32);
-      const shade = far ? 0.7 : 1.0;
-      g.fillStyle = sc.wall; g.fillRect(x, top, bw, base - top + 1);
-      // Rooftop edge catching the glow.
-      g.fillStyle = sc.sky[2] + '55'; g.fillRect(x, top, bw, 1.5 * k);
-      // Windows on a grid; some floors dark, some lit end to end.
-      const cw = (far ? 6 : 9 + R() * 4) * k, chh = (far ? 8 : 12 + R() * 5) * k;
-      const winW = cw * (0.45 + R() * 0.25), winH = chh * (0.45 + R() * 0.2);
-      const warm = pick(sc.win), lit = 0.25 + R() * 0.35;
-      for (let yy = top + chh * 0.8; yy < base - chh * 0.8; yy += chh) {
-        const floorLit = R();
-        for (let xx = x + cw * 0.4; xx < x + bw - winW - cw * 0.2; xx += cw) {
-          if (R() > lit * (floorLit < 0.15 ? 2.5 : floorLit > 0.85 ? 0.2 : 1)) continue;
-          const c = R() < 0.7 ? warm : pick(sc.win);
-          g.globalAlpha = shade * (0.35 + R() * 0.65);
-          g.fillStyle = c; g.fillRect(xx, yy, winW, winH);
-          if (!far && R() < 0.035) lights.push([xx + winW / 2, yy + winH / 2, 0.15 + R() * 0.25, c, 0.35]);
-        }
+  // A point on the street: X across (kerbs at -1, 1), Y up, z away (1 near).
+  const P = (X, Y, z) => [vx + X * Sx / z, vy + (CAM - Y) * Sx / z];
+  const glow = (x, y, r, c, a) => {
+    const gl = g.createRadialGradient(x, y, 0, x, y, r);
+    gl.addColorStop(0, '#ffffff'); gl.addColorStop(0.07, c); gl.addColorStop(0.3, c + '55'); gl.addColorStop(1, c + '00');
+    g.globalAlpha = a; g.fillStyle = gl; g.fillRect(x - r, y - r, 2 * r, 2 * r); g.globalAlpha = 1;
+  };
+  const quad = (pts, fill) => { g.fillStyle = fill; g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill(); };
+
+  // Sky, a low haze of light over the far end.
+  const sky = g.createLinearGradient(0, 0, 0, vy);
+  sky.addColorStop(0, sc.sky[0]); sky.addColorStop(0.7, sc.sky[1]); sky.addColorStop(1, sc.sky[2]);
+  g.fillStyle = sky; g.fillRect(0, 0, w, vy + 2);
+  // The road: dark, wet, a little lighter far off where it holds the haze.
+  const road = g.createLinearGradient(0, vy, 0, h);
+  road.addColorStop(0, sc.sky[2]); road.addColorStop(0.12, sc.wall); road.addColorStop(1, '#020305');
+  g.fillStyle = road; g.fillRect(0, vy, w, h - vy);
+
+  // Buildings down both sides: blocks of differing height, dark above,
+  // shopfronts lit at street level, a few windows.
+  const far = 40;
+  for (const side of [-1, 1]) {
+    for (let z = 1.2; z < far;) {
+      const dz = 1.5 + R() * 3 * (z / 6), z1 = Math.min(far, z + dz), H = 2.5 + R() * 4;
+      const X = side * (1.6 + R() * 0.1);
+      quad([P(X, 0, z), P(X, H, z), P(X, H, z1), P(X, 0, z1)], sc.wall);
+      // Windows above.
+      const cols = Math.max(1, Math.round(dz * 1.2)), rows = Math.floor(H / 0.5);
+      for (let i = 0; i < cols; i++) for (let j = 2; j < rows; j++) {
+        if (R() > 0.28) continue;
+        const za = z + (i + 0.25) / cols * dz, zb = za + 0.4 / cols * dz, ya = j * 0.5, yb = ya + 0.28;
+        g.globalAlpha = 0.3 + R() * 0.5;
+        quad([P(X, ya, za), P(X, yb, za), P(X, yb, zb), P(X, ya, zb)], pick(sc.win));
       }
       g.globalAlpha = 1;
-      // Neon down the near buildings: vertical blade signs and lit bands.
-      if (!far && R() < 0.75) {
-        const c = pick(sc.signs), sx = x + bw * (0.15 + R() * 0.7), sy = top + (base - top) * (0.2 + R() * 0.4);
-        const vert = R() < 0.6, len = (vert ? 50 + R() * 90 : 40 + R() * 80) * k, th = (vert ? 9 : 7) * k;
-        g.shadowColor = c; g.shadowBlur = 18 * k; g.fillStyle = c;
-        if (vert) g.fillRect(sx - th / 2, sy, th, len); else g.fillRect(sx - len / 2, sy, len, th);
-        g.fillStyle = '#ffffff'; g.globalAlpha = 0.6;
-        if (vert) g.fillRect(sx - th / 6, sy + 2 * k, th / 3, len - 4 * k); else g.fillRect(sx - len / 2 + 2 * k, sy + th / 3, len - 4 * k, th / 3);
-        g.globalAlpha = 1; g.shadowBlur = 0;
-        const n = Math.max(2, Math.round(len / (30 * k)));
-        for (let j = 0; j < n; j++) {
-          const f = (j + 0.5) / n;
-          lights.push(vert ? [sx, sy + len * f, 0.5 + R() * 0.3, c, 0.9] : [sx - len / 2 + len * f, sy + th / 2, 0.5 + R() * 0.3, c, 0.9]);
+      // The shopfront: a lit panel, sometimes a bright sign over it.
+      if (z > 2.4 && R() < (side > 0 ? 0.95 : 0.8)) {
+        const c = R() < 0.55 ? pick(sc.win) : pick(sc.signs), za = z + dz * 0.1, zb = z1 - dz * 0.1;
+        g.globalAlpha = 0.55 + R() * 0.4;
+        quad([P(X * 0.99, 0.05, za), P(X * 0.99, 0.55, za), P(X * 0.99, 0.55, zb), P(X * 0.99, 0.05, zb)], c);
+        g.globalAlpha = 1;
+        const [lx, ly] = P(X * 0.99, 0.3, (za + zb) / 2);
+        lights.push([lx, ly, Math.min(1, 1.6 / z), c, 0.7]);
+        if (za > 3.5 && R() < 0.6) {
+          const s = pick(sc.signs), [sx, sy] = P(X * 0.97, 0.75 + R() * 0.4, za + (zb - za) * R());
+          const sw = 0.35 * Sx / za, sh = 0.13 * Sx / za;
+          g.shadowColor = s; g.shadowBlur = 14 * k; g.fillStyle = s; g.fillRect(sx - sw / 2, sy - sh / 2, sw, sh); g.shadowBlur = 0;
+          lights.push([sx, sy, Math.min(1, 1.4 / za), s, 0.9]);
         }
       }
-      // Shopfronts at street level, lit warm or cold.
-      if (!far && R() < 0.6) {
-        const c = pick(sc.win), sy = base - 26 * k;
-        g.globalAlpha = 0.5 + R() * 0.4; g.fillStyle = c;
-        g.fillRect(x + bw * 0.1, sy, bw * 0.8, 20 * k);
-        g.globalAlpha = 1;
-        lights.push([x + bw * 0.3, sy + 10 * k, 0.6, c, 0.5], [x + bw * 0.7, sy + 10 * k, 0.6, c, 0.5]);
-      }
-      x += bw + gap;
+      z = z1 + 0.05;
+    }
+  }
+  // The far end: a hoarding lit up over the street, a tall twin lamp, a
+  // signal, and a spatter of small lights.
+  {
+    const z = 26, [x0, y0] = P(-0.15, 4.2, z), [x1, y1] = P(0.45, 3.0, z);
+    const gr = g.createLinearGradient(x0, y0, x1, y1);
+    gr.addColorStop(0, pick(sc.signs)); gr.addColorStop(0.5, '#ffffff'); gr.addColorStop(1, pick(sc.signs));
+    g.shadowColor = '#ffffff'; g.shadowBlur = 20 * k; g.fillStyle = gr; g.fillRect(x0, y0, x1 - x0, y1 - y0); g.shadowBlur = 0;
+    lights.push([(x0 + x1) / 2, (y0 + y1) / 2, 0.45, '#ffffff', 0.9], [x0, (y0 + y1) / 2, 0.35, pick(sc.signs), 0.8]);
+    const [tx, ty] = P(0.7, 4.2, 22), [bx, by] = P(0.7, 0, 22);
+    g.strokeStyle = '#000'; g.lineWidth = 2 * k; g.beginPath(); g.moveTo(tx, ty); g.lineTo(bx, by); g.stroke();
+    for (const d of [-1, 1]) { glow(tx + d * 6 * k, ty, 22 * k, sc.lamp, 1); lights.push([tx + d * 6 * k, ty, 0.3, sc.lamp, 1]); }
+    const sg = sc.mono ? '#e8e8e8' : '#30ff8a', [gx, gy] = P(-0.55, 1.5, 18);
+    glow(gx, gy, 12 * k, sg, 1); lights.push([gx, gy, 0.25, sg, 1]);
+    for (let i = 0; i < 90; i++) {
+      const z = 10 + R() * 26, X = (R() < 0.5 ? -1 : 1) * (0.6 + R() * 0.6), [x, y] = P(X, R() * 1.4, z), c = pick(R() < 0.5 ? sc.win : sc.signs);
+      glow(x, y, (4 + R() * 9) * k, c, 0.9); lights.push([x, y, 0.12 + R() * 0.2, c, 0.55]);
+    }
+  }
+  // Poles down the left kerb with cold lamps, and the wires slung between
+  // them and across the street.
+  const poles = [];
+  for (let z = 1.6; z < 30; z *= 1.55 + R() * 0.2) {
+    const X = -1.3, [x0, y0] = P(X, 0, z), [x1, y1] = P(X, 3.1, z);
+    g.strokeStyle = '#000'; g.lineWidth = Math.max(1, 0.06 * Sx / z); g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+    poles.push([X, z]);
+    const [lx, ly] = P(X + 0.25, 2.9, z);
+    glow(lx, ly, 0.9 * Sx / z, sc.lamp, 1);
+    lights.push([lx, ly, Math.min(1, 1.5 / z), sc.lamp, 1]);
+  }
+  g.lineWidth = Math.max(0.8, 1 * k);
+  const wire = (a, b, sag) => {
+    g.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const f = i / 24, X = a[0] + (b[0] - a[0]) * f, Y = a[1] + (b[1] - a[1]) * f - sag * 4 * f * (1 - f), z = a[2] + (b[2] - a[2]) * f;
+      const [x, y] = P(X, Y, z); i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    g.stroke();
+  };
+  for (let i = 0; i < poles.length; i++) {
+    const [X, z] = poles[i];
+    for (let j = 0; j < 5; j++) {
+      g.strokeStyle = j < 2 ? sc.lamp + '66' : '#0a0e16';
+      const ya = 2.4 + j * 0.15;
+      if (i + 1 < poles.length) wire([X, ya, z], [poles[i + 1][0], ya + (R() - 0.5) * 0.2, poles[i + 1][1]], 0.25 + R() * 0.3);
+      if (R() < 0.35) wire([X, ya, z], [1.5, 2.0 + R() * 0.6, z * (1.2 + R() * 0.8)], 0.3 + R() * 0.3);
+    }
+  }
+  // Traffic, coming and going, and someone walking under an umbrella.
+  const vehicle = (X, z, body, lit) => {
+    const hw = 0.28;
+    quad([P(X - hw, 0.08, z), P(X - hw, 0.62, z), P(X + hw, 0.62, z), P(X + hw, 0.08, z)], body);
+    quad([P(X - hw * 0.8, 0.62, z), P(X - hw * 0.65, 0.9, z), P(X + hw * 0.65, 0.9, z), P(X + hw * 0.8, 0.62, z)], body);
+    for (const d of [-1, 1]) {
+      const [x, y] = P(X + d * hw * 0.7, 0.3, z), c = lit === 'head' ? sc.head : sc.tail;
+      glow(x, y, 0.5 * Sx / z, c, 0.8); lights.push([x, y, Math.min(1, 1.6 / z), c, 0.65]);
     }
   };
-  row(true); row(false);
-  // Streetlights along the near kerb.
-  const lampN = 4 + Math.floor(R() * 3);
-  for (let i = 0; i < lampN; i++) {
-    const x = w * (i + 0.3 + R() * 0.4) / lampN, y = base - h * (0.2 + R() * 0.03);
-    g.strokeStyle = '#000'; g.lineWidth = 3 * k; g.beginPath(); g.moveTo(x, y); g.lineTo(x, base + 4 * k); g.stroke();
-    const gl = g.createRadialGradient(x, y, 0, x, y, 40 * k);
-    gl.addColorStop(0, '#ffffff'); gl.addColorStop(0.08, sc.lamp); gl.addColorStop(0.3, sc.lamp + '55'); gl.addColorStop(1, sc.lamp + '00');
-    g.fillStyle = gl; g.fillRect(x - 40 * k, y - 40 * k, 80 * k, 80 * k);
-    lights.push([x, y, 1, sc.lamp, 1]);
+  vehicle(0.4, 14, '#15181e', 'tail');
+  vehicle(-0.3, 11, '#101318', 'head');
+  vehicle(0.0, 6.5, sc.mono ? '#2a2a2a' : '#4a3a10', 'head');
+  vehicle(-0.5, 5, '#20242c', 'head');
+  {
+    const z = 3.2, X = 0.3;
+    quad([P(X - 0.09, 0, z), P(X - 0.11, 0.95, z), P(X + 0.11, 0.95, z), P(X + 0.09, 0, z)], '#05070b');
+    const [ux, uy] = P(X, 1.25, z), ur = 0.38 * Sx / z;
+    g.fillStyle = '#04060a'; g.beginPath(); g.ellipse(ux, uy, ur, ur * 0.35, 0, Math.PI, 0); g.fill();
+    const [hx, hy] = P(X, 1.02, z); g.beginPath(); g.arc(hx, hy, 0.07 * Sx / z, 0, 7); g.fill();
   }
-  // A signal or two.
-  for (let i = 0; i < 2; i++) {
-    const c = sc.mono ? '#e8e8e8' : pick(['#ff3030', '#30ff8a', '#ffb020']), x = w * (0.2 + R() * 0.6), y = base - h * (0.1 + R() * 0.06);
-    g.fillStyle = c; g.shadowColor = c; g.shadowBlur = 14 * k; g.beginPath(); g.arc(x, y, 4 * k, 0, 7); g.fill(); g.shadowBlur = 0;
-    lights.push([x, y, 0.45, c, 1]);
+  // The right kerb catching the light.
+  { const [a, b] = [P(1.15, 0, 1.1), P(1.15, 0, 30)];
+    const gr = g.createLinearGradient(a[0], a[1], b[0], b[1]); gr.addColorStop(0, sc.lamp + '00'); gr.addColorStop(0.3, sc.lamp + '88'); gr.addColorStop(1, sc.lamp + '22');
+    g.strokeStyle = gr; g.lineWidth = 2 * k; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); }
+
+  // The wet road holds a dim, stretched, upside-down copy of it all ...
+  {
+    const up = document.createElement('canvas'); up.width = w; up.height = Math.ceil(vy);
+    const ug = up.getContext('2d'); if ('filter' in ug) ug.filter = 'blur(' + (2 * k) + 'px)';
+    ug.drawImage(cv, 0, 0, w, vy, 0, 0, w, vy);
+    g.save(); g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.3;
+    g.setTransform(1, 0, 0, -2.4, 0, vy * 3.4);
+    g.drawImage(up, 0, 0);
+    g.restore();
   }
-  // The wet road: dark, giving back the street above it, upside down,
-  // stretched and broken up.
-  const road = g.createLinearGradient(0, base, 0, h);
-  road.addColorStop(0, '#0b0b10'); road.addColorStop(1, '#030304');
-  g.fillStyle = road; g.fillRect(0, base, w, h - base);
-  g.save();
-  g.globalCompositeOperation = 'lighter';
-  for (let i = 0; i < 3; i++) {
-    g.globalAlpha = [0.3, 0.14, 0.07][i];
-    g.setTransform(1, 0, 0, -(1.3 + i * 0.6), 0, base * (2.3 + i * 0.6));
-    g.drawImage(cv, 0, 0, w, base, 0, 0, w, base);
-  }
-  g.restore();
-  // Bright things smear long on the wet road.
+  // ... and every bright light back as a long streak, broken
+  // across by the ripples.
   g.globalCompositeOperation = 'lighter';
   const n0 = lights.length;
   for (let i = 0; i < n0; i++) {
     const [x, y, s, c, st] = lights[i];
-    if (st < 0.8) continue;
-    const top = base + (base - y) * 0.2, len = (h - top) * (0.5 + R() * 0.4), sw = (5 + 10 * s) * k;
-    const gr = g.createLinearGradient(0, top, 0, top + len);
-    gr.addColorStop(0, c + '00'); gr.addColorStop(0.1, c + '70'); gr.addColorStop(1, c + '00');
-    g.fillStyle = gr; g.fillRect(x - sw / 2, top, sw, len);
-    lights.push([x, top + len * 0.25, s * 0.8, c, st * 0.4]);
+    if (st < 0.6) continue;
+    // (From about where the light stands on the road.)
+    const top = y < vy ? vy + (vy - y) * 0.12 + 2 : y + 2 * k;
+    const len = (h - top) * (0.55 + 0.4 * R()), sw = (3 + 26 * s) * k;
+    for (let yy = top; yy < top + len; yy += 2 * k) {
+      const f = (yy - top) / len;
+      const a = st * (1 - f) * (0.25 + 0.75 * R()) * 0.22 * (R() < 0.15 ? 0.2 : 1);
+      g.globalAlpha = a; g.fillStyle = c;
+      const ww = sw * (0.4 + 0.9 * R()) * (0.7 + f);
+      g.fillRect(x - ww / 2 + (R() - 0.5) * sw * 0.3, yy, ww, 2 * k);
+    }
+    g.globalAlpha = 1;
+    lights.push([x, top + len * 0.15, s * 0.9, c, st * 0.35], [x, top + len * 0.4, s * 0.8, c, st * 0.2]);
   }
   g.globalCompositeOperation = 'source-over';
   return { canvas: cv, lights };
