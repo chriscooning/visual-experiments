@@ -404,29 +404,63 @@ struct Tree {
 }
 // A cypress shelf, as Earle cuts them: a flat underside, a top stepped into
 // plateaus at different heights joined by steep risers, every edge straight
-// and every corner sharp, drawn out at each end to a point, the leeward one
-// level or swept up and the windward one cut back by the wind or flung up
-// in a flag. Vertices in shelf units (half width w, half height h, y down),
-// round the outline from the underside's windward corner; k seeds it.
+// and every corner sharp. Each end finishes its own way: swept up into a
+// flag, drawn straight out to a point, or drooping, pointing down and out;
+// never swept up at both ends, which would make a hull of it. Vertices in
+// shelf units (half width w, half height h, y down), round the outline from
+// the underside's windward corner: 0, 1 the underside, 2 the leeward point,
+// 3 to 10 the plateaus, 11 the windward point. k seeds it.
 @diagnostic(off, derivative_uniformity) fn shelfVerts(w: f32, h: f32, k: f32) -> array<vec2f, 12> {
   var P: array<vec2f, 12>;
   let lw = w * (1.05 + 0.3 * hash1(k + 1.3));
-  let rw = w * (0.85 + 0.2 * hash1(k + 2.9));
+  let rw = w * (0.9 + 0.25 * hash1(k + 2.9));
   let yb = h * 0.38;
-  P[0] = vec2f(rw * (0.7 + 0.15 * hash1(k + 4.1)), yb);
-  P[1] = vec2f(-lw * (0.55 + 0.15 * hash1(k + 5.3)), yb);
-  P[2] = vec2f(-lw, yb - h * (0.35 + 0.6 * hash1(k + 6.7)));
+  // 0 swept up, 1 straight out, 2 drooping.
+  let eL = floor(hash1(k + 14.7) * 2.999);
+  var eR = floor(hash1(k + 15.9) * 2.999);
+  if (eL == 0.0 && eR == 0.0) { eR = 1.0 + floor(hash1(k + 16.1) * 1.999); }
+  // The top reaches nearly to a point that sweeps up, and is cut back
+  // from one that droops.
+  var xs = -lw * 0.82;
+  if (eL == 1.0) { xs = -lw * 0.74; } else if (eL == 2.0) { xs = -lw * 0.58; }
+  var xe = rw * 0.75;
+  if (eR == 1.0) { xe = rw * 0.7; } else if (eR == 2.0) { xe = rw * 0.55; }
   for (var i = 0; i < 4; i++) {
     let fi = f32(i);
-    let x0 = mix(-lw * 0.82, rw * 0.72, fi / 4.0) + w * 0.05 * hash1(k + fi * 7.1);
-    let x1 = mix(-lw * 0.82, rw * 0.72, (fi + 1.0) / 4.0) - w * (0.05 + 0.08 * hash1(k + fi * 8.3));
+    let x0 = mix(xs, xe, fi / 4.0) + w * 0.05 * hash1(k + fi * 7.1);
+    let x1 = mix(xs, xe, (fi + 1.0) / 4.0) - w * (0.04 + 0.07 * hash1(k + fi * 8.3));
     let mid = 1.0 - abs(fi - 1.3) / 2.7;
     let y = -h * (0.45 + 0.65 * hash1(k + fi * 9.7) * (0.55 + 0.45 * mid));
     let tl = h * 0.18 * (hash1(k + fi * 10.9) - 0.5);
     P[3 + i * 2] = vec2f(x0, y - tl);
     P[4 + i * 2] = vec2f(x1, y + tl);
   }
-  P[11] = vec2f(rw * (1.0 + 0.15 * hash1(k + 13.3)), yb - h * (0.3 + 1.0 * hash1(k + 12.1)));
+  let yL = P[3].y;
+  let yR = P[10].y;
+  let rL = hash1(k + 6.7);
+  let rR = hash1(k + 12.1);
+  // The leeward end.
+  if (eL == 0.0) {
+    P[1] = vec2f(-lw * 0.6, yb);
+    P[2] = vec2f(-lw, yL - h * (0.1 + 0.3 * rL));
+  } else if (eL == 1.0) {
+    P[1] = vec2f(-lw * 0.72, yb);
+    P[2] = vec2f(-lw, mix(yb, yL, 0.4 + 0.2 * rL));
+  } else {
+    P[1] = vec2f(-lw * 0.64, yb);
+    P[2] = vec2f(-lw, yb + h * (0.12 + 0.25 * rL));
+  }
+  // The windward end.
+  if (eR == 0.0) {
+    P[0] = vec2f(rw * 0.62, yb);
+    P[11] = vec2f(rw * (1.0 + 0.12 * rR), yR - h * (0.1 + 0.3 * rR));
+  } else if (eR == 1.0) {
+    P[0] = vec2f(rw * 0.72, yb);
+    P[11] = vec2f(rw, mix(yb, yR, 0.4 + 0.2 * rR));
+  } else {
+    P[0] = vec2f(rw * 0.64, yb);
+    P[11] = vec2f(rw, yb + h * (0.12 + 0.25 * rR));
+  }
   return P;
 }
 // A point v against a shelf: (signed distance, out negative in; depth below
@@ -469,7 +503,11 @@ struct Tree {
     }
   }
   if (v.x >= P[11].x) { topY = P[11].y; }
-  let dep = clamp((v.y - topY) / max(h * 0.38 - topY, 1e-4), 0.0, 1.0);
+  // The underside: level between its corners, out to the points beyond.
+  var botY = P[1].y;
+  if (v.x < P[1].x) { botY = mix(P[2].y, P[1].y, clamp((v.x - P[2].x) / max(P[1].x - P[2].x, 1e-6), 0.0, 1.0)); }
+  else if (v.x > P[0].x) { botY = mix(P[0].y, P[11].y, clamp((v.x - P[0].x) / max(P[11].x - P[0].x, 1e-6), 0.0, 1.0)); }
+  let dep = clamp((v.y - topY) / max(botY - topY, 1e-4), 0.0, 1.0);
   return vec4f(sg * sqrt(dmin), dep, nx, along);
 }
 // Tree: base b, scale s, seed sd. Returns colour and coverage.
@@ -513,7 +551,7 @@ struct Tree {
     // The shelf: its facets each lit by the way they face, toward the light
     // or away from it, so the light breaks across its sharp angles; below
     // the top the body turns to face us and darkens to its underside.
-    if (v.x < -w * 1.4 || v.x > w * 1.25 || v.y < -h * 1.3 || v.y > h * 0.45) { continue; }
+    if (v.x < -w * 1.4 || v.x > w * 1.35 || v.y < -h * 1.7 || v.y > h * 0.8) { continue; }
     let sh = shelf(v, w, h, fi * 7.31 + sd * 1.37 + 3.0);
     let d = sh.x;
     if (d > DOT / s * 3.0 + px * 2.0) { continue; }
