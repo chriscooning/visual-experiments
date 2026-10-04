@@ -361,42 +361,69 @@ const DOT = 0.0011;
   return pow(0.5 + 0.5 * sin(v), 6.0) * smoothstep(0.2, 0.6, fbm(q * 1.5 - vec2f(t * 0.03, 0.0)));
 }
 
-// A cypress shelf: a flattened lens with a scalloped top and flat underside.
-@diagnostic(off, derivative_uniformity) fn pad(q: vec2f, w: f32) -> f32 {
-  let h = w * 0.3;
-  var d = (length(q / vec2f(w, h)) - 1.0) * h;
-  d = max(d, q.y - h * 0.4);
-  d -= h * 0.22 * pow(abs(sin(q.x / w * 5.5)), 0.6) * step(q.y, 0.0);
-  return d;
+// A windswept Monterey cypress: a trunk leaning away from the sea wind and
+// limbs out to shelves of foliage stacked tier over tier. Every tree grows
+// the same way from its own seed: it leans a little more or less, its trunk
+// bends a little at each joint, its canopy spreads wider or narrower, and
+// its shelves sit, spread and swell differently. In the tree's own units:
+// base at 0, y down. Shelves are centre x, y, half width, half height.
+struct Tree {
+  j1: vec2f, j2: vec2f, j3: vec2f, l1: vec2f, l2: vec2f,
+  m: array<vec4f, 7>,
 }
-
-// Tree: base b, scale s. Returns colour and coverage.
-@diagnostic(off, derivative_uniformity) fn cypress(p: vec2f, b: vec2f, s: f32, sd: f32) -> vec4f {
-  let q = (p - b) / s;
-  let wind = u.b.x + u.b.y;
-  let t = u.a.x;
-  let px = u.a.z * u.b.w / s;
-  // Trunk and limbs as tubes; the nearest one gives the surface normal.
-  let j0 = vec2f(0.0, 0.0);
-  let j1 = vec2f(-0.035, -0.07);
-  let j2 = vec2f(-0.06, -0.13);
-  let j3 = vec2f(-0.13, -0.19);
-  var tb = tube(q, j0, j1, 0.013); var tr = 0.013;
-  var tn = tube(q, j1, j2, 0.01); if (tn.x < tb.x) { tb = tn; tr = 0.01; }
-  tn = tube(q, j2, j3, 0.007); if (tn.x < tb.x) { tb = tn; tr = 0.007; }
-  tn = tube(q, j2, vec2f(0.05, -0.19), 0.005); if (tn.x < tb.x) { tb = tn; tr = 0.005; }
-  tn = tube(q, j1, vec2f(0.07, -0.11), 0.004); if (tn.x < tb.x) { tb = tn; tr = 0.004; }
-  // Shelves, back to front.
+@diagnostic(off, derivative_uniformity) fn rotT(v: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * v.x - s * v.y, s * v.x + c * v.y); }
+@diagnostic(off, derivative_uniformity) fn treeOf(sd: f32) -> Tree {
+  var T: Tree;
+  let lean = 0.18 * (hash1(sd + 1.1) - 0.5);
+  let spread = vec2f(0.9 + 0.25 * hash1(sd + 2.3), 0.92 + 0.16 * hash1(sd + 3.7));
+  T.j1 = rotT(vec2f(-0.035 + 0.016 * (hash1(sd + 4.9) - 0.5), -0.07), lean);
+  T.j2 = rotT(vec2f(-0.06 + 0.024 * (hash1(sd + 6.1) - 0.5), -0.13), lean);
+  T.j3 = rotT(vec2f(-0.13, -0.19) * spread, lean);
+  T.l1 = rotT(vec2f(0.05, -0.19) * spread, lean);
+  T.l2 = rotT(vec2f(0.07, -0.11) * spread, lean);
+  // The shelves, back to front.
   var pc = array<vec3f, 7>(
     vec3f(-0.3, -0.25, 0.14), vec3f(-0.1, -0.29, 0.12), vec3f(0.06, -0.21, 0.09),
     vec3f(-0.4, -0.17, 0.1), vec3f(-0.19, -0.17, 0.13), vec3f(0.02, -0.13, 0.08), vec3f(-0.3, -0.1, 0.07));
+  for (var i = 0; i < 7; i++) {
+    let fi = f32(i);
+    let w = pc[i].z * (0.85 + 0.3 * hash1(sd + fi * 3.3 + 20.0));
+    let c = pc[i].xy * spread + (vec2f(hash1(sd + fi * 5.1 + 30.0), hash1(sd + fi * 6.7 + 40.0)) - 0.5) * vec2f(0.05, 0.024);
+    T.m[i] = vec4f(rotT(c, lean), w, w * (0.27 + 0.07 * hash1(sd + fi * 2.9 + 50.0)));
+  }
+  return T;
+}
+// A limb tapering from radius ra at a to rb at b: (distance, offset x, y,
+// radius there).
+@diagnostic(off, derivative_uniformity) fn taper(q: vec2f, a: vec2f, b: vec2f, ra: f32, rb: f32) -> vec4f {
+  let ba = b - a;
+  let h = clamp(dot(q - a, ba) / max(dot(ba, ba), 1e-8), 0.0, 1.0);
+  let off = q - a - ba * h;
+  let r = mix(ra, rb, h);
+  return vec4f(length(off) - r, off, r);
+}
+// Tree: base b, scale s, seed sd. Returns colour and coverage.
+@diagnostic(off, derivative_uniformity) fn cypress(p: vec2f, b: vec2f, s: f32, sd: f32) -> vec4f {
+  let q = (p - b) / s;
+  if (q.x < -0.64 || q.x > 0.3 || q.y < -0.43 || q.y > 0.03) { return vec4f(0.0); }
+  var T = treeOf(sd);
+  let wind = u.b.x + u.b.y;
+  let t = u.a.x;
+  let px = u.a.z * u.b.w / s;
+  // Trunk and limbs, tapering; the nearest one gives the surface normal.
+  var tb = taper(q, vec2f(0.0), T.j1, 0.0145, 0.0115);
+  var tn = taper(q, T.j1, T.j2, 0.0115, 0.009); if (tn.x < tb.x) { tb = tn; }
+  tn = taper(q, T.j2, T.j3, 0.008, 0.006); if (tn.x < tb.x) { tb = tn; }
+  tn = taper(q, T.j2, T.l1, 0.006, 0.004); if (tn.x < tb.x) { tb = tn; }
+  tn = taper(q, T.j1, T.l2, 0.005, 0.0035); if (tn.x < tb.x) { tb = tn; }
   // Branches to each shelf.
   for (var i = 0; i < 7; i++) {
-    let c = pc[i].xy + vec2f(0.0, pc[i].z * 0.08);
-    let src = select(j2, j3, c.x < -0.15);
-    tn = tube(q, src, c, 0.0035); if (tn.x < tb.x) { tb = tn; tr = 0.0035; }
+    let c = T.m[i].xy + vec2f(0.0, T.m[i].z * 0.08);
+    let src = select(T.j2, T.j3, c.x < -0.15);
+    tn = taper(q, src, c, 0.004, 0.003); if (tn.x < tb.x) { tb = tn; }
   }
   // Bark: lit round the limb from the one light, whichever side it's on.
+  let tr = tb.w;
   let bn = roundN(tb.yz, vec2f(tr));
   let bl = lambert(bn, 0.35);
   var bark = barkTex(q.y + q.x * 0.4, clamp(tb.y / tr, -1.0, 1.0), 0.012, bl, px, C(20) * 0.6, C(20), mix(C(20), C(12), 0.6), sd * 5.0);
@@ -405,29 +432,53 @@ const DOT = 0.0011;
   var acc = over(vec4f(0.0), bark, fa);
   let hv = (q.y * 1.3 + q.x) / 0.012;
   acc = over(acc, C(24), dotLine((fract(hv) - 0.5) * 0.012, dot(q, vec2f(0.61, -0.79)), DOT * 0.6 / s, px, floor(hv) + sd) * fa * 0.4);
-  acc = over(acc, C(24), dotLine(tb.x, q.y * 0.8 + q.x * 0.6, DOT / s, px, sd + 2.0) * 0.55);
+  acc = over(acc, C(24), dotLine(tb.x, q.y * 0.8 + q.x * 0.6, DOT / s, px, sd + 2.0) * 0.5);
   for (var i = 0; i < 7; i++) {
+    let m = T.m[i];
+    let w = m.z;
+    let h = m.w;
     let fi = f32(i);
-    let sw = wind * 0.006 * sin(t * 1.1 + fi * 1.7 + sd) * (0.5 - pc[i].y * 2.0);
-    let c = pc[i].xy + vec2f(sw, 0.0);
-    let w = pc[i].z;
-    let h = w * 0.3;
-    let v = q - c;
-    let d = pad(v, w);
-    if (d < DOT / s * 3.0 + px * 2.0) {
-      // A shelf is a flattened dome over a flat, shadowed underside: lit
-      // from its own curve, so the bright rim swings round with the light.
-      let yy = clamp((v.y + h) / (h * 1.4), 0.0, 1.0);
-      let n = roundN(v - vec2f(0.0, h * 0.25), vec2f(w, h * 1.1));
-      let lit = lambert(n, 0.3) * (1.0 - smoothstep(0.55, 0.95, yy) * 0.85);
-      var fc = stippleBush(v, 0.08 + 0.92 * lit, 0.0062, px, mix(C(17), C(24), 0.4), C(18), C(19), mix(C(19), C(14), 0.45), C(21), fi * 3.1 + sd);
-      fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.6, 1.0, yy) * 0.7);
-      fc = moonCast(fc, lit);
-      acc = over(acc, fc, fillA(d, px));
-      acc = over(acc, C(24), dotLine(d, v.x + select(0.0, 40.0, v.y > 0.0), DOT / s, px, fi + sd * 3.0) * 0.8);
+    let sw = wind * 0.006 * sin(t * 1.1 + fi * 1.7 + sd) * (0.5 - m.y * 2.0);
+    let v = q - m.xy - vec2f(sw, 0.0);
+    if (abs(v.x) > w * 1.2 || v.y < -h * 1.8 || v.y > h * 0.7) { continue; }
+    // A shelf: a flattened lens over a flat, shadowed underside, its top
+    // risen into clumps of different sizes at uneven spacing rather than a
+    // row of even scallops. Lit from its own curve, so the bright rim swings
+    // round with the light.
+    var bump = 0.0;
+    for (var j = 0; j < 7; j++) {
+      let fj = f32(j);
+      let hj = hash1(fi * 5.3 + fj * 1.7 + sd);
+      let hk = hash1(fi * 2.9 + fj * 3.1 + sd + 0.5);
+      let x0 = ((fj + 0.5) / 7.0 - 0.5) * 1.7 + (hk - 0.5) * 0.18;
+      let bw = 0.07 + 0.08 * hj;
+      bump = max(bump, (0.5 + 0.5 * hk) * exp(-pow((v.x / w - x0) / bw, 2.0)));
     }
+    var d = (length(v / vec2f(w, h)) - 1.0) * h;
+    d -= h * 0.28 * bump * step(v.y, 0.0);
+    d = max(d, v.y - h * 0.4);
+    d += h * 0.06 * (fbm(v / w * vec2f(5.0, 7.0) + fi * 3.3 + sd) - 0.5);
+    if (d > DOT / s * 3.0 + px * 2.0) { continue; }
+    let yy = clamp((v.y + h) / (h * 1.4), 0.0, 1.0);
+    let n = roundN(v - vec2f(0.0, h * 0.25), vec2f(w, h * 1.1));
+    let lit = lambert(n, 0.3) * (1.0 - smoothstep(0.55, 0.95, yy) * 0.85);
+    var fc = stippleBush(v, 0.08 + 0.92 * lit, 0.0062, px, mix(C(17), C(24), 0.4), C(18), C(19), mix(C(19), C(14), 0.45), C(21), fi * 3.1 + sd);
+    fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.6, 1.0, yy) * 0.7);
+    fc = moonCast(fc, lit);
+    acc = over(acc, fc, fillA(d, px));
+    // Its outline in dots along the top and the flat underside, fading out
+    // round the tips, where a line drawn along x would smear.
+    acc = over(acc, C(24), dotLine(d, v.x + select(0.0, 40.0, v.y > 0.0), DOT / s, px, fi + sd * 3.0) * 0.65 * (1.0 - smoothstep(0.7, 0.92, abs(v.x) / w)));
   }
   return unpremul(acc);
+}
+// The three cypresses: base x, height of the base above the bluff's edge,
+// scale, and the seed each grows from (a new one every time).
+@diagnostic(off, derivative_uniformity) fn treeAt(k: i32) -> vec4f {
+  let g = fract(u.a.w * 0.6180339) * 97.0;
+  if (k == 0) { return vec4f(-0.56, 0.004, 0.55, 2.0 + g); }
+  if (k == 1) { return vec4f(0.14, 0.004, 0.42, 5.0 + g); }
+  return vec4f(-0.08, 0.006, 1.0, g);
 }
 
 // Height of the bluff: terraced contour bands over a gentle roll.
@@ -787,7 +838,7 @@ var<private> HLAND: array<vec4f, 3>;
   let h = hash21(id + u.a.w + 4.0);
   let cx = (id.x + 0.5 + (hash21(id + 2.0) - 0.5) * 0.5) * cwb;
   if (h <= 0.55 || abs(cx - pathX(bdy)) < 0.03) { return vec4f(0.0); }
-  let r = 0.008 + bdy * 0.05 + 0.006 * h;
+  let r = (0.008 + bdy * 0.05 + 0.006 * h) * (0.62 + 0.75 * hash21(id + 9.3));
   let cy = bluffTop(cx) + (bb + 1.0 - 0.35 * sin(cx * 9.0 + u.a.w)) * 0.026;
   return vec4f(cx, cy, r, h);
 }
@@ -801,14 +852,19 @@ var<private> HLAND: array<vec4f, 3>;
 }
 // Everything the cypresses throw across the bluff: trunks and canopies.
 @diagnostic(off, derivative_uniformity) fn treeShade(ps: vec2f, pq: vec2f, px: f32) -> f32 {
-  var bs = array<vec3f, 3>(vec3f(-0.56, 0.006, 0.55), vec3f(0.14, 0.006, 0.42), vec3f(-0.08, 0.008, 1.0));
   var sh = 0.0;
   for (var i = 0; i < 3; i++) {
-    let s = bs[i].z;
-    let b = vec2f(bs[i].x, bluffTop(bs[i].x) + bs[i].y);
-    sh = max(sh, stemShadow(ps, b, b + vec2f(-0.07, -0.15) * s, 0.009 * s, px));
-    sh = max(sh, blobShadowQ(pq, ps, b + vec2f(-0.29, -0.19) * s, 0.12 * s, b.y, px));
-    sh = max(sh, blobShadowQ(pq, ps, b + vec2f(-0.03, -0.21) * s, 0.11 * s, b.y, px));
+    let ta = treeAt(i);
+    let s = ta.z;
+    let b = vec2f(ta.x, bluffTop(ta.x) + ta.y + 0.002);
+    var T = treeOf(ta.w);
+    sh = max(sh, stemShadow(ps, b, b + T.j2 * s, 0.009 * s, px));
+    // The canopy's main mass: the big shelves.
+    for (var j = 0; j < 5; j++) {
+      if (j == 2 || j == 3) { continue; }
+      let m = T.m[j];
+      sh = max(sh, blobShadowQ(pq, ps, b + (m.xy + vec2f(0.0, 0.05)) * s, m.z * 0.85 * s, b.y, px));
+    }
   }
   return sh;
 }
@@ -1199,14 +1255,17 @@ var<private> HLAND: array<vec4f, 3>;
   // Ink where land stands in front of what lies behind it.
   let jump = fwidth(invZ) / max(invZ, 1e-3);
   col = mix(col, C(24), smoothstep(0.05, 0.14, jump) * select(0.0, 1.0, inBand && p.x > -0.07) * smoothstep(bt + px * 2.0, bt + px * 5.0, p.y) * 0.75 * (1.0 - hide));
-  // Coyote brush: round clumps on the band edges, drawn whole over the ground
-  // so neither the brow, the skyline nor the cliff's edge cuts one. Back to
+  // Coyote brush: clumps on the band edges, drawn whole over the ground so
+  // neither the brow, the skyline nor the cliff's edge cuts one. Back to
   // front, each lit from its own curve: a bright rim on the side the light
-  // comes from, near-black underneath.
+  // comes from, near-black underneath. No two alike: wide and low or round
+  // and tall, lobed more or less, leaning a little leeward, some with a
+  // smaller clump grown in at one side. (The tall ones reach up past the
+  // band above, so look a band further down for them.)
   if (nearBluff) {
     let rowV = (p.y - bt) / 0.026 + 0.35 * sin(p.x * 9.0 + u.a.w) + 0.15 * sin(p.x * 23.0);
     let band = floor(rowV);
-    for (var bo = 1; bo >= -1; bo--) {
+    for (var bo = 1; bo >= -2; bo--) {
       let bb = band - f32(bo);
       let cib = floor(p.x / (0.045 + max(bb + 1.0, 0.0) * 0.026 * 0.2));
       for (var co = -1; co <= 1; co++) {
@@ -1214,28 +1273,38 @@ var<private> HLAND: array<vec4f, 3>;
         let r = bu.z;
         if (r <= 0.0) { continue; }
         let v = p - bu.xy;
-        if (abs(v.x) > r * 1.5 + 0.005 || v.y < -r * 1.15 - 0.005 || v.y > r * 0.45 + 0.005 || !brushHolds(bu)) { continue; }
+        if (abs(v.x) > r * 2.5 + 0.005 || v.y < -r * 1.6 - 0.005 || v.y > r * 0.45 + 0.005 || !brushHolds(bu)) { continue; }
         let h = bu.w;
-        let sd = max(length(v / vec2f(1.3, 1.0)) - r * (1.0 + 0.12 * sin(atan2(v.y, v.x) * 7.0 + h * 9.0)), v.y - r * 0.45);
+        let hs = vec3f(hash21(bu.xy * 31.7), hash21(bu.xy * 17.3 + 2.0), hash21(bu.xy * 23.9 + 5.0));
+        let ab = vec2f(1.05 + 0.55 * hs.x, 0.8 + 0.4 * hs.y) * r;
+        let vb = vec2f(v.x - 0.18 * v.y, v.y);
+        let lobes = 5.0 + floor(hs.z * 5.0);
+        var sd = max(length(vb / ab) * r - r * (1.0 + (0.06 + 0.12 * fract(hs.z * 7.3)) * sin(atan2(vb.y, vb.x) * lobes + h * 9.0)), v.y - r * 0.45);
+        var bn = roundN(vb, ab);
+        if (fract(hs.x * 5.7) > 0.5) {
+          let r2 = r * (0.55 + 0.25 * hs.z);
+          let v2 = vb - vec2f(select(-1.0, 1.0, hs.y > 0.5) * ab.x * 0.85, 0.0);
+          let s2 = max(length(v2 / vec2f(1.15, 0.95)) - r2 * (1.0 + 0.1 * sin(atan2(v2.y, v2.x) * 6.0 + h * 5.0)), v2.y - r2 * 0.45);
+          if (s2 < sd) { bn = roundN(v2, vec2f(r2 * 1.15, r2 * 0.95)); }
+          sd = min(sd, s2);
+        }
         if (sd > 0.005) { continue; }
-        let bn = roundN(v, vec2f(r * 1.3, r));
         let blit = smoothstep(0.0, 0.58, lambert(bn, 0.45)) * (1.0 - smoothstep(0.0, r * 0.45, v.y) * 0.6);
         var bc = stippleBush(p, 0.05 + 0.95 * blit, 0.0032 + r * 0.12, px, mix(C(17), C(24), 0.35), C(18), mix(C(19), C(14), 0.5), C(14), C(21), h * 13.0);
         bc = mix(bc, mix(C(16), C(24), 0.6), tsh * 0.7);
         bc = moonCast(bc, blit);
         col = mix(col, bc, fillA(sd, px));
-        col = mix(col, C(24), dotRing(sd, v, r * 1.1, DOT * 0.8, px, h * 31.0) * 0.55);
+        col = mix(col, C(24), dotRing(sd, v, ab.x * 1.05, DOT * 0.8, px, h * 31.0) * 0.4);
       }
     }
   }
 
   // ---- Cypresses: two behind, the big one in front.
-  let c1 = cypress(p, vec2f(-0.56, bluffTop(-0.56) + 0.004), 0.55, 2.0);
-  col = mix(col, c1.rgb, c1.a);
-  let c2 = cypress(p, vec2f(0.14, bluffTop(0.14) + 0.004), 0.42, 5.0);
-  col = mix(col, c2.rgb, c2.a);
-  let c0 = cypress(p, vec2f(-0.08, bluffTop(-0.08) + 0.006), 1.0, 0.0);
-  col = mix(col, c0.rgb, c0.a);
+  for (var k = 0; k < 3; k++) {
+    let ta = treeAt(k);
+    let tc = cypress(p, vec2f(ta.x, bluffTop(ta.x) + ta.y), ta.z, ta.w);
+    col = mix(col, tc.rgb, tc.a);
+  }
 
   // ---- Foreground bank: combed grass, ice plant, poppies and a fence.
   let pf = p0 + vec2f(tilt * 0.04, 0.0);
