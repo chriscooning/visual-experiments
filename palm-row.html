@@ -845,13 +845,13 @@ const DOT = 0.0011;
     }
     hc = moonCast(hc, nl);
     col = mix(col, hc, fillA(nt - p.y, px));
-    // A hedgerow along the crest: stippled, dark underneath.
-    let hgTop = nt - 0.012 - 0.008 * abs(sin(p.x * 55.0 + u.a.w)) - 0.004 * sin(p.x * 13.0);
-    let hgBot = nt + 0.008;
+    // A low hedgerow along the crest: stippled, dark underneath.
+    let hgTop = nt - 0.006 - 0.004 * abs(sin(p.x * 55.0 + u.a.w)) - 0.002 * sin(p.x * 13.0);
+    let hgBot = nt + 0.004;
     if (p.y > hgTop - px * 2.0 && p.y < hgBot + px * 2.0) {
       let hm = (hgTop + hgBot) * 0.5;
       let hl = smoothstep(0.0, 0.6, lambert(roundN(vec2f(0.0, p.y - hm), vec2f(1.0, (hgBot - hgTop) * 0.62)), 0.4));
-      let hgc = stippleBush(p, hl, 0.0034, px, mix(C(14), C(27), 0.5), C(14), C(21), C(16), C(18), 41.0);
+      let hgc = stippleBush(p, hl, 0.0026, px, mix(C(14), C(27), 0.5), C(14), C(21), C(16), C(18), 41.0);
       col = mix(col, hgc, fillA(hgTop - p.y, px) * fillA(p.y - hgBot, px));
       col = mix(col, C(27), dotLine(p.y - hgTop, p.x, DOT * 0.75, px, 41.0) * 0.5);
     }
