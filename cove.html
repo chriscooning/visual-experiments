@@ -454,21 +454,31 @@ var<private> HLAND: array<vec3f, 3>;
 // so the surf breaks round it.
 @diagnostic(off, derivative_uniformity) fn rockAt(X: f32, Z: f32, c: Coast) -> f32 {
   let d = (X - c.x) / c.k;
-  if (d < -0.01 || d > 0.7 || Z < 0.9) { return -1.0; }
-  let cz = 0.35; let cd = 0.14;
-  let key = vec2f(floor(Z / cz), floor(max(d, 0.0) / cd));
-  let dens = (0.12 + 0.035 * u.b.w) * (1.0 - 0.4 * smoothstep(1.0, 4.0, key.y));
+  if (d < -0.01 || d > 0.95 || Z < 0.9 || Z > 6.2) { return -1.0; }
+  // Two kinds: near us, low mounds; further off, where a low rock would
+  // show only as a streak, fewer and bigger stacks standing up steeply out
+  // of the water.
+  let far = Z > 2.6;
+  let cz = select(0.35, 0.65, far);
+  let cd = select(0.14, 0.32, far);
+  let key = vec2f(floor(Z / cz), floor(max(d, 0.0) / cd)) + select(vec2f(0.0), vec2f(0.0, 50.0), far);
+  let kd = key.y - select(0.0, 50.0, far);
+  var dens = (0.12 + 0.035 * u.b.w) * (1.0 - 0.4 * smoothstep(1.0, 4.0, kd));
+  if (far) { dens = (0.06 + 0.02 * u.b.w) * (1.0 - 0.5 * smoothstep(1.0, 3.0, kd)); }
   if (hash21(key + u.a.w * 1.3 + 41.0) > dens) { return -1.0; }
   let h1 = hash21(key + 3.7); let h2 = hash21(key + 8.1); let h3 = hash21(key + 12.9);
   let h4 = hash21(key + 17.3); let h5 = hash21(key + 23.5);
-  let z0 = (key.x + 0.25 + 0.5 * h1) * cz;
-  let d0 = (key.y + 0.3 + 0.4 * h2) * cd + 0.01;
-  let R = 0.018 + 0.022 * h3;
-  let q = vec2f((Z - z0) / (R * (1.0 + 0.8 * h4)), (d - d0) / R);
+  let z0 = (floor(Z / cz) + 0.25 + 0.5 * h1) * cz;
+  // (Each kind keeps to its own side of the line between them.)
+  if ((!far && z0 > 2.45) || (far && z0 < 2.85)) { return -1.0; }
+  let d0 = (kd + 0.3 + 0.4 * h2) * cd + 0.01;
+  let R = select(0.018 + 0.022 * h3, 0.04 + 0.045 * h3, far);
+  let q = vec2f((Z - z0) / (R * (1.0 + select(0.8, 0.5, far) * h4)), (d - d0) / R);
   let r = length(q) * (1.0 + 0.2 * (vnoise(q * 2.2 + key * 3.1) - 0.5));
-  if (r >= 1.0) { return -(r - 1.0) * R * 6.0; }
+  if (r >= 1.0) { return -(r - 1.0) * R * select(6.0, 4.0, far); }
   // Its peak set off to one side, so one flank is steeper than the other.
   let lean = (vec2f(hash21(key + 9.1), hash21(key + 4.4)) - 0.5) * 0.9;
+  if (far) { return R * (1.4 + 0.9 * h5) * pow(1.0 - r, 0.45) * (1.0 + 0.6 * dot(q, lean)) + 0.002; }
   return R * (1.0 + 1.2 * h5) * pow(1.0 - r, 0.7) * (1.0 + dot(q, lean)) + 0.002;
 }
 // Height of the land at (X, Z): cliffs of bare rock dropping sheer to the
@@ -522,7 +532,7 @@ var<private> HLAND: array<vec3f, 3>;
   var zMax = 14.0;
   if (dy > 1e-4) { zMax = min(zMax, EYE / dy); }
   if (dy < -1e-4) { zMax = min(zMax, (PLAT + 0.04 - EYE) / -dy); }
-  let z0 = reachCoast(p.x, 0.76, zMax);
+  let z0 = reachCoast(p.x, 1.0, zMax);
   if (z0 < 0.0) { return -1.0; }
   // Step along it: in long strides while it runs well out to sea of the
   // coast, in short ones near and over the land, each crossing it square to
@@ -534,9 +544,9 @@ var<private> HLAND: array<vec3f, 3>;
     let cb = coastBare(z);
     let rate = max(abs(p.x - cb.slope) / cb.k, 0.03);
     // (Only once the ray runs down near the water can it meet a rock, out
-    // to 0.7 from the waterline; until then only the land is in reach.)
-    let low = EYE - dy * z < 0.075;
-    let gap = (p.x * z - cb.x) / cb.k - select(0.075, 0.76, low);
+    // to 0.95 from the waterline; until then only the land is in reach.)
+    let low = EYE - dy * z < 0.28;
+    let gap = (p.x * z - cb.x) / cb.k - select(0.075, 1.0, low);
     // (Over the land, while the ray runs well above it, stride by how far
     // above it it runs: no slope climbs faster than 1.5 to 1.)
     var lift = 0.0;
@@ -546,9 +556,9 @@ var<private> HLAND: array<vec3f, 3>;
       lift = max(above - 0.12, 0.0) * 0.6 / (1.5 + abs(dy));
     }
     za = z;
-    var stride = clamp(max(max(gap, 0.0) / rate, lift) + select(0.011, 0.006, low) / rate, 0.006, 0.5);
+    var stride = clamp(max(max(gap, 0.0) / rate, lift) + select(0.011, 0.006 * max(1.0, z * 0.5), low) / rate, 0.006, 0.5);
     // (Never stride from above the rocks' reach down past it in one go.)
-    if (!low && dy > 1e-4) { stride = min(stride, max((EYE - dy * z - 0.07) / dy, 0.006)); }
+    if (!low && dy > 1e-4) { stride = min(stride, max((EYE - dy * z - 0.275) / dy, 0.006)); }
     z += stride;
     if (z > zMax) { break; }
   }
