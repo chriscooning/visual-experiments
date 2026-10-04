@@ -95,7 +95,7 @@ const SHADER = /* wgsl */ `
 struct U {
   a: vec4f,    // time, aspect, px, seed
   b: vec4f,    // rain 0..1, drop size 0..1, _, chroma
-  c: vec4f,    // traffic, _, fog 0..1, far end of the street (x 0..1)
+  c: vec4f,    // traffic, 1 once a finger has touched the glass, fog 0..1, far end of the street (x 0..1)
   lights: array<vec4f, 4>,        // car colours: tail, head, and two signs
   trail: array<vec4f, ${NT}>,     // finger: x, y, time, radius
 }
@@ -117,6 +117,7 @@ fn saw(b: f32, t: f32) -> f32 { return S(0.0, b, t) * S(1.0, b, t); }
 // ---- When this spot of glass was last cleared by a finger.
 fn lastCleared(q: vec2f) -> f32 {
   var last = -1e4;
+  if (u.c.y < 0.5) { return last; }
   for (var i = 0; i < ${NT}; i++) {
     let f = u.trail[i];
     if (f.w > 0.0 && length(q - f.xy) < f.w) { last = max(last, f.z); }
@@ -190,11 +191,11 @@ fn toGlass(q: vec2f) -> vec2f {
   return vec2f((q.x - u.a.y * 0.5) * z, s);
 }
 
-fn water(q: vec2f) -> vec3f {
+fn water(q: vec2f) -> vec3f { return waterSince(q, u.a.x - lastCleared(q)); }
+// (since: how long since this glass was cleared; water comes back over seconds.)
+fn waterSince(q: vec2f, since: f32) -> vec3f {
   let t = u.a.x * 0.2;
   let rain = u.b.x;
-  // How long since this glass was cleared; water comes back over seconds.
-  let since = u.a.x - lastCleared(q);
   let back = S(0.3, 5.0 / (0.3 + rain), since);
   let sc = 1.0 / (0.55 + u.b.y * 0.9);
   let uv = (toGlass(q) - vec2f(0.0, 0.5)) * sc;
@@ -211,16 +212,35 @@ fn water(q: vec2f) -> vec3f {
 }
 
 // ---- The street, at a focus from 0 (sharp) to 1 (very soft), with the cars.
-fn street(q: vec2f, focus: f32) -> vec3f {
+// (Speed: each pixel looks at the street up to five times, so what doesn't
+// change between looks is worked out once, and nothing is fetched or added
+// whose share would come to exactly nothing.)
+fn streetTex(q: vec2f, focus: f32) -> vec3f {
   let uv = vec2f(q.x / u.a.y, q.y);
-  let a = textureSampleLevel(sharpT, samp, uv, 0.0).rgb;
-  let b = textureSampleLevel(softT, samp, uv, 0.0).rgb;
-  let c = textureSampleLevel(blurT, samp, uv, 0.0).rgb;
-  var col = mix(mix(a, b, S(0.0, 0.5, focus)), c, S(0.5, 1.0, focus));
-  // Traffic up and down the street: headlights coming on the left, tail
-  // lights going away on the right, each laying a streak on the wet road.
+  let wb = S(0.0, 0.5, focus);
+  let wc = S(0.5, 1.0, focus);
+  var col: vec3f;
+  if (wb >= 1.0) {
+    col = textureSampleLevel(softT, samp, uv, 0.0).rgb;
+  } else {
+    col = mix(textureSampleLevel(sharpT, samp, uv, 0.0).rgb, textureSampleLevel(softT, samp, uv, 0.0).rgb, wb);
+  }
+  if (wc > 0.0) { col = mix(col, textureSampleLevel(blurT, samp, uv, 0.0).rgb, wc); }
+  return col;
+}
+
+// Traffic up and down the street: headlights coming on the left, tail lights
+// going away on the right, each laying a streak on the wet road. Where the
+// lights are doesn't depend on the pixel, so it is found once per pixel and
+// the cars out of sight are left out.
+var<private> carN: i32;
+var<private> carP: array<vec2f, 12>;
+var<private> carC: array<vec3f, 12>;
+var<private> carZF: array<vec2f, 12>;    // distance, fade
+fn prepCars() {
   let t = u.a.x * u.c.x;
   let Sx = 0.45 * u.a.y;
+  carN = 0;
   for (var i = 0; i < 6; i++) {
     let fi = f32(i);
     let h = N(fi * 7.31 + u.a.w);
@@ -230,18 +250,29 @@ fn street(q: vec2f, focus: f32) -> vec3f {
     let z = mix(32.0, 1.6, ph * ph);
     let X = select(0.45 + 0.2 * h, -0.45 - 0.2 * h, coming);
     let lc = select(u.lights[0].rgb, u.lights[1].rgb, coming);
-    let R = mix(0.012, 0.16, focus) / z + 0.0015;
     let fade = S(32.0, 24.0, z) * S(1.6, 2.6, z);
+    if (fade == 0.0) { continue; }
     for (var k = 0; k < 2; k++) {
-      let lp = vec2f(u.a.y * u.c.w + (X + (f32(k) - 0.5) * 0.4) * Sx / z, 0.45 + (0.6 - 0.3) * Sx / z);
-      let d = length(q - lp) / R;
-      let disc = (1.0 - S(0.8, 1.0, d)) * (0.75 + 0.25 * S(0.5, 0.95, d));
-      let glow = exp(-d * d * 2.0) * (1.0 - focus);
-      col += lc * (disc * mix(1.6, 0.4, focus) + glow) * fade;
-      let below = q.y - lp.y;
-      let rx = (q.x - lp.x) / (R * 1.5);
-      col += lc * exp(-rx * rx) * S(0.0, 0.02, below) * S(0.6, 0.0, below) * 0.18 * fade;
+      carP[carN] = vec2f(u.a.y * u.c.w + (X + (f32(k) - 0.5) * 0.4) * Sx / z, 0.45 + (0.6 - 0.3) * Sx / z);
+      carC[carN] = lc;
+      carZF[carN] = vec2f(z, fade);
+      carN++;
     }
+  }
+}
+
+fn street(q: vec2f, focus: f32) -> vec3f {
+  var col = streetTex(q, focus);
+  for (var j = 0; j < carN; j++) {
+    let lp = carP[j]; let lc = carC[j]; let z = carZF[j].x; let fade = carZF[j].y;
+    let R = mix(0.012, 0.16, focus) / z + 0.0015;
+    let d = length(q - lp) / R;
+    let disc = (1.0 - S(0.8, 1.0, d)) * (0.75 + 0.25 * S(0.5, 0.95, d));
+    let glow = exp(-d * d * 2.0) * (1.0 - focus);
+    col += lc * (disc * mix(1.6, 0.4, focus) + glow) * fade;
+    let below = q.y - lp.y;
+    let rx = (q.x - lp.x) / (R * 1.5);
+    col += lc * exp(-rx * rx) * S(0.0, 0.02, below) * S(0.6, 0.0, below) * 0.18 * fade;
   }
   return col;
 }
@@ -250,8 +281,10 @@ fn street(q: vec2f, focus: f32) -> vec3f {
   let t = u.a.x; let asp = u.a.y; let px = u.a.z;
   let p = vec2f(uv.x * asp, uv.y);
 
+  prepCars();
   // The water and its slope.
-  let w = water(p);
+  let since = t - lastCleared(p);
+  let w = waterSince(p, since);
   let e = vec2f(0.0012, 0.0);
   let wx = water(p + e).z;
   let wy = water(p + e.yx).z;
@@ -259,7 +292,6 @@ fn street(q: vec2f, focus: f32) -> vec3f {
 
   // Misted glass blurs the street most; a trail clears the mist, a drop
   // brings it sharp; mist thickens again after a clearing.
-  let since = t - lastCleared(p);
   let fog = u.c.z * S(0.5, 8.0, since);
   let focus = mix(clamp(0.72 + 0.28 * fog - w.y * 0.15, 0.6, 1.0), 0.28, S(0.1, 0.2, w.x));
 
@@ -271,26 +303,28 @@ fn street(q: vec2f, focus: f32) -> vec3f {
   let look = p;
   let ch = u.b.w * 0.1;
   var col = vec3f(
-    street(look + bend * (1.0 - ch), focus).r,
-    street(look + bend, focus).g,
-    street(look + bend * (1.0 + ch), focus).b);
+      street(look + bend * (1.0 - ch), focus).r,
+      street(look + bend, focus).g,
+      street(look + bend * (1.0 + ch), focus).b);
 
   // Mist scatters a little light back; drops and trails are clear of it.
   let mist = fog * (1.0 - S(0.1, 0.2, w.x)) * (1.0 - 0.35 * w.y);
-  col = mix(col, col * 0.88 + street(p, 1.0) * 0.25 + vec3f(0.012), mist * 0.6);
+  if (mist > 0.0) { col = mix(col, col * 0.88 + street(p, 1.0) * 0.25 + vec3f(0.012), mist * 0.6); }
   // A dark edge where light turns back inside each drop; each catches the
   // glow above it on its upper edge and gathers light at its foot.
-  let g = n / e.x * 0.006;
   let inDrop = S(0.1, 0.25, w.x);
-  col *= 1.0 - S(0.7, 1.2, length(g)) * 0.3 * inDrop;
-  let glow = street(p - vec2f(0.0, 0.08), 1.0);
-  let gl = length(g);
-  let gn = g / max(gl, 1e-4);
-  col += glow * (S(0.4, 1.0, gn.y) * S(0.3, 0.9, gl) * 0.35 + S(0.4, 1.0, -gn.y) * S(0.5, 1.0, gl) * 0.15) * inDrop;
-  col *= 1.0 + 0.5 * inDrop;
-  // A glint of the brightest light, high on each drop.
-  let spec = pow(max(dot(gn, vec2f(0.45, 0.89)), 0.0), 10.0) * S(0.35, 0.75, gl) * (1.0 - S(0.9, 1.3, gl));
-  col += (glow * 1.5 + vec3f(0.25)) * spec * inDrop * S(0.3, 0.6, w.x);
+  if (inDrop > 0.0) {
+    let g = n / e.x * 0.006;
+    col *= 1.0 - S(0.7, 1.2, length(g)) * 0.3 * inDrop;
+    let glow = street(p - vec2f(0.0, 0.08), 1.0);
+    let gl = length(g);
+    let gn = g / max(gl, 1e-4);
+    col += glow * (S(0.4, 1.0, gn.y) * S(0.3, 0.9, gl) * 0.35 + S(0.4, 1.0, -gn.y) * S(0.5, 1.0, gl) * 0.15) * inDrop;
+    col *= 1.0 + 0.5 * inDrop;
+    // A glint of the brightest light, high on each drop.
+    let spec = pow(max(dot(gn, vec2f(0.45, 0.89)), 0.0), 10.0) * S(0.35, 0.75, gl) * (1.0 - S(0.9, 1.3, gl));
+    col += (glow * 1.5 + vec3f(0.25)) * spec * inDrop * S(0.3, 0.6, w.x);
+  }
 
   // The faint sheen of the leaning glass.
   col += vec3f(0.03, 0.04, 0.05) * S(0.5, 0.0, uv.y) * (1.0 - u.c.z * 0.3);
@@ -559,7 +593,7 @@ if (AT !== null) seed = 7;
 
 // The finger's trail: the last NT points, each wiping a patch at its time.
 const trail = Array.from({ length: NT }, () => [0, 0, 0, 0]);
-let ti = 0, dragging = false, lastPt = null;
+let ti = 0, dragging = false, lastPt = null, touched = 0;
 function toP(e) {
   const r = canvas.getBoundingClientRect();
   return [(e.clientX - r.left) / r.height, (e.clientY - r.top) / r.height];
@@ -568,6 +602,7 @@ function addPt(q) {
   if (lastPt && Math.hypot(q[0] - lastPt[0], q[1] - lastPt[1]) < 0.025) return;
   lastPt = q;
   trail[ti] = [q[0], q[1], t, 0.05];
+  touched = 1;
   ti = (ti + 1) % NT;
 }
 canvas.addEventListener('pointerdown', (e) => { dragging = true; lastPt = null; addPt(toP(e)); canvas.setPointerCapture(e.pointerId); });
@@ -576,13 +611,16 @@ const release = () => { dragging = false; };
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 
+// (The scene's light colours are worked out once per scene, not per frame.)
+const lightsOf = {};
 function uniforms() {
   const sc = SCENES[p.scene];
+  const lights = lightsOf[p.scene] || (lightsOf[p.scene] = [[...hex(sc.tail), 1], [...hex(sc.head), 1], [...hex(sc.signs[0]), 1], [...hex(sc.signs[1]), 1]]);
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
     b: [p.rain, p.size, 0, p.chroma],
-    c: [p.traffic, 0, p.fog, vanishX],
-    lights: [[...hex(sc.tail), 1], [...hex(sc.head), 1], [...hex(sc.signs[0]), 1], [...hex(sc.signs[1]), 1]],
+    c: [p.traffic, touched, p.fog, vanishX],
+    lights,
     trail,
   };
 }
@@ -594,24 +632,46 @@ function makeTex(cv) {
   gpu.gpu.queue.copyExternalImageToTexture({ source: cv }, { texture: tx.gpu }, [cv.width, cv.height]);
   return tx;
 }
+// Painting the street is the slow part, so the last few paintings are kept
+// (by scene, size and seed): going back to one is instant.
+const painted = new Map();
 function buildStreet() {
   const h = Math.min(1200, Math.max(400, Math.round(H * 0.7)));
   const w = Math.min(4096, Math.round(h * aspect));
-  const { canvas: sharp, lights } = paintStreet(w, h, SCENES[p.scene], seed);
-  const k = h / 600;
-  const soft = soften(sharp, lights, w, h, 6 * k, 16 * k);
-  const blur = soften(sharp, lights, w, h, 18 * k, 40 * k);
-  const old = texs;
-  texs = [makeTex(sharp), makeTex(soft), makeTex(blur)];
+  const key = p.scene + '|' + w + '|' + h + '|' + seed;
+  let got = painted.get(key);
+  if (got) {
+    painted.delete(key);
+  } else {
+    const { canvas: sharp, lights } = paintStreet(w, h, SCENES[p.scene], seed);
+    const k = h / 600;
+    const soft = soften(sharp, lights, w, h, 6 * k, 16 * k);
+    const blur = soften(sharp, lights, w, h, 18 * k, 40 * k);
+    got = { texs: [makeTex(sharp), makeTex(soft), makeTex(blur)], vanish: vanishX };
+  }
+  painted.set(key, got);
+  texs = got.texs; vanishX = got.vanish;
   fx.set({ sharpT: texs[0], softT: texs[1], blurT: texs[2] });
-  if (old) old.forEach((x) => x.destroy());
+  while (painted.size > 4) {
+    const [oldKey, old] = painted.entries().next().value;
+    painted.delete(oldKey);
+    old.texs.forEach((x) => x.destroy());
+  }
 }
 
 const blank = document.createElement('canvas'); blank.width = blank.height = 2; blank.getContext('2d').fillRect(0, 0, 2, 2);
 const t0 = makeTex(blank);
 const fx = effect(gpu, SHADER, { set: { u: uniforms(), sharpT: t0, softT: t0, blurT: t0, samp: clampLinear } });
 let needStreet = true;
-surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; needStreet = true; });
+// While a window is being resized the street is painted again only once it
+// settles, not on every step of the drag.
+let settle = 0;
+surf.onResize(({ width, height }) => {
+  W = width; H = height; aspect = width / height;
+  if (!texs) { needStreet = true; return; }
+  clearTimeout(settle);
+  settle = setTimeout(() => { needStreet = true; if (!loop) frame(gpu, render); }, 150);
+});
 function render(f) {
   if (needStreet) { needStreet = false; buildStreet(); }
   fx.set({ u: uniforms() });
@@ -631,19 +691,29 @@ function tick(f) {
   const now = performance.now();
   if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
 }
+// Frames are drawn only while playing and while the piece can be seen: not
+// when it is scrolled away, in a tab behind others, or in a hidden frame.
+let onScreen = true;
+function runLoop() {
+  const want = playing && onScreen && !document.hidden;
+  if (want && !loop) loop = frameLoop(gpu, tick);
+  else if (!want && loop) { loop.stop(); loop = null; }
+}
+document.addEventListener('visibilitychange', runLoop);
+if ('IntersectionObserver' in window) {
+  new IntersectionObserver((es) => { onScreen = es[es.length - 1].isIntersecting; runLoop(); }).observe(canvas);
+}
 function togglePlay() {
   playing = !playing;
   if (playing) {
     $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
     $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
-    loop = frameLoop(gpu, tick);
   } else {
     $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
     $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
-    if (loop) loop.stop();
-    loop = null;
     $('fps').textContent = '';
   }
+  runLoop();
 }
 
 for (const id of IDS) $(id).addEventListener('input', () => { readControls(); if (!playing) frame(gpu, render); });
