@@ -130,6 +130,15 @@
     .btn { padding: 12px 14px; font-size: 10px; letter-spacing: 1px; }
   }
   @media (max-width: 380px) { .controls { grid-template-columns: 1fr; } }
+
+  /* In the viewer the controls become a floating panel like the other
+     pieces', which the viewer's Settings button (and H) shows and hides. */
+  html.embed .controls.panel{position:fixed;bottom:20px;right:20px;z-index:10;display:flex;flex-direction:column;gap:10px;
+    width:240px;max-width:none;max-height:calc(100vh - 40px);overflow-y:auto;margin:0;padding:18px 16px;
+    background:rgba(10,10,12,0.85);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);transition:transform 0.3s ease}
+  html.embed .controls.panel.hidden{transform:translateX(calc(100% + 40px))}
+  html.embed .controls.panel .btn-row{flex-wrap:wrap}
 </style>
 <script src="controls.js" defer></script>
 </head>
@@ -296,7 +305,13 @@ let W,H;
 // it fills the whole window, and the drawing, sized from the shorter side,
 // stays centred in it.
 const EMBED=window.self!==window.top||/[?&]embed\b/.test(location.search);
-if(EMBED)document.documentElement.classList.add('embed');
+if(EMBED){
+  document.documentElement.classList.add('embed');
+  // (Named the panel before controls.js looks for one, so it gets the same
+  // toggle as every other piece.)
+  const cp=document.querySelector('.controls');
+  if(cp){cp.id='panel';cp.classList.add('panel');}
+}
 function resize(){
   if(EMBED){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;return;}
   const maxW=window.innerWidth-16,maxH=window.innerHeight*.52;
