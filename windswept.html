@@ -402,6 +402,114 @@ struct Tree {
   let r = mix(ra, rb, h);
   return vec4f(length(off) - r, off, r);
 }
+// A cypress shelf, as Earle cuts them: a flat underside, a top stepped into
+// plateaus at different heights joined by steep risers, every edge straight
+// and every corner sharp. Each end finishes its own way: swept up into a
+// flag, drawn straight out to a point, or drooping, pointing down and out;
+// never swept up at both ends, which would make a hull of it. Vertices in
+// shelf units (half width w, half height h, y down), round the outline from
+// the underside's windward corner: 0, 1 the underside, 2 the leeward point,
+// 3 to 10 the plateaus, 11 the windward point. k seeds it.
+@diagnostic(off, derivative_uniformity) fn shelfVerts(w: f32, h: f32, k: f32) -> array<vec2f, 12> {
+  var P: array<vec2f, 12>;
+  let lw = w * (1.05 + 0.3 * hash1(k + 1.3));
+  let rw = w * (0.9 + 0.25 * hash1(k + 2.9));
+  let yb = h * 0.38;
+  // 0 swept up, 1 straight out, 2 drooping.
+  let eL = floor(hash1(k + 14.7) * 2.999);
+  var eR = floor(hash1(k + 15.9) * 2.999);
+  if (eL == 0.0 && eR == 0.0) { eR = 1.0 + floor(hash1(k + 16.1) * 1.999); }
+  // The top reaches nearly to a point that sweeps up, and is cut back
+  // from one that droops.
+  var xs = -lw * 0.82;
+  if (eL == 1.0) { xs = -lw * 0.74; } else if (eL == 2.0) { xs = -lw * 0.58; }
+  var xe = rw * 0.75;
+  if (eR == 1.0) { xe = rw * 0.7; } else if (eR == 2.0) { xe = rw * 0.55; }
+  for (var i = 0; i < 4; i++) {
+    let fi = f32(i);
+    let x0 = mix(xs, xe, fi / 4.0) + w * 0.05 * hash1(k + fi * 7.1);
+    let x1 = mix(xs, xe, (fi + 1.0) / 4.0) - w * (0.04 + 0.07 * hash1(k + fi * 8.3));
+    let mid = 1.0 - abs(fi - 1.3) / 2.7;
+    let y = -h * (0.45 + 0.65 * hash1(k + fi * 9.7) * (0.55 + 0.45 * mid));
+    let tl = h * 0.18 * (hash1(k + fi * 10.9) - 0.5);
+    P[3 + i * 2] = vec2f(x0, y - tl);
+    P[4 + i * 2] = vec2f(x1, y + tl);
+  }
+  let yL = P[3].y;
+  let yR = P[10].y;
+  let rL = hash1(k + 6.7);
+  let rR = hash1(k + 12.1);
+  // The leeward end.
+  if (eL == 0.0) {
+    P[1] = vec2f(-lw * 0.6, yb);
+    P[2] = vec2f(-lw, yL - h * (0.1 + 0.3 * rL));
+  } else if (eL == 1.0) {
+    P[1] = vec2f(-lw * 0.72, yb);
+    P[2] = vec2f(-lw, mix(yb, yL, 0.4 + 0.2 * rL));
+  } else {
+    P[1] = vec2f(-lw * 0.64, yb);
+    P[2] = vec2f(-lw, yb + h * (0.12 + 0.25 * rL));
+  }
+  // The windward end.
+  if (eR == 0.0) {
+    P[0] = vec2f(rw * 0.62, yb);
+    P[11] = vec2f(rw * (1.0 + 0.12 * rR), yR - h * (0.1 + 0.3 * rR));
+  } else if (eR == 1.0) {
+    P[0] = vec2f(rw * 0.72, yb);
+    P[11] = vec2f(rw, mix(yb, yR, 0.4 + 0.2 * rR));
+  } else {
+    P[0] = vec2f(rw * 0.64, yb);
+    P[11] = vec2f(rw, yb + h * (0.12 + 0.25 * rR));
+  }
+  return P;
+}
+// A point v against a shelf: (signed distance, out negative in; depth below
+// its top, 0 at the top edge to 1 at the underside; the x of the up-facing
+// normal of the facet above; distance round the outline to the nearest
+// point on it, for spacing dots).
+@diagnostic(off, derivative_uniformity) fn shelf(v: vec2f, w: f32, h: f32, k: f32) -> vec4f {
+  var P = shelfVerts(w, h, k);
+  var dmin = 1e9;
+  var sg = 1.0;
+  var along = 0.0;
+  var run = 0.0;
+  for (var i = 0; i < 12; i++) {
+    let a = P[i];
+    let b = P[(i + 1) % 12];
+    let e = b - a;
+    let wv = v - a;
+    let ee = max(dot(e, e), 1e-10);
+    let tt = clamp(dot(wv, e) / ee, 0.0, 1.0);
+    let bq = wv - e * tt;
+    let dd = dot(bq, bq);
+    let L = sqrt(ee);
+    if (dd < dmin) { dmin = dd; along = run + tt * L; }
+    run += L;
+    let c1 = v.y >= a.y;
+    let c2 = v.y < b.y;
+    let c3 = e.x * wv.y > e.y * wv.x;
+    if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) { sg = -sg; }
+  }
+  // The top runs from the leeward point (2) to the windward one (11).
+  var topY = P[2].y;
+  var nx = 0.0;
+  for (var i = 2; i < 11; i++) {
+    let a = P[i];
+    let b = P[i + 1];
+    if (v.x >= a.x && v.x < b.x) {
+      topY = mix(a.y, b.y, (v.x - a.x) / max(b.x - a.x, 1e-6));
+      let e = normalize(b - a);
+      nx = e.y;
+    }
+  }
+  if (v.x >= P[11].x) { topY = P[11].y; }
+  // The underside: level between its corners, out to the points beyond.
+  var botY = P[1].y;
+  if (v.x < P[1].x) { botY = mix(P[2].y, P[1].y, clamp((v.x - P[2].x) / max(P[1].x - P[2].x, 1e-6), 0.0, 1.0)); }
+  else if (v.x > P[0].x) { botY = mix(P[0].y, P[11].y, clamp((v.x - P[0].x) / max(P[11].x - P[0].x, 1e-6), 0.0, 1.0)); }
+  let dep = clamp((v.y - topY) / max(botY - topY, 1e-4), 0.0, 1.0);
+  return vec4f(sg * sqrt(dmin), dep, nx, along);
+}
 // Tree: base b, scale s, seed sd. Returns colour and coverage.
 @diagnostic(off, derivative_uniformity) fn cypress(p: vec2f, b: vec2f, s: f32, sd: f32) -> vec4f {
   let q = (p - b) / s;
@@ -440,35 +548,24 @@ struct Tree {
     let fi = f32(i);
     let sw = wind * 0.006 * sin(t * 1.1 + fi * 1.7 + sd) * (0.5 - m.y * 2.0);
     let v = q - m.xy - vec2f(sw, 0.0);
-    if (abs(v.x) > w * 1.2 || v.y < -h * 1.8 || v.y > h * 0.7) { continue; }
-    // A shelf: a flattened lens over a flat, shadowed underside, its top
-    // risen into clumps of different sizes at uneven spacing rather than a
-    // row of even scallops. Lit from its own curve, so the bright rim swings
-    // round with the light.
-    var bump = 0.0;
-    for (var j = 0; j < 7; j++) {
-      let fj = f32(j);
-      let hj = hash1(fi * 5.3 + fj * 1.7 + sd);
-      let hk = hash1(fi * 2.9 + fj * 3.1 + sd + 0.5);
-      let x0 = ((fj + 0.5) / 7.0 - 0.5) * 1.7 + (hk - 0.5) * 0.18;
-      let bw = 0.07 + 0.08 * hj;
-      bump = max(bump, (0.5 + 0.5 * hk) * exp(-pow((v.x / w - x0) / bw, 2.0)));
-    }
-    var d = (length(v / vec2f(w, h)) - 1.0) * h;
-    d -= h * 0.28 * bump * step(v.y, 0.0);
-    d = max(d, v.y - h * 0.4);
-    d += h * 0.06 * (fbm(v / w * vec2f(5.0, 7.0) + fi * 3.3 + sd) - 0.5);
+    // The shelf: its facets each lit by the way they face, toward the light
+    // or away from it, so the light breaks across its sharp angles; below
+    // the top the body turns to face us and darkens to its underside.
+    if (v.x < -w * 1.4 || v.x > w * 1.35 || v.y < -h * 1.7 || v.y > h * 0.8) { continue; }
+    let sh = shelf(v, w, h, fi * 7.31 + sd * 1.37 + 3.0);
+    let d = sh.x;
     if (d > DOT / s * 3.0 + px * 2.0) { continue; }
-    let yy = clamp((v.y + h) / (h * 1.4), 0.0, 1.0);
-    let n = roundN(v - vec2f(0.0, h * 0.25), vec2f(w, h * 1.1));
-    let lit = lambert(n, 0.3) * (1.0 - smoothstep(0.55, 0.95, yy) * 0.85);
+    let dep = sh.y;
+    let topN = normalize(vec3f(sh.z, sqrt(max(1.0 - sh.z * sh.z, 0.0)), 0.4));
+    let bodyN = normalize(vec3f(v.x / (w * 1.6), 0.15 - 0.55 * dep, 0.85));
+    let n = normalize(mix(topN, bodyN, smoothstep(0.05, 0.7, dep)));
+    let lit = lambert(n, 0.3) * (1.0 - smoothstep(0.62, 0.98, dep) * 0.85);
     var fc = stippleBush(v, 0.08 + 0.92 * lit, 0.0062, px, mix(C(17), C(24), 0.4), C(18), C(19), mix(C(19), C(14), 0.45), C(21), fi * 3.1 + sd);
-    fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.6, 1.0, yy) * 0.7);
+    fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.72, 1.0, dep) * 0.7);
     fc = moonCast(fc, lit);
     acc = over(acc, fc, fillA(d, px));
-    // Its outline in dots along the top and the flat underside, fading out
-    // round the tips, where a line drawn along x would smear.
-    acc = over(acc, C(24), dotLine(d, v.x + select(0.0, 40.0, v.y > 0.0), DOT / s, px, fi + sd * 3.0) * 0.65 * (1.0 - smoothstep(0.7, 0.92, abs(v.x) / w)));
+    // Its outline in dots, spaced evenly round every edge.
+    acc = over(acc, C(24), dotLine(d, sh.w, DOT / s, px, fi + sd * 3.0) * 0.6);
   }
   return unpremul(acc);
 }
@@ -1304,6 +1401,47 @@ var<private> HLAND: array<vec4f, 3>;
     let ta = treeAt(k);
     let tc = cypress(p, vec2f(ta.x, bluffTop(ta.x) + ta.y), ta.z, ta.w);
     col = mix(col, tc.rgb, tc.a);
+  }
+
+  // ---- A stand of coyote brush on the near edge of the bluff, just behind
+  // the bank and its fence on the left: the nearest brush of all, so the
+  // biggest. One big clump with smaller ones about it, some standing a
+  // little further back, their feet hidden by the bank's ridge. Back to
+  // front, each lit from its own curve like the rest.
+  if (p.x < -0.25 && p.y > 0.08) {
+    let g = u.a.w;
+    for (var k = 0; k < 4; k++) {
+      let fk = f32(k);
+      let hk = vec3f(hash1(fk * 3.7 + g), hash1(fk * 5.9 + g + 1.0), hash1(fk * 2.3 + g + 2.0));
+      // Back to front: two behind, the big one, a small one in front.
+      var cx = -0.6;
+      var r = 0.05;
+      var back = 0.0;
+      if (k == 0) { cx = -0.76; r = 0.052; back = 0.022; }
+      else if (k == 1) { cx = -0.47; r = 0.046; back = 0.03; }
+      else if (k == 2) { cx = -0.62; r = 0.085; back = 0.0; }
+      else { cx = -0.5; r = 0.05; back = -0.008; }
+      cx += (hk.x - 0.5) * 0.05;
+      r *= 0.88 + 0.24 * hk.y;
+      // Its middle stands clear of the ridge, so its dark underside shows
+      // above it; its flat foot is just hidden.
+      let v = p - vec2f(cx, fgTop(cx) - r * 0.4 - back);
+      let ab = vec2f(1.15 + 0.35 * hk.z, 0.88 + 0.22 * hk.x) * r;
+      if (abs(v.x) > ab.x * 1.3 || v.y < -ab.y * 1.3 || v.y > r * 0.5) { continue; }
+      let vb = vec2f(v.x - 0.15 * v.y, v.y);
+      let an = atan2(vb.y, vb.x);
+      let lobes = 8.0 + floor(hk.y * 5.0);
+      let sd = max(length(vb / ab) * r - r * (1.0 + 0.08 * sin(an * lobes + fk * 4.0) + 0.035 * sin(an * (lobes * 2.0 + 3.0) + fk)), v.y - r * 0.45);
+      if (sd > 0.006) { continue; }
+      let bn = roundN(vb, ab);
+      let blit = smoothstep(0.0, 0.58, lambert(bn, 0.45)) * (1.0 - smoothstep(0.0, r * 0.45, v.y) * 0.6);
+      var bc = stippleBush(p, 0.05 + 0.95 * blit, 0.0032 + r * 0.075, px, mix(C(17), C(24), 0.35), C(18), mix(C(19), C(14), 0.5), C(14), C(21), fk * 13.0 + 5.0);
+      // The ones behind sit a little in the big one's shade.
+      bc = mix(bc, mix(C(17), C(24), 0.5), select(0.0, 0.25, k < 2) * (1.0 - blit));
+      bc = moonCast(bc, blit);
+      col = mix(col, bc, fillA(sd, px));
+      col = mix(col, C(24), dotRing(sd, v, ab.x * 1.05, DOT * 0.9, px, fk * 31.0 + 7.0) * 0.4);
+    }
   }
 
   // ---- Foreground bank: combed grass, ice plant, poppies and a fence.
