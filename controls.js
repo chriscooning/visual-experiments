@@ -8,8 +8,8 @@
  * - Gives sliders room so the 22px thumb no longer covers its label.
  * - On the WebGPU pieces (the ones with a #nogpu message): while a piece
  *   starts up where it can run, a spinner, one glyph breathing up the ASCII
- *   ramp from the home page's hero and back, until its first frame is on
- *   screen. Where it can't run, no spinner: iPhone and iPad below iOS 27
+ *   ramp from the home page's hero and back beside "loading..." typed out
+ *   terminal style, until its first frame is on screen. Where it can't run, no spinner: iPhone and iPad below iOS 27
  *   hear that it needs 27, and a browser without WebGPU gets a cheeky line
  *   and what to try instead. On the gallery, shows its #ios-note.
  *
@@ -50,9 +50,11 @@
     '.nogpu.on~.vx-ios-note{display:none}',
     '.nogpu{flex-direction:column}',
     '.nogpu .vx-lead{display:block;color:#aaa;margin-bottom:6px}',
-    ".vx-spin{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;width:1ch;text-align:center;",
-    "font:26px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;color:#dca56e;opacity:0;transition:opacity .45s ease;",
-    'text-shadow:0 0 6px rgba(220,165,110,.7),0 0 18px rgba(220,165,110,.3)}',
+    ".vx-spin{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;",
+    "white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:#dca56e;",
+    'opacity:0;transition:opacity .45s ease;text-shadow:0 0 6px rgba(220,165,110,.7),0 0 18px rgba(220,165,110,.3)}',
+    '.vx-spin .g{width:1ch;text-align:center}',
+    '.vx-spin .t{width:12ch}',
     '.vx-spin.in{opacity:1}'
   ].join('\n');
 
@@ -116,23 +118,50 @@
     document.body.appendChild(note);
   }
 
-  // The spinner: one glyph breathing up the hero's ramp and back.
+  // The spinner: one glyph breathing up the hero's ramp and back, and beside
+  // it "loading..." typed out the way a terminal would: each letter flickers
+  // through the ramp before it lands, the dots count up behind a blinking
+  // cursor, and now and then a letter glitches and lands again. (The line is
+  // a fixed width, so nothing shifts as the dots come and go.)
   var RAMP = ' .,:;i1tfLCG08@';
   var SEQ = RAMP.slice(1) + RAMP.slice(2, -1).split('').reverse().join('');
+  var NOISE = RAMP.slice(1) + '#$%&*+=<>/\\|?';
+  var WORD = 'loading';
   function spinner() {
     var el = document.createElement('div');
     el.className = 'vx-spin';
     el.setAttribute('role', 'img');
     el.setAttribute('aria-label', 'Loading');
-    el.textContent = SEQ[0];
+    el.innerHTML = '<span class="g"></span><span class="t"></span>';
+    var glyph = el.firstChild, text = el.lastChild;
     document.body.appendChild(el);
     var font = document.createElement('link');
     font.rel = 'stylesheet';
     font.href = 'https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap';
     document.head.appendChild(font);
-    var i = 0, timer = 0;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) el.textContent = 'G';
-    else timer = setInterval(function () { i = (i + 1) % SEQ.length; el.textContent = SEQ[i]; }, 77);
+    var t0 = Date.now(), timer = 0;
+    var glitchAt = 2600 + Math.random() * 1500, glitched = -1;
+    var typed = 160 + WORD.length * 70;
+    function noise() { return NOISE.charAt(Math.floor(Math.random() * NOISE.length)); }
+    function draw() {
+      var ms = Date.now() - t0;
+      glyph.textContent = SEQ.charAt(Math.floor(ms / 77) % SEQ.length);
+      if (ms > glitchAt) {
+        if (glitched < 0) glitched = Math.floor(Math.random() * WORD.length);
+        if (ms > glitchAt + 140) { glitched = -1; glitchAt = ms + 2200 + Math.random() * 2400; }
+      }
+      var s = '';
+      for (var k = 0; k < WORD.length; k++) s += ms < 160 + k * 70 || k === glitched ? noise() : WORD.charAt(k);
+      if (ms >= typed) s += '...'.slice(0, Math.floor((ms - typed) / 380) % 4);
+      text.textContent = s + (Math.floor(ms / 530) % 2 ? ' ' : '_');
+    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      glyph.textContent = 'G';
+      text.textContent = WORD + '..._';
+    } else {
+      draw();
+      timer = setInterval(draw, 50);
+    }
     // (A beat before it shows, so a quick start never flashes it.)
     var show = setTimeout(function () { el.classList.add('in'); }, 120);
     return function stop() {
