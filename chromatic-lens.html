@@ -47,220 +47,349 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Scene</label>
     <select id="palette">
-      <option value="poster" selected>Poster</option>
-      <option value="swiss">Swiss Grid</option>
-      <option value="halftone">Halftone</option>
-      <option value="barcode">Barcode</option>
-      <option value="night">Night Type</option>
+      <option value="neon" selected>Neon Rain</option>
+      <option value="sodium">Sodium Street</option>
+      <option value="blue">Blue Hour</option>
+      <option value="silver">Silver</option>
     </select>
   </div>
-  <div class="control-group"><label>Lens Size <span class="val" id="sizeVal">50</span></label><input type="range" id="size" min="15" max="100" value="50"></div>
-  <div class="control-group"><label>Magnify <span class="val" id="magVal">45</span></label><input type="range" id="mag" min="0" max="100" value="45"></div>
-  <div class="control-group"><label>Dispersion <span class="val" id="dispVal">55</span></label><input type="range" id="disp" min="0" max="100" value="55"></div>
-  <div class="control-group"><label>Screen Split <span class="val" id="splitVal">15</span></label><input type="range" id="split" min="0" max="100" value="15"></div>
-  <div class="control-group"><label>Drift <span class="val" id="driftVal">30</span></label><input type="range" id="drift" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Rain <span class="val" id="rainVal">60</span></label><input type="range" id="rain" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Drop Size <span class="val" id="sizeVal">50</span></label><input type="range" id="size" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Wipers <span class="val" id="wipeVal">45</span></label><input type="range" id="wipe" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Chroma <span class="val" id="chromaVal">55</span></label><input type="range" id="chroma" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Traffic <span class="val" id="trafficVal">40</span></label><input type="range" id="traffic" min="0" max="100" value="40"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
     <button class="btn primary" id="generate">Generate</button>
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag the lens · Tilt to bend the light · H controls</div>
+<div class="hint-pill" id="hintPill">Drag to wipe the glass · H controls</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
 <script type="module">
-import { init, effect, surface, texture, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
-import { tilt } from './lib/tilt.js';
+import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
 
 // ═══════════════════════════════════════
-// SHADER
-// A glass disc over a flat printed scene. Inside the disc the scene is
-// magnified, most at the centre, and bent hard near the rim. Each ray is
-// traced at nine wavelengths across the spectrum, each bent by a slightly
-// different amount, and blended back into RGB, so edges break into a smooth
-// rainbow rather than three hard copies. Outside, a softer version of the
-// same split runs toward the screen edges, like a cheap camera lens.
+// Rain on a windshield at night. Beyond the glass a city lies out of focus,
+// its lights swollen into soft discs drifting with the traffic. On the glass
+// sit drops of three sizes; each is a little lens holding a sharp, upside-down
+// picture of the street, split at its rim into a thin rainbow. Now and then a
+// heavy drop runs down, clearing a track and leaving beads behind it. A pair
+// of wipers sweeps the glass on a timer and the rain builds back; a finger
+// drawn across the glass wipes a trail that fills in again.
+//
+// Nothing is stored between frames: each drop knows when it fell and each
+// spot of glass knows when a blade or a finger last passed over it, so a drop
+// shows only if it fell since then.
 // ═══════════════════════════════════════
-const LENS = /* wgsl */ `
+const NT = 24;   // finger-trail points kept
+const SHADER = /* wgsl */ `
 struct U {
-  center: vec2f, radius: f32, aspect: f32,
-  mag: f32, disp: f32, split: f32, time: f32,
-  scroll: vec2f, bend: vec2f,
-  ink: vec3f, dark: f32,
-  texAspect: f32,
+  a: vec4f,    // time, aspect, px, seed
+  b: vec4f,    // rain 0..1, drop size 0..1, wiper period (0 off), chroma
+  c: vec4f,    // traffic, wiper time offset, _, _
+  cols: array<vec4f, 8>,          // sky top, haze, six lights
+  trail: array<vec4f, ${NT}>,     // finger: x, y, time, radius
 }
 @group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var scene: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
 
-// Where the scene is sampled for screen point p (aspect-corrected), for a
-// wavelength weight w in -1..1 (red bends least, violet most).
-fn bentUV(p: vec2f, w: f32) -> vec2f {
-  let d = p - u.center;
-  let x = length(d) / u.radius;
-  var q = p;
-  if (x < 1.0) {
-    // Spherical-cap profile: the surface slope grows toward the rim.
-    let slope = x / sqrt(max(1.0 - x * x * 0.985, 0.012));
-    // Dispersion mostly lives at the rim (the slope term); the centre stays sharp.
-    let k = u.mag * (1.0 + w * u.disp * 0.08);
-    q = u.center + d * (1.0 - k * 0.55 * (1.0 - x * x)) - normalize(d + 1e-6) * slope * u.radius * 0.035 * (u.mag + w * u.disp * 0.6);
-    q += u.bend * u.radius * 0.3 * (1.0 + w * u.disp) * (1.0 - x * x);
+fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
+fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+@diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+
+// ---- The city beyond the glass. q is a point on the screen (height units,
+// y down); blur runs from 0 (the sharp picture inside a drop) to 1 (out of
+// focus on the glass).
+fn city(q: vec2f, blur: f32) -> vec3f {
+  let t = u.a.x; let sd = u.a.w;
+  // Sky to street: dark above, a coloured glow low down where the lights are.
+  let g = smoothstep(0.05, 1.0, q.y);
+  var col = mix(C(0), C(1), g * g);
+  col += C(1) * 0.35 * exp(-pow((q.y - 0.72) / 0.18, 2.0));
+  // Three depths of lights in loose rows: far ones small and many, near ones
+  // big and few. Each drifts with the traffic at its own pace; out of focus
+  // each is a soft disc with a brighter rim, in focus a point of light.
+  for (var L = 0; L < 3; L++) {
+    let fl = f32(L);
+    let cell = 0.055 + fl * 0.05;
+    let drift = vec2f(t * u.c.x * (0.02 + fl * 0.035) * select(1.0, -1.0, L == 1), 0.0);
+    let gq = (q + drift) / cell;
+    let gi = floor(gq);
+    for (var j = -1; j <= 1; j++) {
+      for (var i = -1; i <= 1; i++) {
+        let id = gi + vec2f(f32(i), f32(j));
+        let h = hash21(id + sd + fl * 17.0);
+        // Lights gather along the street, a few higher up, the sky dark.
+        let cy = (id.y + 0.5) * cell;
+        if (h > 0.04 + 0.42 * smoothstep(0.3, 0.8, cy)) { continue; }
+        let c = (id + 0.5 + (vec2f(hash21(id + 3.1 + fl), hash21(id + 7.7 + fl)) - 0.5) * 0.8) * cell;
+        let k = i32(floor(hash21(id + 11.3 + fl) * 6.0));
+        let lc = u.cols[2 + k].rgb;
+        let bright = 0.35 + 0.65 * hash21(id + 5.9) * (0.6 + 0.4 * sin(t * (0.3 + h) + h * 40.0));
+        let R = mix(0.0025 + fl * 0.0015, cell * (0.38 + 0.25 * hash21(id + 2.2)), blur);
+        let d = length(gq * cell - c) / R;
+        let disc = 1.0 - smoothstep(0.82, 1.0, d);
+        let rim = smoothstep(0.55, 0.95, d) * disc;
+        // Small sharp points glow; big soft discs are dimmer for their size.
+        let a = (disc * (0.55 + 0.45 * rim)) * mix(1.6, 0.42 + 0.12 * fl, blur) + exp(-d * d * 3.0) * (1.0 - blur) * 0.8;
+        col += lc * a * bright * (0.55 + 0.25 * fl);
+      }
+    }
+  }
+  return col;
+}
+
+// ---- When this spot of glass was last cleared: by a wiper blade or by a
+// finger. -1e4 if never.
+const WMAX = 2.65;   // how far the blades swing, radians from lying flat
+fn pivotOf(k: i32) -> vec2f { return vec2f(u.a.y * select(0.2, 0.6, k == 1), 1.04); }
+fn wiperAngle(tau: f32, D: f32) -> f32 { return WMAX * (0.5 - 0.5 * cos(6.2831853 * clamp(tau / D, 0.0, 1.0))); }
+fn lastCleared(q: vec2f) -> f32 {
+  let t = u.a.x;
+  var last = -1e4;
+  let P = u.b.z;
+  if (P > 0.0) {
+    let D = 1.3;
+    let tt = t + u.c.y;
+    let cyc = floor(tt / P) * P;
+    let tau = tt - cyc;
+    for (var k = 0; k < 2; k++) {
+      let v = q - pivotOf(k);
+      let r = length(v);
+      if (r > 0.98 * u.a.y * 0.62 + 0.25 || r < 0.06) { continue; }
+      let phi = atan2(-v.y, v.x);
+      if (phi < 0.0 || phi > WMAX) { continue; }
+      // The blade passes this angle once going up and once coming back.
+      let t1 = D / 6.2831853 * acos(clamp(1.0 - 2.0 * phi / WMAX, -1.0, 1.0));
+      let t2 = D - t1;
+      var passed = cyc - P + t2;
+      if (tau >= t2) { passed = cyc + t2; } else if (tau >= t1) { passed = cyc + t1; }
+      last = max(last, passed - u.c.y);
+    }
+  }
+  for (var i = 0; i < ${NT}; i++) {
+    let f = u.trail[i];
+    if (f.w > 0.0 && length(q - f.xy) < f.w) { last = max(last, f.z); }
+  }
+  return last;
+}
+
+// ---- Drops. A layer is a grid of cells, one possible drop in each; a drop
+// falls at its own pace after the glass there was last cleared and stays
+// until the next clearing. Returns (offset from its centre, radius, age) in
+// x, y, z, w, or radius 0 for none.
+fn dropIn(q: vec2f, cell: f32, size: f32, layer: f32) -> vec4f {
+  let t = u.a.x;
+  let gi = floor(q / cell);
+  let h = hash21(gi + layer * 31.7 + u.a.w);
+  // Fewer cells hold drops in light rain.
+  if (h > 0.1 + 0.5 * u.b.x) { return vec4f(0.0); }
+  let c0 = (gi + 0.5) * cell;
+  let lc = lastCleared(c0);
+  // Its moments of falling come round every Tp seconds; the first one after
+  // the last clearing is when this drop landed.
+  let Tp = (1.2 + 5.0 * hash21(gi + 4.4 + layer)) / (0.25 + u.b.x * 1.6) * (0.6 + layer * 0.5);
+  let off = hash21(gi + 9.1 + layer) * Tp;
+  let k0 = floor((lc + off) / Tp) + 1.0;
+  let born = k0 * Tp - off;
+  if (born > t) { return vec4f(0.0); }
+  // A fresh place in the cell each time it is cleared.
+  let j = vec2f(hash21(gi + k0 * 1.37 + 2.0), hash21(gi + k0 * 2.71 + 5.0)) - 0.5;
+  let r = cell * size * (0.55 + 0.45 * hash21(gi + k0 + 8.0));
+  let c = c0 + j * (cell - 2.2 * r) * 0.9;
+  // A runner that has passed through here took this drop with it.
+  if (trackAt(c) > 0.0) { return vec4f(0.0); }
+  let age = t - born;
+  // Lands with a little swell.
+  let rr = r * (0.75 + 0.25 * smoothstep(0.0, 0.35, age));
+  // Slightly flattened on top, heavier below.
+  var v = q - c;
+  v.y *= select(1.08, 0.92, v.y > 0.0);
+  return vec4f(v, rr, age);
+}
+
+// ---- Runners: now and then a heavy drop runs down a column, wobbling,
+// clearing a track behind it and leaving beads in it. runX is its path:
+// where across the column it is at height y on run n.
+fn runX(ci: f32, n: f32, y: f32) -> f32 {
+  let colW = 0.09;
+  return (ci + 0.5) * colW + 0.014 * sin(y * 23.0 + n * 3.1) + 0.008 * sin(y * 61.0 + ci) + 0.02 * (hash1(ci + n) - 0.5);
+}
+// (its x, y, the height it started from, and its column and run packed as
+// column * 1000 + run; w < 0 when this column has none)
+fn runner(q: vec2f) -> vec4f {
+  let t = u.a.x;
+  let colW = 0.09;
+  let ci = floor(q.x / colW);
+  let h = hash1(ci * 3.17 + u.a.w);
+  if (h > 0.25 + 0.5 * u.b.x) { return vec4f(0.0, 0.0, 0.0, -1.0); }
+  // Each column's runs come round every so often, offset from the others.
+  let period = 7.0 + 9.0 * hash1(ci + 1.3);
+  let ph = t + h * period;
+  let n = floor(ph / period);
+  let tau = ph - n * period;
+  let speed = 0.12 + 0.1 * hash1(ci + n * 1.7);
+  let y0 = -0.05 + 0.4 * hash1(ci + n * 2.3);
+  // Runs in fits and starts.
+  let y = y0 + speed * (tau + 0.25 * sin(tau * 3.0 + h * 9.0));
+  return vec4f(runX(ci, n, y), y, y0, ci * 1000.0 + n + 0.5);
+}
+
+// How far down a runner's clear track q lies (0 outside one).
+fn trackAt(q: vec2f) -> f32 {
+  let rn = runner(q);
+  if (rn.w < 0.0) { return 0.0; }
+  let ci = floor(rn.w / 1000.0);
+  let rnum = rn.w - ci * 1000.0 - 0.5;
+  let along = rn.y - q.y;
+  let rr = 0.012 * (0.6 + u.b.y * 0.8);
+  if (along > 0.0 && along < rn.y - rn.z && abs(q.x - runX(ci, rnum, q.y)) < rr * 0.85) {
+    return 1.0 - smoothstep(0.0, 0.35, along / max(rn.y - rn.z, 0.01)) * 0.4;
+  }
+  return 0.0;
+}
+
+@diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let t = u.a.x; let asp = u.a.y; let px = u.a.z;
+  let p = vec2f(uv.x * asp, uv.y);
+  let sizeK = 0.6 + u.b.y * 0.8;
+
+  // The out-of-focus city, softened a touch more by the wet glass.
+  var col = city(p, 1.0);
+
+  // Which drop, if any, covers this point: the runner first, then big beads,
+  // then small ones; the finest mist only shades the glass.
+  var dv = vec4f(0.0);
+  let rn = runner(p);
+  var inTrack = 0.0;
+  if (rn.w >= 0.0) {
+    let rr = 0.012 * sizeK;
+    let v = (p - rn.xy) * vec2f(1.0, 0.85);
+    if (length(v) < rr) { dv = vec4f(v, rr, 1.0); }
+    // Its track, wandering with it: clear glass, with a few beads left
+    // behind at uneven spacing.
+    let ci = floor(rn.w / 1000.0);
+    let rnum = rn.w - ci * 1000.0 - 0.5;
+    let along = rn.y - p.y;
+    let tx = runX(ci, rnum, p.y);
+    if (along > 0.0 && along < rn.y - rn.z && abs(p.x - tx) < rr * 0.85) {
+      inTrack = 1.0 - smoothstep(0.0, 0.35, along / max(rn.y - rn.z, 0.01)) * 0.4;
+      let seg = floor(along / 0.045);
+      let hb = hash1(seg * 7.3 + ci * 1.9 + rnum);
+      let by = (seg + 0.2 + 0.6 * hb) * 0.045;
+      let bv = vec2f(p.x - runX(ci, rnum, rn.y - by) - (hb - 0.5) * rr * 0.6, along - by);
+      let br = (0.002 + 0.003 * hash1(seg + 3.3 + rnum)) * sizeK * step(0.45, hb);
+      if (dv.z == 0.0 && br > 0.0 && length(bv) < br) { dv = vec4f(bv, br, 1.0); }
+    }
+  }
+  if (dv.z == 0.0) {
+    let d1 = dropIn(p, 0.1, 0.4 * sizeK, 0.0);
+    if (d1.z > 0.0 && length(d1.xy) < d1.z) { dv = d1; }
+  }
+  if (dv.z == 0.0) {
+    let d2 = dropIn(p + vec2f(0.017, 0.023), 0.034, 0.36 * sizeK, 1.0);
+    if (d2.z > 0.0 && length(d2.xy) < d2.z) { dv = d2; }
+  }
+
+  if (dv.z > 0.0) {
+    // A drop: a lens holding a sharp, upside-down, shrunken city, its colours
+    // pulled apart a little at the rim.
+    let n = dv.xy / dv.z;
+    let e = length(n);
+    // Each drop takes in a wide view of the street around it, turned upside
+    // down and squeezed toward the rim.
+    let span = 0.22 * (1.0 + 0.35 * e * e);
+    let ch = u.b.w * 0.12 * e * e;
+    let base = p - dv.xy + vec2f(0.0, 0.08);
+    let r = city(base - n * span * (1.0 - ch), 0.3).r;
+    let g = city(base - n * span, 0.3).g;
+    let b = city(base - n * span * (1.0 + ch), 0.3).b;
+    var dc = vec3f(r, g, b) * 1.15 + C(1) * 0.06;
+    // It gathers the glow behind it, brightest in a crescent low in the drop
+    // where the light comes to a focus.
+    let behind = city(p - dv.xy, 1.0);
+    let foc = exp(-dot(n - vec2f(0.0, 0.42), n - vec2f(0.0, 0.42)) * 4.0);
+    dc += behind * (0.35 + 1.3 * foc);
+    // Darker at the rim where light turns back inside the water.
+    dc *= 1.0 - smoothstep(0.7, 1.0, e) * 0.5;
+    // A glint from a light up and to the left, and a faint one below.
+    let gl = exp(-dot(n - vec2f(-0.35, -0.45), n - vec2f(-0.35, -0.45)) * 30.0);
+    dc += vec3f(1.0, 0.97, 0.92) * gl * 0.85;
+    dc += C(1) * 0.25 * exp(-dot(n - vec2f(0.15, 0.6), n - vec2f(0.15, 0.6)) * 18.0);
+    let a = 1.0 - smoothstep(dv.z - px * 1.2, dv.z, length(dv.xy));
+    col = mix(col, dc, a);
   } else {
-    // Screen split, stronger toward the edges.
-    let c = p - vec2f(0.5 * u.aspect, 0.5);
-    q = p + c * dot(c, c) * u.split * w * 0.05;
+    // Bare glass: wet streaks of mist; cleared glass is darker and clearer.
+    let lc = lastCleared(p);
+    let mistAge = clamp((t - lc) / (6.0 / (0.3 + u.b.x)), 0.0, 1.0);
+    let m = vnoise(p * vec2f(260.0, 220.0) + u.a.w) * vnoise(p * vec2f(70.0, 90.0));
+    col = mix(col, col * 0.86 + C(1) * 0.05, mistAge * 0.6);
+    col += vec3f(0.9, 0.92, 1.0) * smoothstep(0.55, 0.9, m) * mistAge * (0.05 + 0.15 * u.b.x);
+    col *= 1.0 - inTrack * 0.12;
   }
-  // The scene keeps its own proportions: one texture height = one screen height.
-  return vec2f(q.x / u.texAspect, q.y) + u.scroll;
-}
 
-fn spectrum(w: f32) -> vec3f {
-  // Red → green → blue weights across w in -1..1.
-  let r = clamp(1.0 - abs(w + 0.55) * 1.4, 0.0, 1.0) + clamp(-w - 0.7, 0.0, 1.0) * 0.6;
-  let g = clamp(1.0 - abs(w) * 1.6, 0.0, 1.0);
-  let b = clamp(1.0 - abs(w - 0.55) * 1.4, 0.0, 1.0) + clamp(w - 0.75, 0.0, 1.0) * 0.4;
-  return vec3f(r, g, b);
-}
+  // The wiper blades, while they sweep: black rubber on a thin arm.
+  if (u.b.z > 0.0) {
+    let D = 1.3;
+    let tt = t + u.c.y;
+    let tau = tt - floor(tt / u.b.z) * u.b.z;
+    if (tau < D) {
+      let ang = wiperAngle(tau, D);
+      let dir = vec2f(cos(ang), -sin(ang));
+      for (var k = 0; k < 2; k++) {
+        let pv = pivotOf(k);
+        let L = asp * 0.62 * 0.98 + 0.2;
+        let v = p - pv;
+        let s = clamp(dot(v, dir), 0.0, L);
+        let dist = length(v - dir * s);
+        let blade = (1.0 - smoothstep(0.009, 0.009 + px * 1.5, dist)) * step(0.22, s / L);
+        let arm = 1.0 - smoothstep(0.004, 0.004 + px * 1.5, dist);
+        col = mix(col, vec3f(0.015), max(blade, arm));
+        col += vec3f(0.5, 0.55, 0.6) * (1.0 - smoothstep(0.0, px * 1.5, abs(dist - 0.008))) * step(0.22, s / L) * 0.18;
+      }
+    }
+  }
 
-@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
-  let p = vec2f(uv.x * u.aspect, uv.y);
-  let d = p - u.center;
-  let x = length(d) / u.radius;
-  var col = vec3f(0.0);
-  var wsum = vec3f(0.0);
-  // Twelve wavelengths, each nudged by a per-pixel offset so the rainbow
-  // blends smoothly instead of stepping into bands.
-  let jit = fract(sin(dot(floor(uv * 1400.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
-  for (var i = 0; i < 12; i++) {
-    let w = clamp((f32(i) + 0.5 + jit) / 6.0 - 1.0, -1.0, 1.0);
-    let s = spectrum(w);
-    col += textureSampleLevel(scene, samp, bentUV(p, w), 0.0).rgb * s;
-    wsum += s;
-  }
-  col /= wsum;
-  // Soft shadow the lens casts on the page, down and to the right.
-  let sh = length(p - u.center - vec2f(0.012, 0.022)) / u.radius;
-  col *= 1.0 - (1.0 - smoothstep(0.9, 1.25, sh)) * 0.22 * step(1.0, x) * (1.0 - u.dark * 0.5);
-  if (x < 1.0) {
-    // Glass: a faint tint, a bright rim and a soft window reflection.
-    let rim = smoothstep(0.93, 1.0, x);
-    col = mix(col, col * 0.92 + vec3f(0.04), rim * 0.6);
-    let hl = normalize(vec2f(-0.6, -0.8));
-    let n = d / u.radius;
-    let spec = pow(max(dot(n, hl), 0.0), 3.0) * smoothstep(0.55, 0.97, x) * smoothstep(1.0, 0.975, x);
-    col += vec3f(1.0) * spec * 0.55;
-  }
-  // Crisp outline where glass meets page.
-  let px = fwidth(x);
-  col = mix(col, u.ink, (1.0 - smoothstep(0.0, px * 1.5, abs(x - 1.0))) * 0.35);
-  // Paper grain.
-  let g = fract(sin(dot(floor(uv * 900.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
-  return vec4f(col + g * 0.018, 1.0);
+  // Dark at the corners, the glass's own faint reflection, a little grain.
+  let vg = length((uv - 0.5) * vec2f(1.2, 1.0));
+  col *= 1.0 - smoothstep(0.35, 0.85, vg) * 0.55;
+  col += C(1) * 0.04 * smoothstep(0.4, 0.0, abs(uv.x - uv.y * 0.6 - 0.25));
+  let gr = hash21(floor(uv * vec2f(1400.0, 900.0)) + fract(t * 7.0)) - 0.5;
+  col += gr * 0.02;
+  // Gentle tone curve so the lights bloom without clipping flat.
+  col = col / (1.0 + col * 0.35);
+  return vec4f(col, 1.0);
 }
 `;
 
-// ═══════════════════════════════════════
-// SCENES — drawn once on a 2D canvas, then uploaded as a texture that
-// tiles horizontally and scrolls under the lens.
-// ═══════════════════════════════════════
-const WORDS = ['LIGHT', 'BENDS', 'SPLITS', 'REFRACTS', 'SPECTRUM', 'PRISM', 'GLASS', 'CHROMA', 'LENS', 'FOCUS'];
-const SANS = "'Helvetica Neue', Helvetica, Arial, sans-serif";
-const MONO = "'Space Mono', ui-monospace, Menlo, monospace";
-const pick = (a) => a[Math.floor(Math.random() * a.length)];
-
-function drawScene(kind, w, h) {
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const g = c.getContext('2d');
-  const S = h / 1000;
-  const scenes = {
-    poster() {
-      g.fillStyle = '#efece4'; g.fillRect(0, 0, w, h);
-      g.fillStyle = '#111';
-      let y = 60 * S;
-      const words = [...WORDS].sort(() => Math.random() - 0.5);
-      for (let i = 0; y < h; i++) {
-        const size = (i % 3 === 0 ? 210 : i % 3 === 1 ? 120 : 64) * S;
-        g.font = `${i % 2 ? 300 : 800} ${size}px ${SANS}`;
-        g.textBaseline = 'top';
-        let x = -((i * 137) % 400) * S;
-        for (let k = 0; x < w; k++) { const t = words[(i + k) % words.length]; g.fillText(t, x, y); x += g.measureText(t + ' ').width; }
-        y += size * 1.02;
-        g.fillRect(0, y, w, 3 * S); y += 22 * S;
-      }
-    },
-    swiss() {
-      g.fillStyle = '#e8412c'; g.fillRect(0, 0, w, h);
-      g.strokeStyle = '#111'; g.lineWidth = 2 * S;
-      const step = 80 * S;
-      for (let x = 0; x < w; x += step) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
-      for (let y = 0; y < h; y += step) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
-      g.fillStyle = '#111';
-      for (let i = 0; i < 18; i++) {
-        const cx = Math.floor(Math.random() * w / step) * step, cy = Math.floor(Math.random() * h / step) * step;
-        const r = step * (1 + Math.floor(Math.random() * 3));
-        if (Math.random() < 0.5) { g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill(); }
-        else g.fillRect(cx, cy, r * 1.5, step);
-      }
-      g.fillStyle = '#f5f1e6'; g.font = `900 ${260 * S}px ${SANS}`; g.textBaseline = 'alphabetic';
-      for (let x = 0; x < w; x += 1400 * S) g.fillText(pick(WORDS), x + 40 * S, h - 80 * S);
-    },
-    halftone() {
-      // Dot size follows a few big soft shapes spread along the strip.
-      g.fillStyle = '#f4f0e8'; g.fillRect(0, 0, w, h);
-      const step = 30 * S;
-      const blobs = [...Array(7)].map((_, i) => ({ x: (i + 0.5) / 7 * w, y: (0.25 + Math.random() * 0.5) * h, r: (180 + Math.random() * 220) * S }));
-      for (let y = step / 2, row = 0; y < h + step; y += step * 0.866, row++) {
-        for (let x = (row % 2) * step / 2; x < w + step; x += step) {
-          let v = 0;
-          for (const b of blobs) { const dx = Math.min(Math.abs(x - b.x), w - Math.abs(x - b.x)); v = Math.max(v, Math.exp(-(dx * dx + (y - b.y) ** 2) / (2 * b.r * b.r))); }
-          const r = step * (0.06 + 0.46 * v);
-          g.fillStyle = v > 0.55 ? '#1d2b8f' : '#111';
-          g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
-        }
-      }
-    },
-    barcode() {
-      g.fillStyle = '#fafafa'; g.fillRect(0, 0, w, h);
-      g.fillStyle = '#0b0b0b';
-      let x = 0;
-      while (x < w) { const bw = (1 + Math.floor(Math.random() * 4)) * 5 * S; if (Math.random() < 0.55) g.fillRect(x, 0, bw, h * 0.78); x += bw + 5 * S * (1 + Math.floor(Math.random() * 3)); }
-      g.font = `400 ${46 * S}px ${MONO}`; g.textBaseline = 'top';
-      for (let xx = 0; xx < w; xx += 60 * S) g.fillText(String(Math.floor(Math.random() * 10)), xx + 10 * S, h * 0.82);
-    },
-    night() {
-      g.fillStyle = '#07070a'; g.fillRect(0, 0, w, h);
-      g.textBaseline = 'middle'; g.textAlign = 'left';
-      const cols = ['#ffffff', '#ffffff', '#ff4fb0', '#4fd8ff'];
-      let y = 90 * S;
-      for (let i = 0; y < h; i++) {
-        const size = (i % 2 ? 90 : 180) * S;
-        g.font = `${i % 2 ? 300 : 900} ${size}px ${SANS}`;
-        g.fillStyle = cols[i % cols.length];
-        let x = -((i * 211) % 500) * S;
-        while (x < w) { const t = pick(WORDS); g.fillText(t, x, y); x += g.measureText(t + '  ').width; }
-        y += size * 1.1;
-      }
-    },
-  };
-  scenes[kind]();
-  return c;
-}
+const SCENES = {
+  //        sky top    haze       six lights
+  neon:   ['#06050d', '#2a0f3a', '#ff3fa4', '#31e5ff', '#8a5cff', '#ffd166', '#ff5a3c', '#3dffb0'],
+  sodium: ['#040608', '#2e1b08', '#ffb347', '#ff8c1a', '#ff3b2f', '#ffe0a3', '#3cff7a', '#ffd27a'],
+  blue:   ['#0a1733', '#34497a', '#ffd28a', '#ff9d5c', '#fff1c9', '#ff4d4d', '#8fd3ff', '#ffe6a8'],
+  silver: ['#050506', '#24262b', '#f2f2f2', '#c9ccd2', '#ffffff', '#9aa0a8', '#e6e6e6', '#b8bcc4'],
+};
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
-const IDS = ['size', 'mag', 'disp', 'split', 'drift'];
-
+const IDS = ['rain', 'size', 'wipe', 'chroma', 'traffic'];
 const p = {};
 function readControls() {
-  p.scene = $('palette').value;
-  p.radius = 0.1 + +$('size').value / 100 * 0.32;
-  p.mag = 0.2 + +$('mag').value / 100 * 1.1;
-  p.disp = +$('disp').value / 100 * 1.6;
-  p.split = +$('split').value / 100 * 2.5;
-  p.drift = +$('drift').value / 100;
+  p.cols = SCENES[$('palette').value].map((h) => [...hex(h), 1]);
+  p.rain = +$('rain').value / 100;
+  p.size = +$('size').value / 100;
+  const w = +$('wipe').value;
+  // 0 is off; otherwise a sweep every 14 s down to every 3 s.
+  p.wipe = w === 0 ? 0 : 14 - w / 100 * 11;
+  p.chroma = +$('chroma').value / 100 * 1.4;
+  p.traffic = +$('traffic').value / 100 * 2;
   for (const id of IDS) $(id + 'Val').textContent = $(id).value;
 }
 readControls();
@@ -278,94 +407,55 @@ try {
 }
 
 const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(4.5e6) });
-const repeatLinear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'repeat', addressModeV: 'mirror-repeat' });
-let sceneTex = null;
-let aspect = 1;
+let W = 1, H = 1, aspect = 1, t = 0, seed = Math.random() * 100, wipeOff = Math.random() * 10;
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
 
-// The scene texture is twice the screen's width so the scroll has room,
-// and at the screen's pixel height for sharp type.
-function buildScene() {
-  const h = Math.min(2048, Math.max(512, surf.size[1]));
-  const w = Math.min(8192, Math.round(h * Math.max(aspect, 0.6) * 2));
-  const src = drawScene(p.scene, w, h);
-  const tex = texture(gpu, { kind: '2d', size: [w, h], format: 'rgba8unorm', usage: ['texture_binding', 'copy_dst', 'render_attachment'] });
-  gpu.gpu.queue.copyExternalImageToTexture({ source: src }, { texture: tex.gpu }, [w, h]);
-  const old = sceneTex;
-  sceneTex = tex;
-  fx.set({ scene: tex, u: { ink: p.scene === 'night' ? [1, 1, 1] : [0, 0, 0], dark: p.scene === 'night' ? 1 : 0 } });
-  fx.set({ u: { texAspect: w / h } });
-  if (old) old.destroy();
-}
-
-const fx = effect(gpu, LENS, { set: { u: {
-  center: [0.5, 0.5], radius: p.radius, aspect: 1, mag: p.mag, disp: p.disp, split: p.split, time: 0,
-  scroll: [0, 0], bend: [0, 0], ink: [0, 0, 0], dark: 0, texAspect: 2,
-}, samp: repeatLinear } });
-
-let needScene = true;
-surf.onResize(({ width, height }) => {
-  aspect = width / height;
-  fx.set({ u: { aspect, radius: Math.min(p.radius, 0.4 * aspect) } });
-  needScene = true;
-});
-
-function applyControls() {
-  const prev = p.scene;
-  readControls();
-  // Never wider than most of a narrow phone screen.
-  fx.set({ u: { radius: Math.min(p.radius, 0.4 * aspect), mag: p.mag, disp: p.disp, split: p.split } });
-  if (p.scene !== prev) needScene = true;
-}
-
-// ═══════════════════════════════════════
-// LENS: follows the finger while dragging, glides on its own otherwise
-// ═══════════════════════════════════════
-let lens = [0.5, 0.5], goal = null, dragging = false, heldUntil = 0, wander = Math.random() * 20;
+// The finger's trail: the last NT points, each wiping a patch at its time.
+const trail = Array.from({ length: NT }, () => [0, 0, 0, 0]);
+let ti = 0, dragging = false, lastPt = null;
 function toP(e) {
   const r = canvas.getBoundingClientRect();
   return [(e.clientX - r.left) / r.height, (e.clientY - r.top) / r.height];
 }
-canvas.addEventListener('pointerdown', (e) => { dragging = true; goal = toP(e); heldUntil = Infinity; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener('pointermove', (e) => { if (dragging) goal = toP(e); });
-const release = () => { if (dragging) { dragging = false; heldUntil = performance.now() + 3000; } };
+function addPt(q) {
+  if (lastPt && Math.hypot(q[0] - lastPt[0], q[1] - lastPt[1]) < 0.025) return;
+  lastPt = q;
+  trail[ti] = [q[0], q[1], t, 0.045];
+  ti = (ti + 1) % NT;
+}
+canvas.addEventListener('pointerdown', (e) => { dragging = true; lastPt = null; addPt(toP(e)); canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => { if (dragging) addPt(toP(e)); });
+const release = () => { dragging = false; };
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 
+function uniforms() {
+  return {
+    a: [t, aspect, 1 / Math.max(1, H), seed],
+    b: [p.rain, p.size, p.wipe, p.chroma],
+    c: [p.traffic, wipeOff, 0, 0],
+    cols: p.cols,
+    trail,
+  };
+}
+const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
+function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
 const clk = clock(gpu);
-const tl = tilt();
 let fpsCount = 0, fpsAt = performance.now();
-let t = 0, scroll = 0;
-
-function step(dt) {
-  t += dt;
-  wander += dt * (0.15 + p.drift * 0.5);
-  scroll += dt * p.drift * 0.02;
-  let target = goal;
-  if (!dragging && performance.now() > heldUntil) {
-    target = [aspect * (0.5 + 0.28 * Math.sin(wander * 0.7)), 0.5 + 0.22 * Math.sin(wander * 1.13 + 1.0)];
-  }
-  if (target) {
-    const k = 1 - Math.exp(-dt * (dragging ? 16 : 1.6));
-    lens = [lens[0] + (target[0] - lens[0]) * k, lens[1] + (target[1] - lens[1]) * k];
-  }
-  const bend = tl.active ? [tl.x * 0.6, (tl.y - 0.5) * 0.6] : [0, 0];
-  fx.set({ u: { center: lens, time: t, scroll: [scroll % 1, 0], bend } });
-}
-
-function render(f) {
-  if (needScene) { needScene = false; buildScene(); }
-  f.pass(surf, fx);
-}
-
 let loop = null, playing = false;
+// The rain has been falling a while before we look. (?at=seconds holds time
+// at that moment, the wipers' timing with it, for stills and checks.)
+const AT = new URLSearchParams(location.search).get('at');
+t = AT !== null ? +AT : 30 + Math.random() * 30;
+if (AT !== null) { wipeOff = 0; seed = 7; }
 function tick(f) {
-  step(Math.min(clk.deltaTime, 0.1));
+  if (AT === null) t += Math.min(clk.deltaTime, 0.1);
   render(f);
   fpsCount++;
   const now = performance.now();
   if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
 }
-
 function togglePlay() {
   playing = !playing;
   if (playing) {
@@ -381,18 +471,18 @@ function togglePlay() {
   }
 }
 
-for (const id of IDS) $(id).addEventListener('input', applyControls);
-$('palette').addEventListener('change', applyControls);
+for (const id of IDS) $(id).addEventListener('input', () => { readControls(); if (!playing) frame(gpu, render); });
+$('palette').addEventListener('change', () => { readControls(); if (!playing) frame(gpu, render); });
 $('playPause').addEventListener('click', togglePlay);
 $('generate').addEventListener('click', () => {
-  needScene = true;   // redraw the same scene with new words and shapes
-  wander = Math.random() * 50;
+  seed = Math.random() * 100;
+  wipeOff = Math.random() * 10;
   if (!playing) frame(gpu, render);
 });
 $('save').addEventListener('click', () => {
   frame(gpu, render);
   const a = document.createElement('a');
-  a.download = 'chromatic-lens-' + Date.now() + '.png';
+  a.download = 'night-rain-' + Date.now() + '.png';
   a.href = canvas.toDataURL('image/png');
   a.click();
 });
@@ -405,7 +495,6 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-applyControls();
 togglePlay();
 </script>
 </body>
