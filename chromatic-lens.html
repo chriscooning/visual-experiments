@@ -178,16 +178,16 @@ fn staticDrops(uv0: vec2f, t: f32, cells: f32, keep: f32) -> f32 {
 
 // The water at screen point q: (field 0..1, trail), the drops' sizes set by
 // how much the coordinates are scaled.
-// The windshield leans back: a point on screen to where it lies on the glass,
-// in glass units (the bottom edge near and at the screen's scale, the top a
-// good way off, so drops there are smaller and squashed).
+// The glass leans toward us: a point on screen to where it lies on the glass,
+// in glass units (the top edge near and at the screen's scale, the bottom
+// tilted away, so drops there are smaller and squashed).
 const LEAN_S = 0.5;
 const LEAN_C = 0.866;
 fn toGlass(q: vec2f) -> vec2f {
-  let yb = 1.0 - q.y;
-  let s = yb / (LEAN_C - yb * LEAN_S);
+  let yt = q.y;
+  let s = yt / (LEAN_C - yt * LEAN_S);
   let z = 1.0 + s * LEAN_S;
-  return vec2f((q.x - u.a.y * 0.5) * z, 1.0 - s);
+  return vec2f((q.x - u.a.y * 0.5) * z, s);
 }
 
 fn water(q: vec2f) -> vec3f {
