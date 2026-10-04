@@ -153,7 +153,7 @@
       var now = Date.now(), ms = now - t0;
       var dt = now - since;
       shown = Math.max(shown, base + (ceil - base) * dt / (dt + tau));
-      pct.textContent = ('00' + (full ? 100 : Math.min(99, Math.floor(shown)))).slice(-3) + '%';
+      pct.textContent = (full ? 100 : Math.min(99, Math.floor(shown))) + '%';
       if (still) { text.textContent = WORD + '..._'; return; }
       if (ms > glitchAt) {
         if (glitched < 0) glitched = Math.floor(Math.random() * WORD.length);
