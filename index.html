@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Visual Experiments</title>
+<script src="controls.js" defer></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box}
@@ -46,6 +47,12 @@
     text-transform:uppercase;color:#444;
     border:1px solid #222;padding:4px 10px;border-radius:20px;
   }
+  .ios-note{
+    font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;line-height:1.7;color:#777;
+    text-align:center;max-width:520px;margin:-28px auto 40px;padding:10px 16px;
+    border:1px solid #1a1a1f;border-radius:10px;background:#0e0e12;
+  }
+  .ios-note[hidden]{display:none}
   footer{
     margin-top:48px;font-family:'Space Mono',monospace;
     font-size:9px;color:#2a2a2a;letter-spacing:2px;text-transform:uppercase;
@@ -54,6 +61,7 @@
 </head>
 <body>
   <h1>Visual Experiments</h1>
+  <p class="ios-note" id="ios-note" hidden>The WebGPU pieces use experimental web features. On iPhone and iPad they need iOS 27 or later.</p>
   <div class="grid">
     <div class="section-label">Light &amp; Glass · WebGPU</div>
     <a class="card" href="prism-ring.html">

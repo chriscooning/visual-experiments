@@ -6,6 +6,9 @@
  *   canvas is visible on load.
  * - Hides the keyboard/mouse hint pill on phones.
  * - Gives sliders room so the 22px thumb no longer covers its label.
+ * - On the WebGPU pieces (the ones with a #nogpu message), tells iPhone and
+ *   iPad visitors below iOS 27 that the piece uses experimental web features
+ *   and needs iOS 27 or later there; on the gallery, shows its #ios-note.
  *
  * Include with <script src="controls.js" defer></script>. Pages without a
  * panel still get the slider spacing fix.
@@ -33,14 +36,53 @@
     '  .panel.vx-panel.hidden{transform:translateY(calc(100% + 100px))}',
     '  #attractor-ui.vx-panel{right:12px;width:auto;max-height:calc(100dvh - 100px)}',
     '  #attractor-ui.vx-panel .attractor-panel{width:auto}',
-    '}'
+    '}',
+    '.vx-ios-note{position:fixed;left:50%;top:calc(14px + env(safe-area-inset-top));transform:translateX(-50%);z-index:30;',
+    'display:flex;align-items:flex-start;gap:10px;width:max-content;max-width:min(440px,calc(100vw - 120px));padding:9px 10px 9px 14px;',
+    'border:1px solid rgba(255,255,255,0.12);border-radius:10px;background:rgba(10,10,12,0.85);',
+    '-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);',
+    "font-family:'Space Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;letter-spacing:.3px;color:#bbb}",
+    '.vx-ios-note button{flex:none;border:0;background:none;color:#777;font-size:15px;line-height:1;padding:1px 2px;cursor:pointer;',
+    '-webkit-tap-highlight-color:transparent}',
+    '.nogpu.on~.vx-ios-note{display:none}'
   ].join('\n');
 
   var style = document.createElement('style');
   style.textContent = css;
   document.head.appendChild(style);
 
+  // iPhone and iPad, short of iOS 27, where the WebGPU pieces don't run yet.
+  // Safari gives its version (the OS version in its user agent has stood at
+  // 18.6 since iOS 26); other iOS browsers don't, so they hear about it too
+  // unless they say they're on 27 or later. (iPads ask for desktop sites as a
+  // Mac, so a Mac with a touch screen is an iPad.)
+  function iosBelow27() {
+    var ua = navigator.userAgent;
+    var ios = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    if (!ios) return false;
+    var v = ua.match(/Version\/(\d+)/) || ua.match(/OS (\d+)_\d+/);
+    return !(v && +v[1] >= 27);
+  }
+
+  function iosNote() {
+    var nogpu = document.getElementById('nogpu');
+    var gallery = document.getElementById('ios-note');
+    if ((!nogpu && !gallery) || !iosBelow27()) return;
+    if (gallery) { gallery.hidden = false; return; }
+    var msg = 'Uses experimental web features. On iPhone and iPad it needs iOS 27 or later.';
+    // Where WebGPU is missing altogether, say the same.
+    nogpu.textContent = msg;
+    var note = document.createElement('div');
+    note.className = 'vx-ios-note';
+    note.setAttribute('role', 'note');
+    note.innerHTML = '<span></span><button type="button" aria-label="Dismiss">\u00d7</button>';
+    note.firstChild.textContent = msg;
+    note.lastChild.addEventListener('click', function () { note.parentNode.removeChild(note); });
+    document.body.appendChild(note);
+  }
+
   function init() {
+    iosNote();
     var panel = document.getElementById('panel') || document.getElementById('attractor-ui');
     if (!panel) return;
 
