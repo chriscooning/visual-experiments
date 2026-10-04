@@ -9,10 +9,13 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap" media="print" onload="this.media='all'">
 <style>
-  /* The loader, run by the script just inside <body>. */
-  .vx-spin{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;
-    white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:#dca56e;
-    text-shadow:0 0 6px rgba(220,165,110,.7),0 0 18px rgba(220,165,110,.3);opacity:0;transition:opacity .45s ease}
+  /* The loader, run by the script just inside <body>, in the site's theme:
+     cheshire's violet (the site's default), or tumeric's amber. */
+  .vx-spin{--vx-ink:#BD93F9;--vx-glow:rgba(189,147,249,.65);--vx-bloom:rgba(107,34,180,.55);
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;
+    white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:var(--vx-ink);
+    text-shadow:0 0 6px var(--vx-glow),0 0 18px var(--vx-bloom);opacity:0;transition:opacity .45s ease}
+  .vx-spin.tumeric{--vx-ink:#dca56e;--vx-glow:rgba(220,165,110,.7);--vx-bloom:rgba(220,165,110,.3)}
   .vx-spin.in{opacity:1}
   .vx-spin.out{transition-duration:.25s}
   .vx-spin .p{width:4ch;text-align:right}
@@ -77,6 +80,9 @@ window.vxLoader = (function () {
   var ios = /iP(hone|od|ad)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
   var v = ua.match(/Version\/(\d+)/) || ua.match(/OS (\d+)_\d+/);
   if (!navigator.gpu || (ios && !(v && +v[1] >= 27))) { el.parentNode.removeChild(el); return null; }
+  // In the theme picked on the home page (the same site, so its choice is to
+  // hand): tumeric's amber, or cheshire's violet, the site's default.
+  try { if (localStorage.getItem('heroVariant') === 'tumeric') el.classList.add('tumeric'); } catch (e) {}
   var WORD = 'loading', NOISE = '.,:;i1tfLCG08@#$%&*+=<>/\\|?';
   var pct = el.firstChild, cell = el.lastChild.children, tail = cell[WORD.length];
   var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
