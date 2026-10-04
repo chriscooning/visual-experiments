@@ -206,10 +206,10 @@ fn staticDrops(uv0: vec2f, t: f32, cells: f32, keep: f32) -> f32 {
 // The windshield leans back: a point on screen to where it lies on the glass,
 // in glass units (the bottom edge near and at the screen's scale, the top a
 // good way off, so drops there are smaller and squashed).
-const LEAN_S = 0.42;
-const LEAN_C = 0.907;
+const LEAN_S = 0.5;
+const LEAN_C = 0.866;
 fn toGlass(q: vec2f) -> vec2f {
-  let yb = 1.0 - q.y;
+  let yb = max(0.86 - q.y, -0.3);
   let s = yb / (LEAN_C - yb * LEAN_S);
   let z = 1.0 + s * LEAN_S;
   return vec2f((q.x - u.a.y * 0.5) * z, 1.0 - s);
@@ -269,6 +269,79 @@ fn street(q: vec2f, focus: f32) -> vec3f {
     }
   }
   return col;
+}
+
+// ---- The inside of the car, in silhouette: pillars leaning in, the roof's
+// edge with the visor and mirror, the dashboard with its hump over the
+// gauges, and a big thin-rimmed wheel with a chrome horn ring, as in an old
+// Buick. Wide screens sit back in the driver's seat with the wheel to the
+// left; tall ones sit right behind it. The street's light catches the edges.
+fn ellipseD(p: vec2f, c: vec2f, r: vec2f) -> f32 {
+  // (Roughly the distance from the ellipse's edge, in screen units.)
+  let q = (p - c) / r;
+  let l = length(q);
+  return (l - 1.0) * l / length(q / r);
+}
+fn cabin(p: vec2f) -> vec4f {
+  let asp = u.a.y; let px = u.a.z;
+  let tall = asp < 1.0;
+  let wx = select(asp * 0.3, asp * 0.5, tall);
+  let amb = street(p, 1.0);
+  let dark = vec3f(0.008, 0.009, 0.012) + amb * 0.03;
+  var a = 0.0;
+  var col = dark;
+  let aa = px * 1.5;
+  // Pillars: the glass narrows toward the roof.
+  let yy = clamp(p.y, 0.0, 1.0);
+  let lp = mix(select(0.13, 0.17, tall) * asp, -0.02 * asp, yy);
+  let rp = select(mix(asp * 0.87, asp * 1.02, yy), asp * 2.0, tall);
+  let pil = max(S(lp + aa, lp - aa, p.x), S(rp - aa, rp + aa, p.x));
+  // The roof's edge, a gentle curve, deeper over the driver where the visor
+  // is folded up against it.
+  let roof = 0.035 + 0.02 * pow((p.x - asp * 0.5) / asp * 2.0, 2.0) + 0.028 * exp(-pow((p.x - wx) / 0.3, 4.0));
+  var top = S(roof + aa, roof - aa, p.y);
+  col += amb * 0.35 * S(0.005, 0.0, abs(p.y - roof + 0.003)) * step(p.y, roof);
+  // The mirror on its stem, to the driver's right.
+  let mc = vec2f(select(asp * 0.58, asp * 0.92, tall), 0.11);
+  let md = length(max(abs(p - mc) - vec2f(0.085, 0.01), vec2f(0.0))) - 0.03;
+  let stem = S(aa, -aa, abs(p.x - mc.x) - 0.006) * step(p.y, mc.y);
+  top = max(top, max(S(aa, -aa, md), stem));
+  // A line of light along the mirror's lower edge.
+  col += amb * 0.6 * S(0.004, 0.0, abs(md + 0.003)) * step(mc.y, p.y);
+  // Dashboard: a long shallow curve, rising over the gauges.
+  let dy = select(0.82, 0.8, tall) + 0.03 * pow((p.x - asp * 0.5) / asp * 2.0, 2.0)
+    - 0.025 * exp(-pow((p.x - wx) / 0.26, 2.0));
+  let dash = S(dy - aa, dy + aa, p.y);
+  // Chrome along its top edge, and the gauges' faint green on the hump.
+  let edge = S(0.004, 0.0, abs(p.y - dy - 0.003));
+  col += (amb * 0.9 + vec3f(0.03)) * edge * step(dy - 0.01, p.y);
+  col += vec3f(0.02, 0.06, 0.04) * exp(-pow((p.x - wx) / 0.12, 2.0)) * S(dy, dy + 0.04, p.y) * S(dy + 0.12, dy + 0.04, p.y);
+  // The top of the dash takes a little of the street's light, fading back.
+  col += amb * 0.12 * S(dy + 0.12, dy, p.y) * step(dy, p.y);
+  a = max(max(pil, top), dash);
+  // The wheel: seen from above and behind, an ellipse low in the view.
+  let wc = vec2f(wx, select(0.99, 1.0, tall));
+  let wr = select(vec2f(0.52, 0.34), vec2f(min(0.6, asp * 0.66), 0.31), tall);
+  let rd = ellipseD(p, wc, wr);
+  let th = 0.014 + 0.008 * S(wc.y, wc.y - wr.y, p.y);
+  let rim = S(th + aa, th - aa, abs(rd));
+  let ring = S(0.0035 + aa, 0.0035 - aa, abs(ellipseD(p, wc, wr * 0.72)));
+  // Two spokes, a little below level, out from the hub.
+  var spoke = 0.0;
+  for (var k = 0; k < 2; k++) {
+    let dir = normalize(vec2f(select(-1.0, 1.0, k == 1) * wr.x, wr.y * 0.35));
+    let v = p - wc;
+    let tt = clamp(dot(v, dir), 0.0, 1.0);
+    spoke = max(spoke, S(0.016 + aa, 0.016 - aa, length(v - dir * tt)));
+  }
+  let hub = S(aa, -aa, ellipseD(p, wc, wr * 0.22));
+  let wheel = max(max(rim, spoke), hub);
+  // Light along the top of the rim, and the horn ring's chrome.
+  let gloss = S(th * 0.6, 0.0, abs(rd + th * 0.45)) * step(p.y, wc.y) * S(wc.y, wc.y - wr.y * 0.6, p.y);
+  col = mix(col, dark + amb * (0.06 + 0.9 * gloss) + vec3f(0.04) * gloss, wheel);
+  col = mix(col, dark * 0.5 + amb * 0.7 + vec3f(0.05), ring * (1.0 - wheel) * 0.8);
+  a = max(a, max(wheel, ring * 0.9));
+  return vec4f(col, a);
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
@@ -339,19 +412,17 @@ fn street(q: vec2f, focus: f32) -> vec3f {
     }
   }
 
-  // The top of the dashboard along the bottom, and the faint sheen of the
-  // leaning glass.
-  let dash = 0.94 - 0.05 * pow(abs(uv.x - 0.5) * 2.0, 2.0);
+  // The faint sheen of the leaning glass, then the car around it.
   col += vec3f(0.03, 0.04, 0.05) * S(0.5, 0.0, uv.y) * (1.0 - u.c.z * 0.3);
-  col = mix(col, vec3f(0.006, 0.007, 0.009), S(dash - 0.004, dash + 0.004, uv.y));
-  col += vec3f(0.05, 0.06, 0.07) * exp(-pow((uv.y - dash) / 0.006, 2.0)) * 0.6;
+  let cab = cabin(p);
+  col = mix(col, cab.rgb, cab.a);
   // Corners fall dark; a little grain; a gentle curve so lights bloom.
   let vg = length((uv - 0.5) * vec2f(1.15, 1.0));
   col *= 1.0 - S(0.4, 0.9, vg) * 0.5;
   let gr = fract(sin(dot(floor(uv * vec2f(1400.0, 900.0)) + fract(t * 7.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
   col += gr * 0.015;
   // Exposed up a little, the darks cooled toward teal.
-  col *= 1.45;
+  col *= 1.3;
   col += vec3f(0.0, 0.008, 0.014) * (1.0 - S(0.0, 0.25, dot(col, vec3f(0.33))));
   col = col / (1.0 + col * 0.3);
   return vec4f(col, 1.0);
