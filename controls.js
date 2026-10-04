@@ -7,9 +7,9 @@
  * - Hides the keyboard/mouse hint pill on phones.
  * - Gives sliders room so the 22px thumb no longer covers its label.
  * - On the WebGPU pieces (the ones with a #nogpu message): while a piece
- *   starts up where it can run, a spinner, one glyph breathing up the ASCII
- *   ramp from the home page's hero and back beside "loading..." typed out
- *   terminal style, until its first frame is on screen. Where it can't run, no spinner: iPhone and iPad below iOS 27
+ *   starts up where it can run, a loader, terminal style: how far along it
+ *   is as a percentage, and "loading..." typed out, until its first frame is
+ *   on screen. Where it can't run, no spinner: iPhone and iPad below iOS 27
  *   hear that it needs 27, and a browser without WebGPU gets a cheeky line
  *   and what to try instead. On the gallery, shows its #ios-note.
  *
@@ -53,7 +53,7 @@
     ".vx-spin{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;",
     "white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:#dca56e;",
     'opacity:0;transition:opacity .45s ease;text-shadow:0 0 6px rgba(220,165,110,.7),0 0 18px rgba(220,165,110,.3)}',
-    '.vx-spin .g{width:1ch;text-align:center}',
+    '.vx-spin .p{width:4ch;text-align:right}',
     '.vx-spin .t{width:12ch}',
     '.vx-spin.in{opacity:1}'
   ].join('\n');
@@ -118,34 +118,43 @@
     document.body.appendChild(note);
   }
 
-  // The spinner: one glyph breathing up the hero's ramp and back, and beside
-  // it "loading..." typed out the way a terminal would: each letter flickers
-  // through the ramp before it lands, the dots count up behind a blinking
-  // cursor, and now and then a letter glitches and lands again. (The line is
-  // a fixed width, so nothing shifts as the dots come and go.)
+  // The loader, terminal style: on the left how far along the piece is with
+  // starting up, and beside it "loading..." typed out the way a terminal
+  // would: each letter flickers through the home page hero's ASCII ramp
+  // before it lands, the dots count up behind a blinking cursor, and now and
+  // then a letter glitches and lands again. The percentage moves on at each
+  // real step of the start (step(v, c, tau): it's at v and creeps toward c,
+  // half way there after tau, until the next), so it never sits still, and
+  // reads 100% only once the first frame is on screen. The creep slows as it
+  // goes but never stops, so a long wait on a slow phone keeps ticking over
+  // rather than sitting at 99. (The line is a fixed width, so nothing shifts.)
   var RAMP = ' .,:;i1tfLCG08@';
-  var SEQ = RAMP.slice(1) + RAMP.slice(2, -1).split('').reverse().join('');
   var NOISE = RAMP.slice(1) + '#$%&*+=<>/\\|?';
   var WORD = 'loading';
-  function spinner() {
+  function loader() {
     var el = document.createElement('div');
     el.className = 'vx-spin';
     el.setAttribute('role', 'img');
     el.setAttribute('aria-label', 'Loading');
-    el.innerHTML = '<span class="g"></span><span class="t"></span>';
-    var glyph = el.firstChild, text = el.lastChild;
+    el.innerHTML = '<span class="p"></span><span class="t"></span>';
+    var pct = el.firstChild, text = el.lastChild;
     document.body.appendChild(el);
     var font = document.createElement('link');
     font.rel = 'stylesheet';
     font.href = 'https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap';
     document.head.appendChild(font);
-    var t0 = Date.now(), timer = 0;
+    var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var t0 = Date.now(), timer = 0, gone = false;
     var glitchAt = 2600 + Math.random() * 1500, glitched = -1;
     var typed = 160 + WORD.length * 70;
+    var base = 2, ceil = 9, tau = 1500, since = t0, shown = 0, full = false;
     function noise() { return NOISE.charAt(Math.floor(Math.random() * NOISE.length)); }
     function draw() {
-      var ms = Date.now() - t0;
-      glyph.textContent = SEQ.charAt(Math.floor(ms / 77) % SEQ.length);
+      var now = Date.now(), ms = now - t0;
+      var dt = now - since;
+      shown = Math.max(shown, base + (ceil - base) * dt / (dt + tau));
+      pct.textContent = ('00' + (full ? 100 : Math.min(99, Math.floor(shown)))).slice(-3) + '%';
+      if (still) { text.textContent = WORD + '..._'; return; }
       if (ms > glitchAt) {
         if (glitched < 0) glitched = Math.floor(Math.random() * WORD.length);
         if (ms > glitchAt + 140) { glitched = -1; glitchAt = ms + 2200 + Math.random() * 2400; }
@@ -155,24 +164,28 @@
       if (ms >= typed) s += '...'.slice(0, Math.floor((ms - typed) / 380) % 4);
       text.textContent = s + (Math.floor(ms / 530) % 2 ? ' ' : '_');
     }
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      glyph.textContent = 'G';
-      text.textContent = WORD + '..._';
-    } else {
-      draw();
-      timer = setInterval(draw, 50);
-    }
+    draw();
+    timer = setInterval(draw, 50);
     // (A beat before it shows, so a quick start never flashes it.)
     var show = setTimeout(function () { el.classList.add('in'); }, 120);
-    return function stop() {
+    function stop() {
+      if (gone) return;
+      gone = true;
       clearInterval(timer);
       clearTimeout(show);
       el.classList.remove('in');
       setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 500);
+    }
+    return {
+      step: function (v, c, t) { if (v > base) { base = v; ceil = c; tau = t || 1200; since = Date.now(); draw(); } },
+      at: function () { return base; },
+      // On screen: 100% for a moment, then away.
+      done: function () { full = true; draw(); setTimeout(stop, 260); },
+      stop: stop
     };
   }
 
-  // A WebGPU piece starting up: the spinner until the first frame is on
+  // A WebGPU piece starting up: the loader until the first frame is on
   // screen, where the piece can run; the message where it can't, or where
   // it fails to start.
   function startUp(nogpu) {
@@ -180,36 +193,69 @@
     setNoGpu(nogpu, msg);
     if (iosBelow27()) { iosNote(msg); return; }
     if (!navigator.gpu) return;
-    var stop = spinner();
-    var done = false;
-    function finish() {
+    var L = loader();
+    var undo = [], done = false;
+    // While the page's code and fonts are still coming down, each file that
+    // finishes is a small step, up to 9%; the code is in once it asks for
+    // the GPU.
+    try {
+      var files = new PerformanceObserver(function (list) {
+        list.getEntries().forEach(function () { if (L.at() < 9) L.step(Math.min(9, L.at() + 2), 9, 1500); });
+      });
+      files.observe({ type: 'resource' });
+      undo.push(function () { files.disconnect(); });
+    } catch (e) {}
+    function finish(ok) {
       if (done) return;
       done = true;
-      stop();
+      undo.forEach(function (f) { f(); });
+      if (ok) L.done(); else L.stop();
       window.removeEventListener('error', failed);
       window.removeEventListener('unhandledrejection', failed);
     }
+    // Each real step of a WebGPU start moves the percentage on: the adapter,
+    // the device, the shader handed to the compiler, the pipeline built, the
+    // first frame sent. The longest wait is usually the last, while the GPU
+    // compiles and draws, so from there it climbs slowest.
+    function onStep(proto, name, v, c) {
+      if (!proto || typeof proto[name] !== 'function') return;
+      var orig = proto[name];
+      proto[name] = function () {
+        var r = orig.apply(this, arguments);
+        if (r && typeof r.then === 'function') r.then(function () { L.step(v, c); }, function () {});
+        else L.step(v, c);
+        return r;
+      };
+      undo.push(function () { proto[name] = orig; });
+    }
+    onStep(window.GPU && GPU.prototype, 'requestAdapter', 10, 18);
+    onStep(window.GPUAdapter && GPUAdapter.prototype, 'requestDevice', 20, 28);
+    onStep(window.GPUDevice && GPUDevice.prototype, 'createShaderModule', 30, 45);
+    onStep(window.GPUDevice && GPUDevice.prototype, 'createRenderPipeline', 50, 58);
+    onStep(window.GPUDevice && GPUDevice.prototype, 'createRenderPipelineAsync', 50, 58);
     // The first frame: the first work handed to the GPU, once it's done.
     var Q = window.GPUQueue && GPUQueue.prototype;
     if (Q && Q.submit) {
       var submit = Q.submit;
       Q.submit = function () {
         Q.submit = submit;
+        L.step(60, 99, 2500);
         var r = submit.apply(this, arguments);
         this.onSubmittedWorkDone().then(function () {
-          requestAnimationFrame(function () { requestAnimationFrame(finish); });
-        }, finish);
+          requestAnimationFrame(function () { requestAnimationFrame(function () { finish(true); }); });
+        }, function () { finish(false); });
         return r;
       };
+      undo.push(function () { Q.submit = submit; });
     }
     // The page gives up (it shows its message), or the GPU does before the
-    // first frame: then the message, and no spinner.
-    new MutationObserver(function () { if (nogpu.classList.contains('on')) finish(); })
+    // first frame: then the message, and no loader.
+    new MutationObserver(function () { if (nogpu.classList.contains('on')) finish(false); })
       .observe(nogpu, { attributes: true, attributeFilter: ['class'] });
     function failed(e) {
       var r = e.reason || e.error || e;
       if (!/gpu|wgsl|shader/i.test(String((r && (r.message || r.code)) || e.message || '')) && !/vgpu/.test(String(e.filename || ''))) return;
-      finish();
+      finish(false);
       nogpu.classList.add('on');
       ['panel', 'hintPill'].forEach(function (id) { var x = document.getElementById(id); if (x) x.style.display = 'none'; });
       var t = document.querySelector('.vx-toggle');
@@ -217,8 +263,8 @@
     }
     window.addEventListener('error', failed);
     window.addEventListener('unhandledrejection', failed);
-    // (Never spin for ever.)
-    setTimeout(finish, 30000);
+    // (Never load for ever.)
+    setTimeout(function () { finish(false); }, 30000);
   }
 
   function init() {
