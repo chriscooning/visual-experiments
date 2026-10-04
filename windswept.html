@@ -402,6 +402,76 @@ struct Tree {
   let r = mix(ra, rb, h);
   return vec4f(length(off) - r, off, r);
 }
+// A cypress shelf, as Earle cuts them: a flat underside, a top stepped into
+// plateaus at different heights joined by steep risers, every edge straight
+// and every corner sharp, drawn out at each end to a point, the leeward one
+// level or swept up and the windward one cut back by the wind or flung up
+// in a flag. Vertices in shelf units (half width w, half height h, y down),
+// round the outline from the underside's windward corner; k seeds it.
+@diagnostic(off, derivative_uniformity) fn shelfVerts(w: f32, h: f32, k: f32) -> array<vec2f, 12> {
+  var P: array<vec2f, 12>;
+  let lw = w * (1.05 + 0.3 * hash1(k + 1.3));
+  let rw = w * (0.85 + 0.2 * hash1(k + 2.9));
+  let yb = h * 0.38;
+  P[0] = vec2f(rw * (0.7 + 0.15 * hash1(k + 4.1)), yb);
+  P[1] = vec2f(-lw * (0.55 + 0.15 * hash1(k + 5.3)), yb);
+  P[2] = vec2f(-lw, yb - h * (0.35 + 0.6 * hash1(k + 6.7)));
+  for (var i = 0; i < 4; i++) {
+    let fi = f32(i);
+    let x0 = mix(-lw * 0.82, rw * 0.72, fi / 4.0) + w * 0.05 * hash1(k + fi * 7.1);
+    let x1 = mix(-lw * 0.82, rw * 0.72, (fi + 1.0) / 4.0) - w * (0.05 + 0.08 * hash1(k + fi * 8.3));
+    let mid = 1.0 - abs(fi - 1.3) / 2.7;
+    let y = -h * (0.45 + 0.65 * hash1(k + fi * 9.7) * (0.55 + 0.45 * mid));
+    let tl = h * 0.18 * (hash1(k + fi * 10.9) - 0.5);
+    P[3 + i * 2] = vec2f(x0, y - tl);
+    P[4 + i * 2] = vec2f(x1, y + tl);
+  }
+  P[11] = vec2f(rw * (1.0 + 0.15 * hash1(k + 13.3)), yb - h * (0.3 + 1.0 * hash1(k + 12.1)));
+  return P;
+}
+// A point v against a shelf: (signed distance, out negative in; depth below
+// its top, 0 at the top edge to 1 at the underside; the x of the up-facing
+// normal of the facet above; distance round the outline to the nearest
+// point on it, for spacing dots).
+@diagnostic(off, derivative_uniformity) fn shelf(v: vec2f, w: f32, h: f32, k: f32) -> vec4f {
+  var P = shelfVerts(w, h, k);
+  var dmin = 1e9;
+  var sg = 1.0;
+  var along = 0.0;
+  var run = 0.0;
+  for (var i = 0; i < 12; i++) {
+    let a = P[i];
+    let b = P[(i + 1) % 12];
+    let e = b - a;
+    let wv = v - a;
+    let ee = max(dot(e, e), 1e-10);
+    let tt = clamp(dot(wv, e) / ee, 0.0, 1.0);
+    let bq = wv - e * tt;
+    let dd = dot(bq, bq);
+    let L = sqrt(ee);
+    if (dd < dmin) { dmin = dd; along = run + tt * L; }
+    run += L;
+    let c1 = v.y >= a.y;
+    let c2 = v.y < b.y;
+    let c3 = e.x * wv.y > e.y * wv.x;
+    if ((c1 && c2 && c3) || (!c1 && !c2 && !c3)) { sg = -sg; }
+  }
+  // The top runs from the leeward point (2) to the windward one (11).
+  var topY = P[2].y;
+  var nx = 0.0;
+  for (var i = 2; i < 11; i++) {
+    let a = P[i];
+    let b = P[i + 1];
+    if (v.x >= a.x && v.x < b.x) {
+      topY = mix(a.y, b.y, (v.x - a.x) / max(b.x - a.x, 1e-6));
+      let e = normalize(b - a);
+      nx = e.y;
+    }
+  }
+  if (v.x >= P[11].x) { topY = P[11].y; }
+  let dep = clamp((v.y - topY) / max(h * 0.38 - topY, 1e-4), 0.0, 1.0);
+  return vec4f(sg * sqrt(dmin), dep, nx, along);
+}
 // Tree: base b, scale s, seed sd. Returns colour and coverage.
 @diagnostic(off, derivative_uniformity) fn cypress(p: vec2f, b: vec2f, s: f32, sd: f32) -> vec4f {
   let q = (p - b) / s;
@@ -440,42 +510,24 @@ struct Tree {
     let fi = f32(i);
     let sw = wind * 0.006 * sin(t * 1.1 + fi * 1.7 + sd) * (0.5 - m.y * 2.0);
     let v = q - m.xy - vec2f(sw, 0.0);
-    // A shelf: flat on top and underneath, tapering at each end to a point,
-    // the leeward one mostly the longer, streaming downwind, and its top
-    // risen into clumps of different sizes at uneven spacing, each peaking a
-    // little, rather than a row of even scallops. Lit from its own curve, so
-    // the bright rim swings round with the light.
-    let lw = w * (1.05 + 0.35 * hash1(fi * 7.7 + sd + 70.0));
-    let rw = w * (0.95 + 0.15 * hash1(fi * 8.3 + sd + 80.0));
-    if (v.x < -lw * 1.05 || v.x > rw * 1.05 || v.y < -h * 1.8 || v.y > h * 0.7) { continue; }
-    var bump = 0.0;
-    for (var j = 0; j < 7; j++) {
-      let fj = f32(j);
-      let hj = hash1(fi * 5.3 + fj * 1.7 + sd);
-      let hk = hash1(fi * 2.9 + fj * 3.1 + sd + 0.5);
-      let x0 = ((fj + 0.5) / 7.0 - 0.5) * 1.7 + (hk - 0.5) * 0.18;
-      let bw = 0.07 + 0.08 * hj;
-      bump = max(bump, (0.5 + 0.5 * hk) * exp(-pow(abs(v.x / w - x0) / bw, 1.2)));
-    }
-    let xs = v.x / select(lw, rw, v.x > 0.0);
-    // (ramp: 0 along the middle, rising to 1 at the point.)
-    let ramp = pow(clamp((abs(xs) - 0.42) / 0.58, 0.0, 1.0), 1.4);
-    let tipY = -h * 0.2;
-    let top = mix(-h * (0.92 + 0.08 * (1.0 - xs * xs)), tipY, ramp) - h * 0.28 * bump * (1.0 - ramp);
-    let bot = mix(h * 0.4, tipY, ramp);
-    var d = max(max(top - v.y, v.y - bot), (abs(xs) - 1.0) * w);
-    d += h * 0.06 * (fbm(v / w * vec2f(5.0, 7.0) + fi * 3.3 + sd) - 0.5) * (1.0 - ramp);
+    // The shelf: its facets each lit by the way they face, toward the light
+    // or away from it, so the light breaks across its sharp angles; below
+    // the top the body turns to face us and darkens to its underside.
+    if (v.x < -w * 1.4 || v.x > w * 1.25 || v.y < -h * 1.3 || v.y > h * 0.45) { continue; }
+    let sh = shelf(v, w, h, fi * 7.31 + sd * 1.37 + 3.0);
+    let d = sh.x;
     if (d > DOT / s * 3.0 + px * 2.0) { continue; }
-    let yy = clamp((v.y + h) / (h * 1.4), 0.0, 1.0);
-    let n = roundN(v - vec2f(0.0, h * 0.25), vec2f(w, h * 1.1));
-    let lit = lambert(n, 0.3) * (1.0 - smoothstep(0.55, 0.95, yy) * 0.85);
+    let dep = sh.y;
+    let topN = normalize(vec3f(sh.z, sqrt(max(1.0 - sh.z * sh.z, 0.0)), 0.4));
+    let bodyN = normalize(vec3f(v.x / (w * 1.6), 0.15 - 0.55 * dep, 0.85));
+    let n = normalize(mix(topN, bodyN, smoothstep(0.05, 0.7, dep)));
+    let lit = lambert(n, 0.3) * (1.0 - smoothstep(0.62, 0.98, dep) * 0.85);
     var fc = stippleBush(v, 0.08 + 0.92 * lit, 0.0062, px, mix(C(17), C(24), 0.4), C(18), C(19), mix(C(19), C(14), 0.45), C(21), fi * 3.1 + sd);
-    fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.6, 1.0, yy) * 0.7);
+    fc = mix(fc, mix(C(17), C(24), 0.5), smoothstep(0.72, 1.0, dep) * 0.7);
     fc = moonCast(fc, lit);
     acc = over(acc, fc, fillA(d, px));
-    // Its outline in dots along the top and the underside, thinning out
-    // into the points.
-    acc = over(acc, C(24), dotLine(d, v.x + select(0.0, 40.0, v.y > 0.0), DOT / s, px, fi + sd * 3.0) * 0.65 * (1.0 - smoothstep(0.8, 1.0, abs(xs))));
+    // Its outline in dots, spaced evenly round every edge.
+    acc = over(acc, C(24), dotLine(d, sh.w, DOT / s, px, fi + sd * 3.0) * 0.6);
   }
   return unpremul(acc);
 }
