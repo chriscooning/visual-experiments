@@ -140,7 +140,7 @@
 </div>
 <div class="canvas-wrap">
   <canvas id="canvas"></canvas>
-  <div class="radius-hud" id="radiusHud">r: 14</div>
+  <div class="radius-hud" id="radiusHud">r: 125</div>
 </div>
 <div class="fps" id="fps"></div>
 <div class="controls">
@@ -150,14 +150,14 @@
       <option value="petals">Petals</option>
       <option value="spiral">Spiral</option>
       <option value="fieldLines">Field Lines</option>
-      <option value="waves">Waves</option>
+      <option value="waves" selected>Waves</option>
     </select>
   </div>
   <div class="control-group"><label>Outer Shape</label>
     <select id="shape">
       <option value="circle">Circle</option>
       <option value="triangle">Triangle</option>
-      <option value="square">Square</option>
+      <option value="square" selected>Square</option>
       <option value="hexagon">Hexagon</option>
       <option value="star">Star</option>
       <option value="heart">Heart</option>
@@ -167,7 +167,7 @@
   <div class="control-group"><label>Center Shape</label>
     <select id="centerShape">
       <option value="circle">Circle</option>
-      <option value="triangle">Triangle</option>
+      <option value="triangle" selected>Triangle</option>
       <option value="square">Square</option>
       <option value="hexagon">Hexagon</option>
       <option value="star">Star</option>
@@ -216,8 +216,8 @@
     <input type="range" id="stroke" min="1" max="20" value="5">
   </div>
   <div class="control-group">
-    <label>Center Radius <span class="val" id="centerRadiusVal">14</span></label>
-    <input type="range" id="centerRadius" min="2" max="200" value="14">
+    <label>Center Radius <span class="val" id="centerRadiusVal">125</span></label>
+    <input type="range" id="centerRadius" min="2" max="200" value="125">
   </div>
   <div class="btn-row">
     <button class="btn" id="playPause">
@@ -311,17 +311,22 @@ resize();
 let perlin=new PerlinNoise((Math.random()*1e5)|0);
 let time=0, playing=false, animId=null, lastFrame=0;
 let smoothX=W/2, smoothY=H/2, targetX=W/2, targetY=H/2;
-let cRadius=14; // center radius
+// Opens on a triangle grown out to a square: rings of neon waves.
+const CR0=125;
+let cRadius=CR0; // center radius
+// Radii and wobble are set for a 400px canvas and scale with the real one,
+// so the piece keeps its proportions whatever size it's drawn at.
+function SZ(){return Math.min(W,H)/400;}
 let dragging=false, showCrosshair=false;
 const LERP=0.15;
 
 function $(id){return document.getElementById(id);}
 function cfg(){
   return{
-    nl:+$('numLines').value,ns:+$('noiseScale').value,amp:+$('amplitude').value,
+    nl:+$('numLines').value,ns:+$('noiseScale').value,amp:+$('amplitude').value*SZ(),
     ll:+$('lineLength').value,pal:$('palette').value,bg:$('bg').value,
     sty:$('style').value,shp:$('shape').value,cshp:$('centerShape').value,
-    spd:+$('speed').value,sw:+$('stroke').value,cr:cRadius
+    spd:+$('speed').value,sw:+$('stroke').value,cr:cRadius*SZ()
   };
 }
 
@@ -609,7 +614,7 @@ function render(ts){
   ctx.fillRect(0,0,W,H);
   (drawFns[c.sty]||drawFlowLines)(c,time);
 
-  if(showCrosshair) drawCrosshair(smoothX,smoothY,c.bg,cRadius,c.cshp);
+  if(showCrosshair) drawCrosshair(smoothX,smoothY,c.bg,c.cr,c.cshp);
 
   if(playing){
     time+=c.spd/1000;
@@ -678,7 +683,7 @@ $('generate').addEventListener('click',()=>{
 
 $('resetCenter').addEventListener('click',()=>{
   targetX=W/2;targetY=H/2;smoothX=W/2;smoothY=H/2;
-  cRadius=14;crSlider.value=14;crVal.textContent='14';
+  cRadius=CR0;crSlider.value=CR0;crVal.textContent=String(CR0);
   if(!playing)render(performance.now());
 });
 

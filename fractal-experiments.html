@@ -18,6 +18,7 @@
   .hint{font-family:'Space Mono',monospace;font-size:9px;color:#333;letter-spacing:1px;margin-top:4px}
   .canvas-wrap{position:relative;margin:8px auto;cursor:crosshair}
   canvas{display:block;border-radius:4px}
+  html.embed canvas{position:fixed;inset:0;width:100vw;height:100vh;border-radius:0}
   .depth-hud{
     position:absolute;bottom:12px;left:50%;transform:translateX(-50%);
     font-family:'Space Mono',monospace;font-size:10px;color:rgba(255,255,255,.5);
@@ -176,8 +177,17 @@ const palettes={
 // CANVAS & STATE
 // ═══════════════════════════════════════
 const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
-let W,H;
-function resize(){const m=Math.min(window.innerWidth-16,window.innerHeight*.52,720);W=canvas.width=Math.round(m);H=canvas.height=Math.round(m)}
+let W,H,S;
+// On its own page the canvas is a square above the controls; framed in the
+// experiments viewer (another page's iframe, or ?embed for its thumbnails)
+// it fills the whole window. Shapes are sized from the shorter side S.
+const EMBED=window.self!==window.top||/[?&]embed\b/.test(location.search);
+if(EMBED)document.documentElement.classList.add('embed');
+function resize(){
+  if(EMBED){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
+  else{const m=Math.min(window.innerWidth-16,window.innerHeight*.52,720);W=canvas.width=Math.round(m);H=canvas.height=Math.round(m);}
+  S=Math.min(W,H);
+}
 resize();
 
 let perlin=new PerlinNoise((Math.random()*1e5)|0);
@@ -293,7 +303,7 @@ function drawSpiralSeptagon(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
   const maxDepth=Math.min(depth,8);
-  const baseR=(sc/50)*W*.28;
+  const baseR=(sc/50)*S*.28;
   const rotRad=(rot+t*30)*Math.PI/180;
   let totalSegs=0;
   const maxSegs=15000;
@@ -334,7 +344,7 @@ function drawLevyC(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
   const maxD=Math.min(depth,16);
-  const len=(sc/50)*W*.35;
+  const len=(sc/50)*S*.35;
   const rotRad=rot*Math.PI/180;
 
   // Build points iteratively
@@ -381,7 +391,7 @@ function drawTwinTree(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
   const maxD=Math.min(depth,12);
-  const baseLen=(sc/50)*W*.18;
+  const baseLen=(sc/50)*S*.18;
   const rotRad=rot*Math.PI/180;
   let segs=0;
   const maxSegs=20000;
@@ -415,7 +425,7 @@ function drawSierpinskiCarpet(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
   const maxD=Math.min(depth,6);
-  const size=(sc/50)*W*.55;
+  const size=(sc/50)*S*.55;
   const rotRad=rot*Math.PI/180;
   let segs=0;
   const maxSegs=25000;
@@ -461,7 +471,7 @@ function drawSierpinskiCarpet(c,t){
 function drawCyberFern(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
-  const scale=(sc/50)*W*.035;
+  const scale=(sc/50)*S*.035;
   const rotRad=rot*Math.PI/180;
   const iters=Math.min(depth*8000,60000);
 
@@ -513,7 +523,7 @@ function drawVicsek(c,t){
   const{depth,ns,amp,sc,pal,bg,sw,rot}=c;
   const col=palettes[pal],lw=sw/10,ox=smoothX,oy=smoothY;
   const maxD=Math.min(depth,6);
-  const size=(sc/50)*W*.5;
+  const size=(sc/50)*S*.5;
   const rotRad=rot*Math.PI/180;
   let segs=0;
   const maxSegs=20000;
