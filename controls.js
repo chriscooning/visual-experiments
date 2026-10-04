@@ -6,12 +6,13 @@
  *   canvas is visible on load.
  * - Hides the keyboard/mouse hint pill on phones.
  * - Gives sliders room so the 22px thumb no longer covers its label.
- * - On the WebGPU pieces (the ones with a #nogpu message): while a piece
- *   starts up where it can run, a loader, terminal style: how far along it
- *   is as a percentage, and "loading..." typed out, until its first frame is
- *   on screen. Where it can't run, no spinner: iPhone and iPad below iOS 27
- *   hear that it needs 27, and a browser without WebGPU gets a cheeky line
- *   and what to try instead. On the gallery, shows its #ios-note.
+ * - On the WebGPU pieces (the ones with a #nogpu message): each page starts
+ *   its loader with its first bytes (the block just inside its <body>); this
+ *   moves it on at each real step of the start and takes it away once the
+ *   first frame is on screen. Where a piece can't run, no loader: iPhone and
+ *   iPad below iOS 27 hear that it needs 27, and a browser without WebGPU
+ *   gets a cheeky line and what to try instead. On the gallery, shows its
+ *   #ios-note.
  *
  * Include with <script src="controls.js" defer></script>. Pages without a
  * panel still get the slider spacing fix.
@@ -49,13 +50,7 @@
     '-webkit-tap-highlight-color:transparent}',
     '.nogpu.on~.vx-ios-note{display:none}',
     '.nogpu{flex-direction:column}',
-    '.nogpu .vx-lead{display:block;color:#aaa;margin-bottom:6px}',
-    ".vx-spin{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;",
-    "white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:#dca56e;",
-    'opacity:0;transition:opacity .45s ease;text-shadow:0 0 6px rgba(220,165,110,.7),0 0 18px rgba(220,165,110,.3)}',
-    '.vx-spin .p{width:4ch;text-align:right}',
-    '.vx-spin .t{width:12ch}',
-    '.vx-spin.in{opacity:1}'
+    '.nogpu .vx-lead{display:block;color:#aaa;margin-bottom:6px}'
   ].join('\n');
 
   var style = document.createElement('style');
@@ -118,93 +113,20 @@
     document.body.appendChild(note);
   }
 
-  // The loader, terminal style: on the left how far along the piece is with
-  // starting up, and beside it "loading..." typed out the way a terminal
-  // would: each letter flickers through the home page hero's ASCII ramp
-  // before it lands, the dots count up behind a blinking cursor, and now and
-  // then a letter glitches and lands again. The percentage moves on at each
-  // real step of the start (step(v, c, tau): it's at v and creeps toward c,
-  // half way there after tau, until the next), so it never sits still, and
-  // reads 100% only once the first frame is on screen. The creep slows as it
-  // goes but never stops, so a long wait on a slow phone keeps ticking over
-  // rather than sitting at 99. (The line is a fixed width, so nothing shifts.)
-  var RAMP = ' .,:;i1tfLCG08@';
-  var NOISE = RAMP.slice(1) + '#$%&*+=<>/\\|?';
-  var WORD = 'loading';
-  function loader() {
-    var el = document.createElement('div');
-    el.className = 'vx-spin';
-    el.setAttribute('role', 'img');
-    el.setAttribute('aria-label', 'Loading');
-    el.innerHTML = '<span class="p"></span><span class="t"></span>';
-    var pct = el.firstChild, text = el.lastChild;
-    document.body.appendChild(el);
-    var font = document.createElement('link');
-    font.rel = 'stylesheet';
-    font.href = 'https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap';
-    document.head.appendChild(font);
-    var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    var t0 = Date.now(), timer = 0, gone = false;
-    var glitchAt = 2600 + Math.random() * 1500, glitched = -1;
-    var typed = 160 + WORD.length * 70;
-    var base = 2, ceil = 9, tau = 1500, since = t0, shown = 0, full = false;
-    function noise() { return NOISE.charAt(Math.floor(Math.random() * NOISE.length)); }
-    function draw() {
-      var now = Date.now(), ms = now - t0;
-      var dt = now - since;
-      shown = Math.max(shown, base + (ceil - base) * dt / (dt + tau));
-      pct.textContent = (full ? 100 : Math.min(99, Math.floor(shown))) + '%';
-      if (still) { text.textContent = WORD + '..._'; return; }
-      if (ms > glitchAt) {
-        if (glitched < 0) glitched = Math.floor(Math.random() * WORD.length);
-        if (ms > glitchAt + 140) { glitched = -1; glitchAt = ms + 2200 + Math.random() * 2400; }
-      }
-      var s = '';
-      for (var k = 0; k < WORD.length; k++) s += ms < 160 + k * 70 || k === glitched ? noise() : WORD.charAt(k);
-      if (ms >= typed) s += '...'.slice(0, Math.floor((ms - typed) / 380) % 4);
-      text.textContent = s + (Math.floor(ms / 530) % 2 ? ' ' : '_');
-    }
-    draw();
-    timer = setInterval(draw, 50);
-    // (A beat before it shows, so a quick start never flashes it.)
-    var show = setTimeout(function () { el.classList.add('in'); }, 120);
-    function stop() {
-      if (gone) return;
-      gone = true;
-      clearInterval(timer);
-      clearTimeout(show);
-      el.classList.remove('in');
-      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 500);
-    }
-    return {
-      step: function (v, c, t) { if (v > base) { base = v; ceil = c; tau = t || 1200; since = Date.now(); draw(); } },
-      at: function () { return base; },
-      // On screen: 100% for a moment, then away.
-      done: function () { full = true; draw(); setTimeout(stop, 260); },
-      stop: stop
-    };
-  }
-
-  // A WebGPU piece starting up: the loader until the first frame is on
-  // screen, where the piece can run; the message where it can't, or where
+  // A WebGPU piece starting up: the page's loader until the first frame is
+  // on screen, where the piece can run; the message where it can't, or where
   // it fails to start.
   function startUp(nogpu) {
     var msg = cheek();
     setNoGpu(nogpu, msg);
     if (iosBelow27()) { iosNote(msg); return; }
-    if (!navigator.gpu) return;
-    var L = loader();
+    // The page started its loader with its first bytes (where it can run:
+    // where it can't, there's none) and counted its files coming down; from
+    // here, each step of the start on the GPU moves it on.
+    var L = window.vxLoader;
+    if (!L) return;
+    L.steered = true;
     var undo = [], done = false;
-    // While the page's code and fonts are still coming down, each file that
-    // finishes is a small step, up to 9%; the code is in once it asks for
-    // the GPU.
-    try {
-      var files = new PerformanceObserver(function (list) {
-        list.getEntries().forEach(function () { if (L.at() < 9) L.step(Math.min(9, L.at() + 2), 9, 1500); });
-      });
-      files.observe({ type: 'resource' });
-      undo.push(function () { files.disconnect(); });
-    } catch (e) {}
     function finish(ok) {
       if (done) return;
       done = true;
