@@ -55,9 +55,10 @@
   </div>
   <div class="control-group"><label>Rain <span class="val" id="rainVal">60</span></label><input type="range" id="rain" min="0" max="100" value="60"></div>
   <div class="control-group"><label>Drop Size <span class="val" id="sizeVal">50</span></label><input type="range" id="size" min="0" max="100" value="50"></div>
-  <div class="control-group"><label>Wipers <span class="val" id="wipeVal">45</span></label><input type="range" id="wipe" min="0" max="100" value="45"></div>
-  <div class="control-group"><label>Chroma <span class="val" id="chromaVal">55</span></label><input type="range" id="chroma" min="0" max="100" value="55"></div>
-  <div class="control-group"><label>Traffic <span class="val" id="trafficVal">40</span></label><input type="range" id="traffic" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Fog <span class="val" id="fogVal">55</span></label><input type="range" id="fog" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Wipers <span class="val" id="wipeVal">35</span></label><input type="range" id="wipe" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Chroma <span class="val" id="chromaVal">45</span></label><input type="range" id="chroma" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Traffic <span class="val" id="trafficVal">50</span></label><input type="range" id="traffic" min="0" max="100" value="50"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
     <button class="btn primary" id="generate">Generate</button>
@@ -69,103 +70,70 @@
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
 <script type="module">
-import { init, effect, surface, frameLoop, clock, frame } from './lib/vgpu.js';
+import { init, effect, surface, texture, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
 
 // ═══════════════════════════════════════
-// Rain on a windshield at night. Beyond the glass a city lies out of focus,
-// its lights swollen into soft discs drifting with the traffic. On the glass
-// sit drops of three sizes; each is a little lens holding a sharp, upside-down
-// picture of the street, split at its rim into a thin rainbow. Now and then a
-// heavy drop runs down, clearing a track and leaving beads behind it. A pair
-// of wipers sweeps the glass on a timer and the rain builds back; a finger
-// drawn across the glass wipes a trail that fills in again.
+// Rain on a windshield at night.
 //
-// Nothing is stored between frames: each drop knows when it fell and each
-// spot of glass knows when a blade or a finger last passed over it, so a drop
-// shows only if it fell since then.
+// The street beyond the glass is painted once, at three focuses: sharp, soft,
+// and very soft, where every light has swollen into a bokeh disc. Car lights
+// moving down the street are added live on top.
+//
+// On the glass the water is one continuous surface: small drops scattered
+// all over, and columns of bigger drops that stick, then slip down in bursts,
+// leaving a wet trail with beads in it. They're summed into one field, so
+// drops that touch merge, and their outline is where the field crosses a
+// level. The slope of that field is the slope of the water: each pixel looks
+// through it, bent by that slope, at the street, sharp through a drop or a
+// trail, blurred through the misted glass around them, and split a little by
+// colour at the edges. Wipers and a finger clear water and mist; both build
+// back. Nothing is kept between frames: each spot of glass knows when a blade
+// or a finger last passed over it.
 // ═══════════════════════════════════════
 const NT = 24;   // finger-trail points kept
 const SHADER = /* wgsl */ `
 struct U {
   a: vec4f,    // time, aspect, px, seed
   b: vec4f,    // rain 0..1, drop size 0..1, wiper period (0 off), chroma
-  c: vec4f,    // traffic, wiper time offset, _, _
-  cols: array<vec4f, 8>,          // sky top, haze, six lights
+  c: vec4f,    // traffic, wiper time offset, fog 0..1, _
+  lights: array<vec4f, 4>,        // car colours: tail, head, and two signs
   trail: array<vec4f, ${NT}>,     // finger: x, y, time, radius
 }
 @group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var sharpT: texture_2d<f32>;
+@group(0) @binding(2) var softT: texture_2d<f32>;
+@group(0) @binding(3) var blurT: texture_2d<f32>;
+@group(0) @binding(4) var samp: sampler;
 
-fn hash21(p: vec2f) -> f32 { var q = fract(p * vec2f(123.34, 456.21)); q += dot(q, q + 45.32); return fract(q.x * q.y); }
-fn hash1(n: f32) -> f32 { return fract(sin(n * 127.1) * 43758.5453); }
-fn vnoise(p: vec2f) -> f32 {
-  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), w.x), mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), w.x), w.y);
+fn S(a: f32, b: f32, x: f32) -> f32 { return smoothstep(a, b, x); }
+fn N(t: f32) -> f32 { return fract(sin(t * 12345.564) * 7658.76); }
+fn N3(p: f32) -> vec3f {
+  var p3 = fract(vec3f(p) * vec3f(0.1031, 0.11369, 0.13787));
+  p3 += dot(p3, p3.yzx + 19.19);
+  return fract(vec3f((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y, (p3.y + p3.z) * p3.x));
 }
-@diagnostic(off, derivative_uniformity) fn C(i: i32) -> vec3f { return u.cols[i].rgb; }
+fn saw(b: f32, t: f32) -> f32 { return S(0.0, b, t) * S(1.0, b, t); }
 
-// ---- The city beyond the glass. q is a point on the screen (height units,
-// y down); blur runs from 0 (the sharp picture inside a drop) to 1 (out of
-// focus on the glass).
-fn city(q: vec2f, blur: f32) -> vec3f {
-  let t = u.a.x; let sd = u.a.w;
-  // Sky to street: dark above, a coloured glow low down where the lights are.
-  let g = smoothstep(0.05, 1.0, q.y);
-  var col = mix(C(0), C(1), g * g);
-  col += C(1) * 0.35 * exp(-pow((q.y - 0.72) / 0.18, 2.0));
-  // Three depths of lights in loose rows: far ones small and many, near ones
-  // big and few. Each drifts with the traffic at its own pace; out of focus
-  // each is a soft disc with a brighter rim, in focus a point of light.
-  for (var L = 0; L < 3; L++) {
-    let fl = f32(L);
-    let cell = 0.055 + fl * 0.05;
-    let drift = vec2f(t * u.c.x * (0.02 + fl * 0.035) * select(1.0, -1.0, L == 1), 0.0);
-    let gq = (q + drift) / cell;
-    let gi = floor(gq);
-    for (var j = -1; j <= 1; j++) {
-      for (var i = -1; i <= 1; i++) {
-        let id = gi + vec2f(f32(i), f32(j));
-        let h = hash21(id + sd + fl * 17.0);
-        // Lights gather along the street, a few higher up, the sky dark.
-        let cy = (id.y + 0.5) * cell;
-        if (h > 0.04 + 0.42 * smoothstep(0.3, 0.8, cy)) { continue; }
-        let c = (id + 0.5 + (vec2f(hash21(id + 3.1 + fl), hash21(id + 7.7 + fl)) - 0.5) * 0.8) * cell;
-        let k = i32(floor(hash21(id + 11.3 + fl) * 6.0));
-        let lc = u.cols[2 + k].rgb;
-        let bright = 0.35 + 0.65 * hash21(id + 5.9) * (0.6 + 0.4 * sin(t * (0.3 + h) + h * 40.0));
-        let R = mix(0.0025 + fl * 0.0015, cell * (0.38 + 0.25 * hash21(id + 2.2)), blur);
-        let d = length(gq * cell - c) / R;
-        let disc = 1.0 - smoothstep(0.82, 1.0, d);
-        let rim = smoothstep(0.55, 0.95, d) * disc;
-        // Small sharp points glow; big soft discs are dimmer for their size.
-        let a = (disc * (0.55 + 0.45 * rim)) * mix(1.6, 0.42 + 0.12 * fl, blur) + exp(-d * d * 3.0) * (1.0 - blur) * 0.8;
-        col += lc * a * bright * (0.55 + 0.25 * fl);
-      }
-    }
-  }
-  return col;
-}
-
-// ---- When this spot of glass was last cleared: by a wiper blade or by a
-// finger. -1e4 if never.
-const WMAX = 2.65;   // how far the blades swing, radians from lying flat
+// ---- When this spot of glass was last cleared, by a blade or a finger.
+const WMAX = 2.65;
 fn pivotOf(k: i32) -> vec2f { return vec2f(u.a.y * select(0.2, 0.6, k == 1), 1.04); }
-fn wiperAngle(tau: f32, D: f32) -> f32 { return WMAX * (0.5 - 0.5 * cos(6.2831853 * clamp(tau / D, 0.0, 1.0))); }
+fn armLen() -> f32 { return u.a.y * 0.62 * 0.98 + 0.2; }
 fn lastCleared(q: vec2f) -> f32 {
   let t = u.a.x;
   var last = -1e4;
   let P = u.b.z;
   if (P > 0.0) {
-    let D = 1.3;
+    let D = 1.4;
     let tt = t + u.c.y;
     let cyc = floor(tt / P) * P;
     let tau = tt - cyc;
     for (var k = 0; k < 2; k++) {
       let v = q - pivotOf(k);
       let r = length(v);
-      if (r > 0.98 * u.a.y * 0.62 + 0.25 || r < 0.06) { continue; }
+      if (r > armLen() || r < 0.18) { continue; }
       let phi = atan2(-v.y, v.x);
       if (phi < 0.0 || phi > WMAX) { continue; }
-      // The blade passes this angle once going up and once coming back.
+      // The blade crosses this angle once going up and once coming back.
       let t1 = D / 6.2831853 * acos(clamp(1.0 - 2.0 * phi / WMAX, -1.0, 1.0));
       let t2 = D - t1;
       var passed = cyc - P + t2;
@@ -180,215 +148,370 @@ fn lastCleared(q: vec2f) -> f32 {
   return last;
 }
 
-// ---- Drops. A layer is a grid of cells, one possible drop in each; a drop
-// falls at its own pace after the glass there was last cleared and stays
-// until the next clearing. Returns (offset from its centre, radius, age) in
-// x, y, z, w, or radius 0 for none.
-fn dropIn(q: vec2f, cell: f32, size: f32, layer: f32) -> vec4f {
-  let t = u.a.x;
-  let gi = floor(q / cell);
-  let h = hash21(gi + layer * 31.7 + u.a.w);
-  // Fewer cells hold drops in light rain.
-  if (h > 0.1 + 0.5 * u.b.x) { return vec4f(0.0); }
-  let c0 = (gi + 0.5) * cell;
-  let lc = lastCleared(c0);
-  // Its moments of falling come round every Tp seconds; the first one after
-  // the last clearing is when this drop landed.
-  let Tp = (1.2 + 5.0 * hash21(gi + 4.4 + layer)) / (0.25 + u.b.x * 1.6) * (0.6 + layer * 0.5);
-  let off = hash21(gi + 9.1 + layer) * Tp;
-  let k0 = floor((lc + off) / Tp) + 1.0;
-  let born = k0 * Tp - off;
-  if (born > t) { return vec4f(0.0); }
-  // A fresh place in the cell each time it is cleared.
-  let j = vec2f(hash21(gi + k0 * 1.37 + 2.0), hash21(gi + k0 * 2.71 + 5.0)) - 0.5;
-  let r = cell * size * (0.55 + 0.45 * hash21(gi + k0 + 8.0));
-  let c = c0 + j * (cell - 2.2 * r) * 0.9;
-  // A runner that has passed through here took this drop with it.
-  if (trackAt(c) > 0.0) { return vec4f(0.0); }
-  let age = t - born;
-  // Lands with a little swell.
-  let rr = r * (0.75 + 0.25 * smoothstep(0.0, 0.35, age));
-  // Slightly flattened on top, heavier below.
-  var v = q - c;
-  v.y *= select(1.08, 0.92, v.y > 0.0);
-  return vec4f(v, rr, age);
+// ---- Columns of drops that stick and slip down the glass. uv in screen
+// height units, y down. Returns (water, trail).
+fn slideLayer(uv0: vec2f, t: f32) -> vec2f {
+  let A = vec2f(6.0, 1.0);
+  let grid = A * 2.0;
+  var uv = uv0;
+  uv.y -= t * 0.75;
+  var id = floor(uv * grid);
+  uv.y += N(id.x);
+  id = floor(uv * grid);
+  let n = N3(id.x * 35.2 + id.y * 2376.1);
+  let st = fract(uv * grid) - vec2f(0.5, 0.0);
+  // Across the column the drop wanders as it runs.
+  var x = n.x - 0.5;
+  let yy = uv0.y * 20.0;
+  x += sin(yy + sin(yy)) * (0.5 - abs(x)) * (n.z - 0.5);
+  x *= 0.7;
+  // Down the cell it sticks, then slips: the saw is the stick-slip.
+  let ti = fract(t + n.z);
+  let y = 1.0 - ((saw(0.85, ti) - 0.5) * 0.9 + 0.5);
+  let d = length((st - vec2f(x, y)) * A.yx);
+  let mainDrop = S(0.4, 0.0, d);
+  // The trail above it narrows and dries back toward the top of the cell.
+  let r = sqrt(S(0.0, y, st.y));
+  let cd = abs(st.x - x);
+  var trail = S(0.23 * r, 0.15 * r * r, cd);
+  let trailFront = S(0.02, -0.02, st.y - y);
+  trail *= trailFront * r * r;
+  // Beads left in the trail.
+  let by = fract(uv0.y * 10.0) + (0.5 - st.y);
+  let dd = length(st - vec2f(x, 1.0 - by));
+  let beads = S(0.3, 0.0, dd);
+  return vec2f(mainDrop + beads * r * trailFront, trail);
 }
 
-// ---- Runners: now and then a heavy drop runs down a column, wobbling,
-// clearing a track behind it and leaving beads in it. runX is its path:
-// where across the column it is at height y on run n.
-fn runX(ci: f32, n: f32, y: f32) -> f32 {
-  let colW = 0.09;
-  return (ci + 0.5) * colW + 0.014 * sin(y * 23.0 + n * 3.1) + 0.008 * sin(y * 61.0 + ci) + 0.02 * (hash1(ci + n) - 0.5);
-}
-// (its x, y, the height it started from, and its column and run packed as
-// column * 1000 + run; w < 0 when this column has none)
-fn runner(q: vec2f) -> vec4f {
-  let t = u.a.x;
-  let colW = 0.09;
-  let ci = floor(q.x / colW);
-  let h = hash1(ci * 3.17 + u.a.w);
-  if (h > 0.25 + 0.5 * u.b.x) { return vec4f(0.0, 0.0, 0.0, -1.0); }
-  // Each column's runs come round every so often, offset from the others.
-  let period = 7.0 + 9.0 * hash1(ci + 1.3);
-  let ph = t + h * period;
-  let n = floor(ph / period);
-  let tau = ph - n * period;
-  let speed = 0.12 + 0.1 * hash1(ci + n * 1.7);
-  let y0 = -0.05 + 0.4 * hash1(ci + n * 2.3);
-  // Runs in fits and starts.
-  let y = y0 + speed * (tau + 0.25 * sin(tau * 3.0 + h * 9.0));
-  return vec4f(runX(ci, n, y), y, y0, ci * 1000.0 + n + 0.5);
+// ---- Small drops all over, each forming then slowly drying, and coming
+// back only some while after the glass there was last cleared.
+fn staticDrops(uv0: vec2f, t: f32, cells: f32, keep: f32) -> f32 {
+  let uv = uv0 * cells;
+  let id = floor(uv);
+  let f = fract(uv) - 0.5;
+  let n = N3(id.x * 107.45 + id.y * 3543.654 + cells);
+  if (fract(n.x * 37.0) > keep) { return 0.0; }
+  // Some round, some a little long where they have begun to run.
+  let r = 0.12 + 0.24 * fract(n.y * 53.0);
+  let p = (n.xy - 0.5) * (0.9 - 2.0 * r);
+  let v = (f - p) * vec2f(1.0, 0.8 + 0.2 * fract(n.z * 7.0));
+  let d = length(v);
+  let fade = saw(0.025, fract(t + n.z));
+  return S(r, 0.0, d) * (0.5 + 0.5 * fract(n.z * 10.0)) * fade;
 }
 
-// How far down a runner's clear track q lies (0 outside one).
-fn trackAt(q: vec2f) -> f32 {
-  let rn = runner(q);
-  if (rn.w < 0.0) { return 0.0; }
-  let ci = floor(rn.w / 1000.0);
-  let rnum = rn.w - ci * 1000.0 - 0.5;
-  let along = rn.y - q.y;
-  let rr = 0.012 * (0.6 + u.b.y * 0.8);
-  if (along > 0.0 && along < rn.y - rn.z && abs(q.x - runX(ci, rnum, q.y)) < rr * 0.85) {
-    return 1.0 - smoothstep(0.0, 0.35, along / max(rn.y - rn.z, 0.01)) * 0.4;
+// The water at screen point q: (field 0..1, trail), the drops' sizes set by
+// how much the coordinates are scaled.
+fn water(q: vec2f) -> vec3f {
+  let t = u.a.x * 0.2;
+  let rain = u.b.x;
+  // How long since this glass was cleared; water comes back over seconds.
+  let since = u.a.x - lastCleared(q);
+  let back = S(0.3, 5.0 / (0.3 + rain), since);
+  let sc = 1.0 / (0.55 + u.b.y * 0.9);
+  let uv = (q - vec2f(u.a.y * 0.5, 0.5)) * sc;
+  let l0 = S(-0.5, 1.0, rain) * 2.0 * back;
+  let l1 = S(0.25, 0.75, rain) * S(0.6, 3.5, since);
+  let l2 = S(0.0, 0.5, rain) * S(0.6, 3.5, since);
+  let s = (staticDrops(uv, t, 34.0, 0.8) + staticDrops(uv, t * 0.7, 15.0, 0.45) + staticDrops(uv, t * 0.5, 7.0, 0.3)) * l0;
+  let m1 = slideLayer(uv, t) * l1;
+  let m2 = slideLayer(uv * 1.85, t) * l2;
+  let sum = s + m1.x + m2.x;
+  // (Coverage, trail, and a height that keeps rising to each drop's middle,
+  // so the whole drop bends light, not just its rim.)
+  return vec3f(S(0.3, 1.0, sum), max(m1.y * l0, m2.y * l1), S(0.2, 1.0, min(sum, 1.0)) * (0.6 + 0.4 * min(sum, 1.0)) + 0.4 * sqrt(max(sum - 0.3, 0.0)));
+}
+
+// ---- The street, at a focus from 0 (sharp) to 1 (very soft), with the cars.
+fn street(q: vec2f, focus: f32) -> vec3f {
+  let uv = vec2f(q.x / u.a.y, q.y);
+  let a = textureSampleLevel(sharpT, samp, uv, 0.0).rgb;
+  let b = textureSampleLevel(softT, samp, uv, 0.0).rgb;
+  let c = textureSampleLevel(blurT, samp, uv, 0.0).rgb;
+  var col = mix(mix(a, b, S(0.0, 0.5, focus)), c, S(0.5, 1.0, focus));
+  // Cars: pairs of lights running down the lanes, tail lights going away on
+  // the right, headlights coming on the left; out of focus they are discs.
+  let vp = vec2f(u.a.y * 0.5, 0.56);
+  let t = u.a.x * u.c.x;
+  for (var i = 0; i < 6; i++) {
+    let fi = f32(i);
+    let away = i % 2 == 0;
+    let h = N(fi * 7.31 + u.a.w);
+    var s = fract(t * (0.05 + 0.04 * h) + h);
+    if (away) { s = 1.0 - s; }
+    let depth = s * s;
+    let lane = select(-0.9 - 0.6 * h, 0.7 + 0.6 * h, away);
+    let ctr = vp + vec2f(lane * 0.42 * depth, 0.44 * depth);
+    let spread = 0.09 * depth;
+    let lc = select(u.lights[1].rgb, u.lights[0].rgb, away);
+    let R = mix(0.002 + 0.006 * depth, 0.008 + 0.028 * depth, focus);
+    for (var k = 0; k < 2; k++) {
+      let lp = ctr + vec2f((f32(k) - 0.5) * spread, 0.0);
+      let d = length(q - lp) / R;
+      let disc = (1.0 - S(0.8, 1.0, d)) * (0.75 + 0.25 * S(0.5, 0.95, d));
+      let glow = exp(-d * d * 2.0) * (1.0 - focus);
+      col += lc * (disc * mix(1.4, 0.55, focus) + glow) * S(0.0, 0.08, depth) * (0.4 + 0.6 * depth);
+    }
   }
-  return 0.0;
+  return col;
 }
 
 @diagnostic(off, derivative_uniformity) @fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
   let t = u.a.x; let asp = u.a.y; let px = u.a.z;
   let p = vec2f(uv.x * asp, uv.y);
-  let sizeK = 0.6 + u.b.y * 0.8;
 
-  // The out-of-focus city, softened a touch more by the wet glass.
-  var col = city(p, 1.0);
+  // The water and its slope.
+  let w = water(p);
+  let e = vec2f(0.0012, 0.0);
+  let wx = water(p + e).z;
+  let wy = water(p + e.yx).z;
+  let n = vec2f(wx - w.z, wy - w.z);
 
-  // Which drop, if any, covers this point: the runner first, then big beads,
-  // then small ones; the finest mist only shades the glass.
-  var dv = vec4f(0.0);
-  let rn = runner(p);
-  var inTrack = 0.0;
-  if (rn.w >= 0.0) {
-    let rr = 0.012 * sizeK;
-    let v = (p - rn.xy) * vec2f(1.0, 0.85);
-    if (length(v) < rr) { dv = vec4f(v, rr, 1.0); }
-    // Its track, wandering with it: clear glass, with a few beads left
-    // behind at uneven spacing.
-    let ci = floor(rn.w / 1000.0);
-    let rnum = rn.w - ci * 1000.0 - 0.5;
-    let along = rn.y - p.y;
-    let tx = runX(ci, rnum, p.y);
-    if (along > 0.0 && along < rn.y - rn.z && abs(p.x - tx) < rr * 0.85) {
-      inTrack = 1.0 - smoothstep(0.0, 0.35, along / max(rn.y - rn.z, 0.01)) * 0.4;
-      let seg = floor(along / 0.045);
-      let hb = hash1(seg * 7.3 + ci * 1.9 + rnum);
-      let by = (seg + 0.2 + 0.6 * hb) * 0.045;
-      let bv = vec2f(p.x - runX(ci, rnum, rn.y - by) - (hb - 0.5) * rr * 0.6, along - by);
-      let br = (0.002 + 0.003 * hash1(seg + 3.3 + rnum)) * sizeK * step(0.45, hb);
-      if (dv.z == 0.0 && br > 0.0 && length(bv) < br) { dv = vec4f(bv, br, 1.0); }
-    }
-  }
-  if (dv.z == 0.0) {
-    let d1 = dropIn(p, 0.1, 0.4 * sizeK, 0.0);
-    if (d1.z > 0.0 && length(d1.xy) < d1.z) { dv = d1; }
-  }
-  if (dv.z == 0.0) {
-    let d2 = dropIn(p + vec2f(0.017, 0.023), 0.034, 0.36 * sizeK, 1.0);
-    if (d2.z > 0.0 && length(d2.xy) < d2.z) { dv = d2; }
-  }
+  // Misted glass blurs the street most; a trail clears the mist, a drop
+  // brings it sharp; mist thickens again after a clearing.
+  let since = t - lastCleared(p);
+  let fog = u.c.z * S(0.5, 8.0, since);
+  let focus = mix(clamp(0.45 + 0.55 * fog - w.y * 0.5, 0.3, 1.0), 0.12, S(0.1, 0.2, w.x));
 
-  if (dv.z > 0.0) {
-    // A drop: a lens holding a sharp, upside-down, shrunken city, its colours
-    // pulled apart a little at the rim.
-    let n = dv.xy / dv.z;
-    let e = length(n);
-    // Each drop takes in a wide view of the street around it, turned upside
-    // down and squeezed toward the rim.
-    let span = 0.22 * (1.0 + 0.35 * e * e);
-    let ch = u.b.w * 0.12 * e * e;
-    let base = p - dv.xy + vec2f(0.0, 0.08);
-    let r = city(base - n * span * (1.0 - ch), 0.3).r;
-    let g = city(base - n * span, 0.3).g;
-    let b = city(base - n * span * (1.0 + ch), 0.3).b;
-    var dc = vec3f(r, g, b) * 1.15 + C(1) * 0.06;
-    // It gathers the glow behind it, brightest in a crescent low in the drop
-    // where the light comes to a focus.
-    let behind = city(p - dv.xy, 1.0);
-    let foc = exp(-dot(n - vec2f(0.0, 0.42), n - vec2f(0.0, 0.42)) * 4.0);
-    dc += behind * (0.35 + 1.3 * foc);
-    // Darker at the rim where light turns back inside the water.
-    dc *= 1.0 - smoothstep(0.7, 1.0, e) * 0.5;
-    // A glint from a light up and to the left, and a faint one below.
-    let gl = exp(-dot(n - vec2f(-0.35, -0.45), n - vec2f(-0.35, -0.45)) * 30.0);
-    dc += vec3f(1.0, 0.97, 0.92) * gl * 0.85;
-    dc += C(1) * 0.25 * exp(-dot(n - vec2f(0.15, 0.6), n - vec2f(0.15, 0.6)) * 18.0);
-    let a = 1.0 - smoothstep(dv.z - px * 1.2, dv.z, length(dv.xy));
-    col = mix(col, dc, a);
-  } else {
-    // Bare glass: wet streaks of mist; cleared glass is darker and clearer.
-    let lc = lastCleared(p);
-    let mistAge = clamp((t - lc) / (6.0 / (0.3 + u.b.x)), 0.0, 1.0);
-    let m = vnoise(p * vec2f(260.0, 220.0) + u.a.w) * vnoise(p * vec2f(70.0, 90.0));
-    col = mix(col, col * 0.86 + C(1) * 0.05, mistAge * 0.6);
-    col += vec3f(0.9, 0.92, 1.0) * smoothstep(0.55, 0.9, m) * mistAge * (0.05 + 0.15 * u.b.x);
-    col *= 1.0 - inTrack * 0.12;
-  }
+  // Looking through the water: bent by its slope, the colours bent a little
+  // differently.
+  // (n over e is the slope; a full drop shifts what it shows by ~0.1 of the
+  // screen, so it holds a small, flipped picture of the street.)
+  var bend = -n / e.x * 0.0009;
+  let bl = length(bend);
+  if (bl > 0.14) { bend *= 0.14 / bl; }
+  let ch = u.b.w * 0.08;
+  var col = vec3f(
+    street(p + bend * (1.0 - ch), focus).r,
+    street(p + bend, focus).g,
+    street(p + bend * (1.0 + ch), focus).b);
 
-  // The wiper blades, while they sweep: black rubber on a thin arm.
+  // Mist scatters a little light back; drops and trails are clear of it.
+  let mist = fog * (1.0 - S(0.1, 0.2, w.x)) * (1.0 - 0.35 * w.y);
+  col = mix(col, col * 0.88 + street(p, 1.0) * 0.25 + vec3f(0.012), mist * 0.6);
+  // A dark edge where light turns back inside each drop; each catches the
+  // glow above it on its upper edge and gathers light at its foot.
+  let g = n / e.x * 0.006;
+  let inDrop = S(0.1, 0.25, w.x);
+  col *= 1.0 - S(0.7, 1.2, length(g)) * 0.3 * inDrop;
+  let glow = street(p - vec2f(0.0, 0.06), 1.0);
+  col += glow * (S(0.3, 1.0, -g.y) * 0.9 + S(0.4, 1.0, g.y) * 0.35) * inDrop;
+  col *= 1.0 + 0.25 * inDrop;
+
+  // The wiper blades while they sweep: black rubber on a slim arm.
   if (u.b.z > 0.0) {
-    let D = 1.3;
+    let D = 1.4;
     let tt = t + u.c.y;
     let tau = tt - floor(tt / u.b.z) * u.b.z;
     if (tau < D) {
-      let ang = wiperAngle(tau, D);
+      let ang = WMAX * (0.5 - 0.5 * cos(6.2831853 * tau / D));
       let dir = vec2f(cos(ang), -sin(ang));
       for (var k = 0; k < 2; k++) {
-        let pv = pivotOf(k);
-        let L = asp * 0.62 * 0.98 + 0.2;
-        let v = p - pv;
+        let v = p - pivotOf(k);
+        let L = armLen();
         let s = clamp(dot(v, dir), 0.0, L);
         let dist = length(v - dir * s);
-        let blade = (1.0 - smoothstep(0.009, 0.009 + px * 1.5, dist)) * step(0.22, s / L);
-        let arm = 1.0 - smoothstep(0.004, 0.004 + px * 1.5, dist);
-        col = mix(col, vec3f(0.015), max(blade, arm));
-        col += vec3f(0.5, 0.55, 0.6) * (1.0 - smoothstep(0.0, px * 1.5, abs(dist - 0.008))) * step(0.22, s / L) * 0.18;
+        let onBlade = step(0.2, s / L);
+        let blade = (1.0 - S(0.011, 0.011 + px * 3.0, dist)) * onBlade;
+        let arm = 1.0 - S(0.005, 0.005 + px * 2.0, dist);
+        col = mix(col, vec3f(0.012), max(blade, arm));
+        col += vec3f(0.6, 0.62, 0.66) * (1.0 - S(0.0, px * 2.0, abs(dist - 0.009))) * onBlade * 0.1;
       }
     }
   }
 
-  // Dark at the corners, the glass's own faint reflection, a little grain.
-  let vg = length((uv - 0.5) * vec2f(1.2, 1.0));
-  col *= 1.0 - smoothstep(0.35, 0.85, vg) * 0.55;
-  col += C(1) * 0.04 * smoothstep(0.4, 0.0, abs(uv.x - uv.y * 0.6 - 0.25));
-  let gr = hash21(floor(uv * vec2f(1400.0, 900.0)) + fract(t * 7.0)) - 0.5;
-  col += gr * 0.02;
-  // Gentle tone curve so the lights bloom without clipping flat.
-  col = col / (1.0 + col * 0.35);
+  // Corners fall dark; a little grain; a gentle curve so lights bloom.
+  let vg = length((uv - 0.5) * vec2f(1.15, 1.0));
+  col *= 1.0 - S(0.4, 0.9, vg) * 0.5;
+  let gr = fract(sin(dot(floor(uv * vec2f(1400.0, 900.0)) + fract(t * 7.0), vec2f(12.9898, 78.233))) * 43758.5453) - 0.5;
+  col += gr * 0.015;
+  col = col / (1.0 + col * 0.25);
   return vec4f(col, 1.0);
 }
 `;
 
+// ═══════════════════════════════════════
+// The street, painted on a 2D canvas: sky and a far skyline, buildings down
+// both sides in perspective with lit windows and neon signs, streetlights
+// running away to the vanishing point, a signal, and a wet road that mirrors
+// it all. The lights are kept in a list so the soft versions can draw each as
+// a bokeh disc rather than a smear.
+// ═══════════════════════════════════════
 const SCENES = {
-  //        sky top    haze       six lights
-  neon:   ['#06050d', '#2a0f3a', '#ff3fa4', '#31e5ff', '#8a5cff', '#ffd166', '#ff5a3c', '#3dffb0'],
-  sodium: ['#040608', '#2e1b08', '#ffb347', '#ff8c1a', '#ff3b2f', '#ffe0a3', '#3cff7a', '#ffd27a'],
-  blue:   ['#0a1733', '#34497a', '#ffd28a', '#ff9d5c', '#fff1c9', '#ff4d4d', '#8fd3ff', '#ffe6a8'],
-  silver: ['#050506', '#24262b', '#f2f2f2', '#c9ccd2', '#ffffff', '#9aa0a8', '#e6e6e6', '#b8bcc4'],
+  neon:   { sky: ['#05040c', '#1a0c2e', '#3a1446'], wall: '#0b0a12', win: ['#ffcf8a', '#9fe7ff', '#ff9ad5', '#fff1d6'], signs: ['#ff3fa4', '#31e5ff', '#8a5cff', '#ffd166', '#3dffb0'], lamp: '#ffc98a', tail: '#ff2a3a', head: '#f4f6ff' },
+  sodium: { sky: ['#030406', '#14100a', '#3a2410'], wall: '#0b0906', win: ['#ffcf8a', '#ffe7b8', '#ffb35c', '#fff4dd'], signs: ['#ff8c1a', '#ff3b2f', '#ffd27a', '#3cff7a', '#ffb347'], lamp: '#ffa640', tail: '#ff2a1a', head: '#fff2d8' },
+  blue:   { sky: ['#0a1a3a', '#2a4878', '#7a7fa8'], wall: '#101830', win: ['#ffd28a', '#ffe9b8', '#fff1c9', '#ffc070'], signs: ['#ff4d4d', '#8fd3ff', '#ffd28a', '#ff9d5c', '#c8a2ff'], lamp: '#ffd28a', tail: '#ff3a3a', head: '#f6f8ff' },
+  silver: { sky: ['#030304', '#121316', '#2c2e33'], wall: '#0a0a0b', win: ['#e8e8e8', '#cfd2d6', '#ffffff', '#b8bcc2'], signs: ['#ffffff', '#d6d9de', '#a8adb5', '#eeeeee', '#c4c7cc'], lamp: '#f0f0f0', tail: '#d8d8d8', head: '#ffffff', mono: true },
 };
-const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+function rng(seed) { let s = (seed * 9301 + 49297) % 233280 || 1; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
 
+function paintStreet(w, h, sc, seed) {
+  const R = rng(Math.floor(seed * 1000) + 7);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  const lights = [];   // [x, y, radius, colour, strength]
+  const vx = w * 0.5, vy = h * 0.56;
+  // Sky: dark above, a glow over the city low down.
+  const sky = g.createLinearGradient(0, 0, 0, vy);
+  sky.addColorStop(0, sc.sky[0]); sky.addColorStop(0.65, sc.sky[1]); sky.addColorStop(1, sc.sky[2]);
+  g.fillStyle = sky; g.fillRect(0, 0, w, h);
+  // Far skyline at the end of the street, with scattered windows.
+  g.fillStyle = sc.wall;
+  for (let x = w * 0.3; x < w * 0.7;) {
+    const bw = w * (0.015 + R() * 0.03), bh = h * (0.05 + R() * 0.16);
+    g.fillRect(x, vy - bh, bw + 1, bh + 2);
+    for (let k = 0; k < bh * bw / 140; k++) {
+      if (R() < 0.5) continue;
+      const wx = x + R() * bw, wy = vy - R() * bh;
+      g.fillStyle = sc.win[Math.floor(R() * sc.win.length)]; g.globalAlpha = 0.5 + R() * 0.5;
+      g.fillRect(wx, wy, 1.5, 1.5); g.globalAlpha = 1; g.fillStyle = sc.wall;
+    }
+    x += bw + R() * 4;
+  }
+  // The road: dark, wet, lane lines running to the vanishing point.
+  const road = g.createLinearGradient(0, vy, 0, h);
+  road.addColorStop(0, sc.sky[2]); road.addColorStop(0.25, sc.sky[1]); road.addColorStop(1, '#050507');
+  g.fillStyle = road;
+  g.beginPath(); g.moveTo(vx - w * 0.04, vy); g.lineTo(vx + w * 0.04, vy); g.lineTo(w * 1.1, h); g.lineTo(-w * 0.1, h); g.closePath(); g.fill();
+  g.strokeStyle = 'rgba(255,240,200,0.18)'; g.lineWidth = 2;
+  for (let k = 0; k < 14; k++) {
+    const a = (k + 0.2) / 14, b = (k + 0.6) / 14;
+    g.beginPath(); g.moveTo(vx + (a * a) * w * 0.02, vy + a * a * (h - vy)); g.lineTo(vx + (b * b) * w * 0.02, vy + b * b * (h - vy)); g.stroke();
+  }
+  // Buildings down both sides: a facade between the screen edge and the
+  // vanishing point, broken into blocks, with windows in perspective.
+  const side = (dir) => {
+    const ex = dir < 0 ? 0 : w;
+    let u0 = 0;
+    while (u0 < 0.93) {
+      const du = 0.08 + R() * 0.16;
+      const u1 = Math.min(0.95, u0 + du);
+      // Facade corners at depths u0 (near) and u1 (far): x and the top/bottom.
+      const at = (uu) => {
+        const k = 1 - uu;           // 1 near, 0 at the vanishing point
+        const persp = k * k;
+        const x = vx + (ex - vx) * (0.08 + 0.92 * persp);
+        const top = vy - (vy - h * (-0.1 + R() * 0)) * (0.06 + 0.94 * persp) * (0.55 + 0.45 * ht);
+        const bot = vy + (h * 0.98 - vy) * (0.06 + 0.94 * persp) * 0.86;
+        return [x, top, bot];
+      };
+      var ht = 0.55 + R() * 0.45;
+      const [x0, t0, b0] = at(u0), [x1, t1, b1] = at(u1);
+      g.fillStyle = sc.wall; g.globalAlpha = 1;
+      g.beginPath(); g.moveTo(x0, t0); g.lineTo(x1, t1); g.lineTo(x1, b1); g.lineTo(x0, b0); g.closePath(); g.fill();
+      // Windows: a grid across the facade.
+      const cols = Math.max(2, Math.round(du * 40)), rows = 10 + Math.floor(R() * 10);
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+          if (R() < 0.62) continue;
+          const fu = (i + 0.3) / cols, fv = (j + 0.25) / rows;
+          const xa = x0 + (x1 - x0) * fu, xb = x0 + (x1 - x0) * (fu + 0.45 / cols);
+          const ta = t0 + (t1 - t0) * fu, ba = b0 + (b1 - b0) * fu;
+          const ya = ta + (ba - ta) * fv * 0.82, yb = ya + (ba - ta) * 0.4 / rows;
+          const c = sc.win[Math.floor(R() * sc.win.length)];
+          g.fillStyle = c; g.globalAlpha = 0.35 + R() * 0.65;
+          g.fillRect(Math.min(xa, xb), ya, Math.max(1, Math.abs(xb - xa)), Math.max(1, yb - ya));
+          if (R() < 0.12) lights.push([(xa + xb) / 2, (ya + yb) / 2, 0.5, c, 0.5]);
+        }
+      }
+      g.globalAlpha = 1;
+      // Now and then a neon sign hung off the facade, glowing.
+      if (R() < 0.7) {
+        const fu = 0.2 + R() * 0.5;
+        const sx = x0 + (x1 - x0) * fu, st = t0 + (t1 - t0) * fu, sb = b0 + (b1 - b0) * fu;
+        const sh = (sb - st) * (0.15 + R() * 0.15), sw2 = Math.max(3, Math.abs(x1 - x0) * 0.08);
+        const sy = st + (sb - st) * (0.25 + R() * 0.3);
+        const c = sc.signs[Math.floor(R() * sc.signs.length)];
+        g.shadowColor = c; g.shadowBlur = sw2 * 3; g.fillStyle = c;
+        g.fillRect(sx - sw2 / 2, sy, sw2, sh);
+        g.shadowBlur = 0;
+        lights.push([sx, sy + sh * 0.3, 1.4, c, 1.0]);
+        lights.push([sx, sy + sh * 0.75, 1.2, c, 0.9]);
+      }
+      u0 = u1 + 0.01;
+    }
+  };
+  side(-1); side(1);
+  // Streetlights along both kerbs, running away; each with a glow.
+  for (const dir of [-1, 1]) {
+    for (let k = 0; k < 9; k++) {
+      const uu = 0.08 + k * 0.1;
+      const kk = (1 - uu) * (1 - uu);
+      const x = vx + dir * w * (0.06 + 0.42 * kk);
+      const y = vy - h * (0.04 + 0.42 * kk);
+      const base = vy + (h - vy) * (0.06 + 0.94 * kk) * 0.8;
+      g.strokeStyle = sc.wall; g.lineWidth = Math.max(1, 5 * kk);
+      g.beginPath(); g.moveTo(x, y); g.lineTo(x, base); g.stroke();
+      const r = 2 + 10 * kk;
+      const gl = g.createRadialGradient(x, y, 0, x, y, r * 5);
+      gl.addColorStop(0, sc.lamp); gl.addColorStop(0.2, sc.lamp + '88'); gl.addColorStop(1, sc.lamp + '00');
+      g.fillStyle = gl; g.fillRect(x - r * 5, y - r * 5, r * 10, r * 10);
+      lights.push([x, y, 0.8 + 2.2 * kk, sc.lamp, 1.0]);
+    }
+  }
+  // A signal over the road in the middle distance.
+  {
+    const x = vx + w * 0.03, y = vy - h * 0.07;
+    const c = sc.mono ? '#e8e8e8' : R() < 0.5 ? '#ff3030' : '#30ff7a';
+    g.fillStyle = c; g.shadowColor = c; g.shadowBlur = 12; g.beginPath(); g.arc(x, y, 3, 0, 7); g.fill(); g.shadowBlur = 0;
+    lights.push([x, y, 1.2, c, 1.0]);
+  }
+  // The wet road mirrors the lights: streaks running down toward us.
+  const mirrored = [];
+  for (const [x, y, r, c, s] of lights) {
+    if (y > vy + h * 0.1) continue;
+    const top = vy + (vy - y) * 0.15 + 2, len = (h - top) * (0.4 + 0.5 * s);
+    const sw2 = 3 + r * 7;
+    const gr = g.createLinearGradient(0, top, 0, top + len);
+    gr.addColorStop(0, c + '00'); gr.addColorStop(0.12, c + '90'); gr.addColorStop(0.5, c + '40'); gr.addColorStop(1, c + '00');
+    if (s > 0.7) mirrored.push([x, top + len * 0.22, r * 0.9, c, s * 0.55], [x, top + len * 0.45, r * 0.8, c, s * 0.3]);
+    g.fillStyle = gr; g.globalCompositeOperation = 'lighter';
+    g.fillRect(x - sw2 / 2, top, sw2, len);
+    g.globalCompositeOperation = 'source-over';
+  }
+  lights.push(...mirrored);
+  return { canvas: cv, lights };
+}
+
+// A soft version: the painting blurred, then every light drawn over it as a
+// bokeh disc of the given radius, a little brighter at its rim.
+function soften(src, lights, w, h, blurPx, discPx) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  if ('filter' in g) { g.filter = 'blur(' + blurPx + 'px)'; g.drawImage(src, 0, 0); g.filter = 'none'; }
+  else {
+    // (Without canvas filters: shrink and grow back, twice.)
+    const f = Math.max(2, Math.round(blurPx / 2));
+    const sm = document.createElement('canvas'); sm.width = Math.max(1, w / f | 0); sm.height = Math.max(1, h / f | 0);
+    const sg = sm.getContext('2d'); sg.imageSmoothingQuality = 'high';
+    sg.drawImage(src, 0, 0, sm.width, sm.height); g.imageSmoothingQuality = 'high'; g.drawImage(sm, 0, 0, w, h);
+  }
+  g.globalCompositeOperation = 'lighter';
+  for (const [x, y, r, c, s] of lights) {
+    const R = discPx * (0.6 + 0.5 * r);
+    const gr = g.createRadialGradient(x, y, 0, x, y, R);
+    gr.addColorStop(0, c + '30'); gr.addColorStop(0.82, c + '48'); gr.addColorStop(0.95, c + '5a'); gr.addColorStop(1, c + '00');
+    g.globalAlpha = 0.35 + 0.65 * s;
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, R, 0, 7); g.fill();
+  }
+  g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+  return cv;
+}
+
+const hex = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
-const IDS = ['rain', 'size', 'wipe', 'chroma', 'traffic'];
+const IDS = ['rain', 'size', 'fog', 'wipe', 'chroma', 'traffic'];
 const p = {};
 function readControls() {
-  p.cols = SCENES[$('palette').value].map((h) => [...hex(h), 1]);
+  p.scene = $('palette').value;
   p.rain = +$('rain').value / 100;
   p.size = +$('size').value / 100;
+  p.fog = +$('fog').value / 100;
   const w = +$('wipe').value;
-  // 0 is off; otherwise a sweep every 14 s down to every 3 s.
-  p.wipe = w === 0 ? 0 : 14 - w / 100 * 11;
-  p.chroma = +$('chroma').value / 100 * 1.4;
+  // 0 is off; otherwise a sweep every 16 s down to every 3 s.
+  p.wipe = w === 0 ? 0 : 16 - w / 100 * 13;
+  p.chroma = +$('chroma').value / 100 * 1.2;
   p.traffic = +$('traffic').value / 100 * 2;
   for (const id of IDS) $(id + 'Val').textContent = $(id).value;
 }
@@ -407,8 +530,10 @@ try {
 }
 
 const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(4.5e6) });
+const clampLinear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 let W = 1, H = 1, aspect = 1, t = 0, seed = Math.random() * 100, wipeOff = Math.random() * 10;
-surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; });
+const AT = new URLSearchParams(location.search).get('at');
+if (AT !== null) { wipeOff = 0; seed = 7; }
 
 // The finger's trail: the last NT points, each wiping a patch at its time.
 const trail = Array.from({ length: NT }, () => [0, 0, 0, 0]);
@@ -420,7 +545,7 @@ function toP(e) {
 function addPt(q) {
   if (lastPt && Math.hypot(q[0] - lastPt[0], q[1] - lastPt[1]) < 0.025) return;
   lastPt = q;
-  trail[ti] = [q[0], q[1], t, 0.045];
+  trail[ti] = [q[0], q[1], t, 0.05];
   ti = (ti + 1) % NT;
 }
 canvas.addEventListener('pointerdown', (e) => { dragging = true; lastPt = null; addPt(toP(e)); canvas.setPointerCapture(e.pointerId); });
@@ -430,25 +555,53 @@ canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 
 function uniforms() {
+  const sc = SCENES[p.scene];
   return {
     a: [t, aspect, 1 / Math.max(1, H), seed],
     b: [p.rain, p.size, p.wipe, p.chroma],
-    c: [p.traffic, wipeOff, 0, 0],
-    cols: p.cols,
+    c: [p.traffic, wipeOff, p.fog, 0],
+    lights: [[...hex(sc.tail), 1], [...hex(sc.head), 1], [...hex(sc.signs[0]), 1], [...hex(sc.signs[1]), 1]],
     trail,
   };
 }
-const fx = effect(gpu, SHADER, { set: { u: uniforms() } });
-function render(f) { fx.set({ u: uniforms() }); f.pass(surf, fx); }
+
+// The three focuses of the street, painted at a little under screen size.
+let texs = null;
+function makeTex(cv) {
+  const tx = texture(gpu, { kind: '2d', size: [cv.width, cv.height], format: 'rgba8unorm', usage: ['texture_binding', 'copy_dst', 'render_attachment'] });
+  gpu.gpu.queue.copyExternalImageToTexture({ source: cv }, { texture: tx.gpu }, [cv.width, cv.height]);
+  return tx;
+}
+function buildStreet() {
+  const h = Math.min(1200, Math.max(400, Math.round(H * 0.7)));
+  const w = Math.min(4096, Math.round(h * aspect));
+  const { canvas: sharp, lights } = paintStreet(w, h, SCENES[p.scene], seed);
+  const k = h / 600;
+  const soft = soften(sharp, lights, w, h, 4 * k, 10 * k);
+  const blur = soften(sharp, lights, w, h, 16 * k, 30 * k);
+  const old = texs;
+  texs = [makeTex(sharp), makeTex(soft), makeTex(blur)];
+  fx.set({ sharpT: texs[0], softT: texs[1], blurT: texs[2] });
+  if (old) old.forEach((x) => x.destroy());
+}
+
+const blank = document.createElement('canvas'); blank.width = blank.height = 2; blank.getContext('2d').fillRect(0, 0, 2, 2);
+const t0 = makeTex(blank);
+const fx = effect(gpu, SHADER, { set: { u: uniforms(), sharpT: t0, softT: t0, blurT: t0, samp: clampLinear } });
+let needStreet = true;
+surf.onResize(({ width, height }) => { W = width; H = height; aspect = width / height; needStreet = true; });
+function render(f) {
+  if (needStreet) { needStreet = false; buildStreet(); }
+  fx.set({ u: uniforms() });
+  f.pass(surf, fx);
+}
 
 const clk = clock(gpu);
 let fpsCount = 0, fpsAt = performance.now();
 let loop = null, playing = false;
 // The rain has been falling a while before we look. (?at=seconds holds time
 // at that moment, the wipers' timing with it, for stills and checks.)
-const AT = new URLSearchParams(location.search).get('at');
 t = AT !== null ? +AT : 30 + Math.random() * 30;
-if (AT !== null) { wipeOff = 0; seed = 7; }
 function tick(f) {
   if (AT === null) t += Math.min(clk.deltaTime, 0.1);
   render(f);
@@ -472,11 +625,12 @@ function togglePlay() {
 }
 
 for (const id of IDS) $(id).addEventListener('input', () => { readControls(); if (!playing) frame(gpu, render); });
-$('palette').addEventListener('change', () => { readControls(); if (!playing) frame(gpu, render); });
+$('palette').addEventListener('change', () => { readControls(); needStreet = true; if (!playing) frame(gpu, render); });
 $('playPause').addEventListener('click', togglePlay);
 $('generate').addEventListener('click', () => {
   seed = Math.random() * 100;
   wipeOff = Math.random() * 10;
+  needStreet = true;
   if (!playing) frame(gpu, render);
 });
 $('save').addEventListener('click', () => {
