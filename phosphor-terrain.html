@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Phosphor Terrain — WebGPU</title>
+<!-- Fonts load without holding up the first paint. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap" media="print" onload="this.media='all'">
+<style>
+  /* The loader, run by the script just inside <body>, in the site's theme:
+     cheshire's violet (the site's default), or tumeric's amber. */
+  .vx-spin{--vx-ink:#BD93F9;--vx-glow:rgba(189,147,249,.65);--vx-bloom:rgba(107,34,180,.55);
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;
+    white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:var(--vx-ink);
+    text-shadow:0 0 6px var(--vx-glow),0 0 18px var(--vx-bloom);opacity:0;transition:opacity .45s ease}
+  .vx-spin.tumeric{--vx-ink:#dca56e;--vx-glow:rgba(220,165,110,.7);--vx-bloom:rgba(220,165,110,.3)}
+  .vx-spin.in{opacity:1}
+  .vx-spin.out{transition-duration:.25s}
+  .vx-spin .p{width:4ch;text-align:right}
+  .vx-spin .t{width:12ch}
+  .vx-spin i{display:inline-block;font-style:normal;transform-origin:50% 52%}
+  .vx-spin i.x{transform:scaleX(-1)}
+  .vx-spin i.y{transform:rotate(180deg)}
+</style>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<div class="vx-spin" id="vxSpin" role="img" aria-label="Loading"><span class="p"></span><span class="t"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span></span></span></div>
+<script>
+// The loader, from the page's first bytes until its first frame is on screen
+// (the same in every WebGPU piece; controls.js moves it on and takes it away).
+// On the left, how far along the start is: it sits at a step and creeps
+// toward the next, slowing but never stopping, and each file the page
+// finishes loading is a small step, up to 9%. Beside it, "loading..." typed
+// out like a terminal: each letter flickers through the hero's ASCII ramp
+// before it lands, the dots count up behind a blinking cursor, and every so
+// often letters flicker to capitals (loadING, Loading, loaDING), scrambling
+// through random characters on the way, flip backwards or upside down, or
+// glitch. Where the piece can't run there's no loader; controls.js says why
+// instead.
+window.vxLoader = (function () {
+  var el = document.getElementById('vxSpin'), ua = navigator.userAgent;
+  var ios = /iP(hone|od|ad)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  var v = ua.match(/Version\/(\d+)/) || ua.match(/OS (\d+)_\d+/);
+  if (!navigator.gpu || (ios && !(v && +v[1] >= 27))) { el.parentNode.removeChild(el); return null; }
+  // In the theme picked on the home page (the same site, so its choice is to
+  // hand): tumeric's amber, or cheshire's violet, the site's default.
+  try { if (localStorage.getItem('heroVariant') === 'tumeric') el.classList.add('tumeric'); } catch (e) {}
+  var WORD = 'loading', NOISE = '.,:;i1tfLCG08@#$%&*+=<>/\\|?';
+  var pct = el.firstChild, cell = el.lastChild.children, tail = cell[WORD.length];
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var t0 = Date.now(), typed = 160 + WORD.length * 70, gone = false, files = null;
+  var base = 2, ceil = 9, tau = 1500, since = t0, shown = 0;
+  var fx = null, fxAt = typed + 400 + Math.random() * 800, was = [], turned = [];
+  function rnd(n) { return Math.floor(Math.random() * n); }
+  // One flicker: capitals on a run of letters (DING or ING, one letter, two,
+  // or the lot), or a letter or two flipped or glitched; on and off a few
+  // times, then back. Capitals hold a little longer, to be read.
+  function flicker(ms) {
+    var n = WORD.length, r = Math.random(), kind = r < .55 ? 'caps' : r < .85 ? 'flip' : 'noise';
+    var a = kind === 'flip' ? 2 + rnd(n - 2) : rnd(n), b = a + 1, on = [], t = 0;
+    r = Math.random();
+    if (kind === 'caps' && r < .4) { a = 3 + rnd(2); b = n; }
+    else if (kind === 'caps' && r < .5) { a = 0; b = n; }
+    else if (r > .8) b = Math.min(n, a + 2);
+    for (var k = 1 + rnd(3); k > 0; k--) {
+      var d = kind === 'caps' ? 110 + rnd(140) : 40 + rnd(90);
+      on.push([t, t + d]);
+      t += d + (kind === 'caps' ? 70 : 40) + rnd(60);
+    }
+    return { kind: kind, a: a, b: b, flip: rnd(2) ? 'x' : 'y', at: ms, on: on, end: ms + t };
+  }
+  function draw() {
+    if (gone) return;
+    var now = Date.now(), ms = now - t0, dt = now - since, lit = false;
+    shown = Math.max(shown, base + (ceil - base) * dt / (dt + tau));
+    pct.textContent = Math.min(99, Math.floor(shown)) + '%';
+    if (!still && ms >= typed) {
+      if (!fx && ms >= fxAt) fx = flicker(ms);
+      if (fx && ms >= fx.end) { fx = null; fxAt = ms + 500 + Math.random() * 1300; }
+      for (var j = 0; fx && j < fx.on.length; j++) if (ms - fx.at >= fx.on[j][0] && ms - fx.at < fx.on[j][1]) lit = true;
+    }
+    for (var k = 0; k < WORD.length; k++) {
+      var c = WORD.charAt(k), how = '', hit = lit && k >= fx.a && k < fx.b;
+      if (hit && fx.kind === 'caps') c = c.toUpperCase();
+      if (hit && fx.kind === 'flip') how = fx.flip;
+      // A letter changing case runs through a few random characters first.
+      if (c !== was[k]) { if (was[k]) turned[k] = ms; was[k] = c; }
+      if (!still && (ms < 160 + k * 70 || (hit && fx.kind === 'noise') || ms - turned[k] < 60)) c = NOISE.charAt(rnd(NOISE.length));
+      if (cell[k].textContent !== c) cell[k].textContent = c;
+      if (cell[k].className !== how) cell[k].className = how;
+    }
+    tail.textContent = still ? '..._' : (ms < typed ? '' : '...'.slice(0, Math.floor((ms - typed) / 380) % 4)) + (Math.floor(ms / 530) % 2 ? ' ' : '_');
+    requestAnimationFrame(draw);
+  }
+  // (A beat before it shows, so a quick start never flashes it.)
+  var show = setTimeout(function () { el.classList.add('in'); }, 120);
+  // Away quickly, from wherever it's got to: the piece comes first.
+  function stop() {
+    if (gone) return;
+    gone = true;
+    clearTimeout(show);
+    if (files) files.disconnect();
+    el.classList.add('out');
+    el.classList.remove('in');
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+  }
+  // At v and creeping toward c, half way there after t ms, until the next.
+  function step(v, c, t) { if (v > base) { base = v; ceil = c; tau = t || 1200; since = Date.now(); } }
+  try {
+    files = new PerformanceObserver(function (list) {
+      list.getEntries().forEach(function () { if (base < 9) step(Math.min(9, base + 2), 9, 1500); });
+    });
+    files.observe({ type: 'resource' });
+  } catch (e) {}
+  var api = {
+    step: step,
+    // The piece is on screen: out of its way at once, reading 100% as it goes,
+    // however far the loader had got (typing, fading in, or not yet shown).
+    done: function () { pct.textContent = '100%'; stop(); },
+    stop: stop
+  };
+  // Where controls.js never came to move it on, it doesn't stay.
+  document.addEventListener('DOMContentLoaded', function () { if (!api.steered) stop(); });
+  draw();
+  return api;
+})();
+</script>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="thermal" selected>Thermal</option>
+      <option value="phosphor">Green phosphor</option>
+      <option value="amber">Amber</option>
+      <option value="ice">Ice</option>
+      <option value="synth">Synth</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Contours <span class="val" id="levelsVal">45</span></label><input type="range" id="levels" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Relief <span class="val" id="reliefVal">45</span></label><input type="range" id="relief" min="0" max="100" value="45"></div>
+  <div class="control-group"><label>Flow <span class="val" id="flowVal">30</span></label><input type="range" id="flow" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Swell <span class="val" id="waveVal">30</span></label><input type="range" id="wave" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Glow <span class="val" id="glowVal">55</span></label><input type="range" id="glow" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Scanlines <span class="val" id="scanVal">70</span></label><input type="range" id="scan" min="0" max="100" value="70"></div>
+  <div class="control-group"><label>Convergence <span class="val" id="aberrationVal">40</span></label><input type="range" id="aberration" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Phosphor dots <span class="val" id="maskVal">20</span></label><input type="range" id="mask" min="0" max="100" value="20"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to turn and tilt · Pinch or scroll to zoom · Tap for new ground · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADERS
+// 1. Ground: a round patch of land, drawn into a height map each frame:
+//    noise folded through itself so ridges wander and coil, drifting so the
+//    contours slowly flow, with a swell rolling across it. A second channel
+//    says where the ragged rim is.
+// 2. Scene: ray-march the height map from an orbiting camera and draw its
+//    contours, each in its height's colour. Lines are measured against the
+//    pixel's footprint across them, so they stay one crisp line wide and fade
+//    to an even tone before they can crowd and shimmer. Lines in the light
+//    burn hot enough to whiten at the core.
+// 3. Glow: the lit parts, small, blurred across and down.
+// 4. Tube: a curved CRT face. Each scanline is a beam that swells where it's
+//    bright, the red and blue guns sit a little off the green, the glow
+//    blooms around the lines, and a mask of phosphor stripes, a faint hum, a
+//    slow rolling bar, the vignette and grain finish it.
+// ═══════════════════════════════════════
+const NOISE = /* wgsl */ `
+// Gradient noise on an integer hash, so it's the same on every GPU.
+fn grad(i: vec2f) -> vec2f {
+  var v = bitcast<vec2u>(vec2i(i));
+  v = v * 1664525u + 1013904223u;
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v = v ^ (v >> vec2u(16u));
+  v.x += v.y * 1664525u;
+  v.y += v.x * 1664525u;
+  v = v ^ (v >> vec2u(16u));
+  let a = f32(v.x >> 8u) * (6.2831853 / 16777216.0);
+  return vec2f(cos(a), sin(a));
+}
+fn gnoise(p: vec2f) -> f32 {
+  let i = floor(p);
+  let f = p - i;
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  let a = dot(grad(i), f);
+  let b = dot(grad(i + vec2f(1.0, 0.0)), f - vec2f(1.0, 0.0));
+  let c = dot(grad(i + vec2f(0.0, 1.0)), f - vec2f(0.0, 1.0));
+  let d = dot(grad(i + vec2f(1.0, 1.0)), f - vec2f(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+fn fbm(q: vec2f, oct: i32, gain: f32) -> f32 {
+  var p = q;
+  var a = 0.5;
+  var s = 0.0;
+  for (var k = 0; k < oct; k++) {
+    s += a * gnoise(p);
+    // Twice as fine and turned, so no grid shows through.
+    p = mat2x2f(1.6, 1.2, -1.2, 1.6) * p + vec2f(1.7, 9.2);
+    a *= gain;
+  }
+  return s;
+}
+`;
+
+// The height map covers -EXT..EXT across; the rim sits inside it.
+const EXT = 1.2;
+
+const GROUND = NOISE + /* wgsl */ `
+struct G { seedA: vec2f, seedB: vec2f, swellDir: vec2f, morph: f32, flow: f32, swell: f32, swellT: f32 }
+@group(0) @binding(0) var<uniform> g: G;
+
+fn land(p: vec2f, s: vec2f) -> f32 {
+  let fl = vec2f(0.5, 0.3) * g.flow;
+  let w = vec2f(fbm(p * 1.1 + s + fl, 3, 0.5), fbm(p * 1.1 + s.yx + vec2f(5.2, 1.3) - fl.yx, 3, 0.5));
+  // Fine detail kept low, so the contours wander and fray without crowding.
+  var h = fbm(p * 1.4 + s * 1.3 + w * 1.2, 6, 0.42);
+  // One broad rise across the whole patch, so it has a high side and a low.
+  h += 0.32 * gnoise(p * 0.5 + s * 0.7 + vec2f(3.0, 0.0));
+  return h;
+}
+fn rim(a: vec2f, s: vec2f) -> f32 {
+  return 0.97 + 0.16 * fbm(a * 1.2 + s * 0.37 + vec2f(7.0, 2.0), 3, 0.5) + 0.05 * gnoise(a * 6.0 + s);
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let p = (uv * 2.0 - 1.0) * ${EXT};
+  let r = length(p);
+  let a = p / max(r, 1e-4);
+  var h = land(p, g.seedB);
+  var R = rim(a, g.seedB);
+  // A new patch grows out of the old one.
+  if (g.morph < 1.0) {
+    let k = smoothstep(0.0, 1.0, g.morph);
+    h = mix(land(p, g.seedA), h, k);
+    R = mix(rim(a, g.seedA), R, k);
+  }
+  h += g.swell * 0.05 * sin(dot(p, g.swellDir) * 4.0 - g.swellT);
+  let H = clamp(0.5 + h, 0.0, 1.0);
+  return vec4f(H, smoothstep(R + 0.012, R - 0.012, r), 0.0, 1.0);
+}
+`;
+
+const SCENE = /* wgsl */ `
+struct U {
+  camPos: vec3f, aspect: f32,
+  fw: vec3f, focal: f32,
+  rt: vec3f, relief: f32,
+  up: vec3f, levels: f32,
+  low: vec3f, pixX: f32,
+  mid: vec3f, pixY: f32,
+  high: vec3f, lineW: f32,
+  peak: vec3f, dist: f32,
+  light: vec3f, texel: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var ground: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+
+// Height (0..1) and how far inside the rim, at a point on the ground.
+fn at(xz: vec2f) -> vec2f {
+  return textureSampleLevel(ground, samp, xz / ${2 * EXT} + 0.5, 0.0).xy;
+}
+
+fn ramp(h: f32) -> vec3f {
+  var c = mix(u.low, u.mid, smoothstep(0.0, 0.4, h));
+  c = mix(c, u.high, smoothstep(0.42, 0.62, h));
+  return mix(c, u.peak, smoothstep(0.8, 1.0, h));
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let q = vec2f((uv.x - 0.5) * u.aspect, 0.5 - uv.y);
+  let ro = u.camPos;
+  let rd = normalize(u.fw * u.focal + u.rt * q.x + u.up * q.y);
+  // Only march the box the ground sits in.
+  let sd = select(rd, vec3f(1e-5), abs(rd) < vec3f(1e-5));
+  let ta = (vec3f(-1.15, -0.001, -1.15) - ro) / sd;
+  let tb = (vec3f(1.15, u.relief + 0.002, 1.15) - ro) / sd;
+  let tn = min(ta, tb);
+  let tf = max(ta, tb);
+  let t0 = max(max(tn.x, tn.y), max(tn.z, 0.0));
+  let t1 = min(min(tf.x, tf.y), tf.z);
+  var col = vec3f(0.0);
+  if (t1 > t0) {
+    var t = t0;
+    var prevT = t0;
+    var prevD = 1.0;
+    var curD = 1.0;
+    // The ground is a sheet with no sides: a hit is crossing it from above,
+    // inside the rim. Coming in under it, through the rim, isn't.
+    var prevOK = false;
+    var hit = false;
+    for (var i = 0; i < 260; i++) {
+      let p = ro + rd * t;
+      let s = at(p.xz);
+      curD = p.y - s.x * u.relief;
+      let inside = s.y > 0.5;
+      if (inside && curD < 0.0 && prevOK) { hit = true; break; }
+      prevOK = inside && curD >= 0.0;
+      prevT = t;
+      prevD = curD;
+      if (t >= t1) { break; }
+      t = min(t + max(abs(curD) * 0.4, 0.002 + 0.0008 * t), t1);
+    }
+    if (hit) {
+      // Close in on the crossing so the contours sit exactly on the ground.
+      var lo = prevT;
+      var hi = t;
+      var dLo = prevD;
+      var dHi = curD;
+      for (var k = 0; k < 6; k++) {
+        let m = mix(lo, hi, clamp(dLo / max(dLo - dHi, 1e-6), 0.05, 0.95));
+        let pm = ro + rd * m;
+        let dm = pm.y - at(pm.xz).x * u.relief;
+        if (dm < 0.0) { hi = m; dHi = dm; } else { lo = m; dLo = dm; }
+      }
+      t = mix(lo, hi, clamp(dLo / max(dLo - dHi, 1e-6), 0.0, 1.0));
+      let p = ro + rd * t;
+      let e = u.texel;
+      let c0 = at(p.xz);
+      let gH = vec2f(at(p.xz + vec2f(e, 0.0)).x - at(p.xz - vec2f(e, 0.0)).x,
+                     at(p.xz + vec2f(0.0, e)).x - at(p.xz - vec2f(0.0, e)).x) / (2.0 * e);
+      let n = normalize(vec3f(-gH.x * u.relief, 1.0, -gH.y * u.relief));
+      // How many contours one pixel of the scene steps across, along and down
+      // the screen: where the next pixel's ray meets the ground, as far as
+      // the tilt of the ground there.
+      let nd = min(dot(n, rd), -0.03);
+      let ex = u.rt * u.pixX;
+      let ey = u.up * u.pixY;
+      let dX = (ex - rd * (dot(n, ex) / nd)) * t;
+      let dY = (ey - rd * (dot(n, ey) / nd)) * t;
+      let lx = u.levels * dot(gH, dX.xz);
+      let ly = u.levels * dot(gH, dY.xz);
+      let lev = c0.x * u.levels;
+      let kk = round(lev);
+      let major = (i32(kk) % 5) == 0;
+      let per = length(vec2f(lx, ly)) + 1e-6;
+      // The line's width and the pixel's, both in contours, and how much of
+      // the one the other covers.
+      let w = u.lineW * per * select(1.0, 1.35, major);
+      let span = abs(lx) + abs(ly) + 1e-6;
+      let dl = abs(lev - kk);
+      var cov = clamp((min(dl + span * 0.5, w * 0.5) - max(dl - span * 0.5, -w * 0.5)) / span, 0.0, 1.0);
+      // Contours closer than a few pixels: their even average instead.
+      cov = mix(min(w, 1.0) * 0.2, cov, smoothstep(1.2, 2.6, 1.0 / per));
+      let shade = 0.3 + 0.7 * clamp(dot(n, u.light), 0.0, 1.0);
+      let hue = ramp(kk / u.levels);
+      let depth = mix(1.0, 0.55, smoothstep(u.dist - 0.9, u.dist + 1.2, t));
+      let edge = smoothstep(0.5, 0.95, c0.y);
+      col = ramp(c0.x) * 0.02 * shade;
+      // Every fifth contour a little heavier, as on a survey map.
+      let I = cov * shade * select(1.5, 2.0, major);
+      col += hue * I + vec3f(0.1 * I * I);
+      col *= depth * edge;
+    }
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+const DOWN = /* wgsl */ `
+struct P { texel: vec2f, threshold: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  var c = vec3f(0.0);
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      c += textureSampleLevel(src, samp, uv + vec2f(f32(x), f32(y)) * p.texel * 0.33, 0.0).rgb;
+    }
+  }
+  c /= 9.0;
+  let l = max(c.r, max(c.g, c.b));
+  return vec4f(c * smoothstep(p.threshold, p.threshold + 0.25, l), 1.0);
+}
+`;
+
+const BLUR = /* wgsl */ `
+struct P { dir: vec2f }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let w = array<f32, 5>(0.227, 0.194, 0.122, 0.054, 0.016);
+  var c = textureSampleLevel(src, samp, uv, 0.0).rgb * w[0];
+  for (var i = 1; i < 5; i++) {
+    let o = p.dir * f32(i) * 1.1;
+    c += (textureSampleLevel(src, samp, uv + o, 0.0).rgb + textureSampleLevel(src, samp, uv - o, 0.0).rgb) * w[i];
+  }
+  return vec4f(c, 1.0);
+}
+`;
+
+const TUBE = /* wgsl */ `
+struct F {
+  lines: f32, cols: f32, aspect: f32, curve: f32,
+  glow: f32, scan: f32, conv: f32, mask: f32,
+  time: f32, triad: f32, edge: f32,
+}
+@group(0) @binding(0) var<uniform> f: F;
+@group(0) @binding(1) var scene: texture_2d<f32>;
+@group(0) @binding(2) var glow: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+
+fn hash(n: u32) -> f32 {
+  var x = n * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  x = (x >> 22u) ^ x;
+  return f32(x >> 8u) / 16777216.0;
+}
+
+// The picture along one scanline at x: the beam smears a little along the
+// line, the red and blue guns land either side of the green, and each line
+// wobbles a hair.
+fn scanline(line: f32, x: f32, v: f32, off: f32) -> vec3f {
+  let xx = x + (hash(u32(line + 1.0) * 1973u + u32(f.time * 24.0) * 9277u) - 0.5) * 0.5 / f.cols;
+  let s = 0.6 / f.cols;
+  let r = textureSampleLevel(scene, samp, vec2f(xx - off - s, v), 0.0).r + textureSampleLevel(scene, samp, vec2f(xx - off + s, v), 0.0).r;
+  let gg = textureSampleLevel(scene, samp, vec2f(xx - s, v), 0.0).g + textureSampleLevel(scene, samp, vec2f(xx + s, v), 0.0).g;
+  let b = textureSampleLevel(scene, samp, vec2f(xx + off - s, v), 0.0).b + textureSampleLevel(scene, samp, vec2f(xx + off + s, v), 0.0).b;
+  return vec3f(r, gg, b) * 0.5;
+}
+
+// The beams either side, d lines from the one above, wider where they're
+// brighter: how lit the glass is between them.
+fn beam(d: f32, c: vec3f) -> vec3f {
+  let s = mix(vec3f(0.22), vec3f(0.36), clamp(c, vec3f(0.0), vec3f(1.0)));
+  return exp(-0.5 * (d * d) / (s * s)) + exp(-0.5 * (1.0 - d) * (1.0 - d) / (s * s));
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  // The face of the tube bulges: the picture bows out toward the corners.
+  let c = uv * 2.0 - 1.0;
+  let w = c * (1.0 + f.curve * vec2f(c.y * c.y, c.x * c.x));
+  let st = w * 0.5 + 0.5;
+  // Rounded corners, and nothing beyond them.
+  let bx = vec2f(f.aspect, 1.0);
+  let qd = abs(w) * bx - bx + 0.06;
+  let face = 1.0 - smoothstep(-f.edge, f.edge, length(max(qd, vec2f(0.0))) + min(max(qd.x, qd.y), 0.0) - 0.06);
+  if (face <= 0.0) { return vec4f(0.0, 0.0, 0.0, 1.0); }
+
+  let off = f.conv * (0.6 + 1.2 * abs(w.x));
+  let y = st.y * f.lines - 0.5;
+  let fy = fract(y);
+  // The tube's black is never quite black: the raster glows faintly.
+  var col = scanline(round(y), st.x, st.y, off) + vec3f(0.0035, 0.0038, 0.0048);
+  // (Worked out on the picture's own light; drawn once it's in range.)
+  let scan = mix(vec3f(1.0), beam(fy, col), f.scan);
+
+  let gl = vec3f(
+    textureSampleLevel(glow, samp, st - vec2f(off * 2.0, 0.0), 0.0).r,
+    textureSampleLevel(glow, samp, st, 0.0).g,
+    textureSampleLevel(glow, samp, st + vec2f(off * 2.0, 0.0), 0.0).b);
+  col += gl * f.glow;
+
+  // Phosphor stripes, red, green, blue, each lit by its own gun.
+  let ph = fract(pos.x / f.triad) * 3.0;
+  let dr = ph - 0.5 - 3.0 * round((ph - 0.5) / 3.0);
+  let dg = ph - 1.5 - 3.0 * round((ph - 1.5) / 3.0);
+  let db = ph - 2.5 - 3.0 * round((ph - 2.5) / 3.0);
+  let stripes = max(vec3f(0.0), 1.0 - abs(vec3f(dr, dg, db))) * 3.0;
+  col *= mix(vec3f(1.0), stripes, f.mask);
+
+  // The hum, and a soft bar rolling slowly down.
+  col *= 1.0 + 0.012 * sin(f.time * 377.0);
+  let bar = fract(st.y * 0.7 - f.time * 0.05);
+  col *= 1.0 + 0.05 * smoothstep(0.0, 0.3, bar) * smoothstep(0.6, 0.3, bar);
+  // Dimmer toward the edges of the glass.
+  col *= 1.0 - 0.45 * smoothstep(0.35, 1.25, length(w * vec2f(0.85, 1.0)));
+
+  // Light past full burns toward white, then everything settles into range.
+  let pk = max(col.r, max(col.g, col.b));
+  col += vec3f(max(pk - 1.3, 0.0) * 0.3);
+  col = 1.0 - exp(-col * 1.25);
+  col = pow(col, vec3f(1.0 / 2.2)) * scan * (1.0 + 0.25 * f.scan) * face;
+  let n = hash(u32(pos.x) + u32(pos.y) * 8191u + u32(f.time * 60.0) * 131071u);
+  col += (n - 0.5) * 0.02;
+  return vec4f(col, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// PALETTES: low ground, middle, high, peaks
+// ═══════════════════════════════════════
+const hex = (s) => [1, 3, 5].map((i) => Math.pow(parseInt(s.slice(i, i + 2), 16) / 255, 2.2));
+const PALETTES = {
+  thermal:  ['#1f3cff', '#2f5cff', '#ff3a22', '#ff9a5a'],
+  phosphor: ['#0b6b2a', '#19c25a', '#7dff9a', '#e6ffe9'],
+  amber:    ['#6b2a00', '#c25a00', '#ffb000', '#fff1c9'],
+  ice:      ['#0a2a6b', '#2a7dff', '#7de3ff', '#ffffff'],
+  synth:    ['#2a0bff', '#b01bff', '#ff2bd6', '#ffe0f6'],
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const IDS = ['levels', 'relief', 'flow', 'wave', 'glow', 'scan', 'aberration', 'mask'];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+const p = {};
+function readControls() {
+  p.levels = Math.round(8 + +$('levels').value / 100 * 56);
+  p.relief = 0.08 + +$('relief').value / 100 * 0.52;
+  p.flow = +$('flow').value / 100 * 0.12;
+  p.swell = +$('wave').value / 100;
+  p.glow = +$('glow').value / 100 * 1.1;
+  p.scan = +$('scan').value / 100;
+  p.conv = +$('aberration').value / 100 * 2;   // CSS pixels at the middle
+  p.mask = +$('mask').value / 100 * 0.5;
+  p.pal = PALETTES[$('palette').value].map(hex);
+  for (const id of IDS) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+const GRID = 512;
+const FOCAL = 1.6;
+const VIEW = { yaw: 0.65, pitch: 1.0, dist: 3.3 };
+const newSeed = () => [Math.random() * 200 - 100, Math.random() * 200 - 100];
+let seedA = newSeed(), seedB = seedA, morph = 1;
+let t = 0, flowT = 0, swellT = 0, groundDirty = true;
+let yaw = VIEW.yaw, pitch = VIEW.pitch, dist = VIEW.dist;
+let yawGoal = yaw, pitchGoal = pitch, distGoal = dist, spin = 0.05, idleAt = -1e9;
+const tl = tilt();
+
+let gpu;
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  gpu = await init();
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+// The scene is drawn a row per scanline, so it's cheap to march; only the
+// tube runs at full resolution.
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(6e6) });
+const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+
+// Scanlines: about one per 2.6 CSS pixels down the screen; the scene has two
+// rows to each.
+let cssW = 1, cssH = 1, lines = 240, rows = 480, cols = 320;
+function layout() {
+  cssW = Math.max(1, canvas.clientWidth || innerWidth);
+  cssH = Math.max(1, canvas.clientHeight || innerHeight);
+  lines = Math.round(clamp(cssH / 2.6, 180, 420));
+  rows = lines * 2;
+  cols = Math.round(clamp(cssW * 0.8, 240, 1600));
+}
+layout();
+const glowSize = () => [Math.max(1, Math.round(cssW / 4)), Math.max(1, Math.round(cssH / 4))];
+const groundT = target(gpu, { size: [GRID, GRID], format: 'rgba16float' });
+const sceneT = target(gpu, { size: [cols, rows], format: 'rgba16float' });
+const glowA = target(gpu, { size: glowSize(), format: 'rgba16float' });
+const glowB = target(gpu, { size: glowSize(), format: 'rgba16float' });
+
+const groundE = effect(gpu, GROUND, { set: { g: {
+  seedA, seedB, swellDir: [1, 0], morph, flow: 0, swell: p.swell, swellT: 0,
+} } });
+const sun = Math.hypot(-0.5, 0.75, 0.45);
+const sceneE = effect(gpu, SCENE, { set: { u: {
+  camPos: [0, 1, 3], aspect: 1, fw: [0, 0, -1], focal: FOCAL, rt: [1, 0, 0], relief: p.relief,
+  up: [0, 1, 0], levels: p.levels, low: p.pal[0], pixX: 0.001, mid: p.pal[1], pixY: 0.001,
+  high: p.pal[2], lineW: 1.1, peak: p.pal[3], dist: VIEW.dist, light: [-0.5 / sun, 0.75 / sun, 0.45 / sun], texel: 2 * EXT / GRID,
+}, ground: groundT, samp: linear } });
+const downE = effect(gpu, DOWN, { set: { p: { texel: [0.01, 0.01], threshold: 0.1 }, src: sceneT, samp: linear } });
+const blurH = effect(gpu, BLUR, { set: { p: { dir: [0.01, 0] }, src: glowB, samp: linear } });
+const blurV = effect(gpu, BLUR, { set: { p: { dir: [0, 0.01] }, src: glowA, samp: linear } });
+const tubeE = effect(gpu, TUBE, { set: { f: {
+  lines, cols, aspect: 1, curve: 0.03, glow: p.glow, scan: p.scan, conv: 0, mask: p.mask,
+  time: 0, triad: 3, edge: 0.002,
+}, scene: sceneT, glow: glowB, samp: linear } });
+
+let aspect = 1, devW = 1;
+surf.onResize(({ width, height }) => {
+  layout();
+  aspect = width / height;
+  devW = width;
+  sceneT.resize([cols, rows]);
+  glowA.resize(glowSize()); glowB.resize(glowSize());
+  downE.set({ p: { texel: [1 / glowA.size[0], 1 / glowA.size[1]] }, src: sceneT });
+  blurH.set({ p: { dir: [1 / glowA.size[0], 0] }, src: glowB });
+  blurV.set({ p: { dir: [0, 1 / glowA.size[1]] }, src: glowA });
+  tubeE.set({ f: { lines, cols, aspect, triad: Math.max(3, Math.round(3 * width / cssW)), edge: 2 / height }, scene: sceneT, glow: glowB });
+  sceneE.set({ u: { aspect } });
+  applyControls();
+});
+
+function applyControls() {
+  readControls();
+  const c = p.pal;
+  sceneE.set({ u: { low: c[0], mid: c[1], high: c[2], peak: c[3], levels: p.levels, relief: p.relief } });
+  groundE.set({ g: { swell: p.swell } });
+  tubeE.set({ f: { glow: p.glow, scan: p.scan, conv: p.conv / cssW, mask: p.mask } });
+  groundDirty = true;
+}
+
+// ═══════════════════════════════════════
+// LOOKING: drag to turn and tilt, pinch or scroll to zoom, tap for new
+// ground. Left alone it turns slowly; a phone's tilt leans the view a little.
+// ═══════════════════════════════════════
+const pointers = new Map();
+let downAt = 0, moved = 0, pinch = 0;
+const spread = () => { const [a, b] = [...pointers.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]); };
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pointers.size === 1) { downAt = performance.now(); moved = 0; }
+  else { moved = 1e9; pinch = pointers.size === 2 ? spread() : 0; }
+  idleAt = performance.now();
+});
+canvas.addEventListener('pointermove', (e) => {
+  const q = pointers.get(e.pointerId);
+  if (!q) return;
+  const dx = e.clientX - q[0], dy = e.clientY - q[1];
+  q[0] = e.clientX; q[1] = e.clientY;
+  if (pointers.size === 1) {
+    moved += Math.abs(dx) + Math.abs(dy);
+    yawGoal -= dx / Math.max(1, canvas.clientWidth) * 4;
+    pitchGoal = clamp(pitchGoal + dy / Math.max(1, canvas.clientHeight) * 2.4, 0.25, 1.45);
+  } else if (pointers.size === 2) {
+    const s = spread();
+    if (pinch > 0 && s > 0) distGoal = clamp(distGoal * pinch / s, 1.1, 5);
+    pinch = s;
+  }
+  idleAt = performance.now();
+});
+const release = (e) => {
+  if (!pointers.delete(e.pointerId)) return;
+  if (pointers.size < 2) pinch = 0;
+  if (!pointers.size && e.type === 'pointerup' && moved < 8 && performance.now() - downAt < 400) newGround();
+  idleAt = performance.now();
+};
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  distGoal = clamp(distGoal * Math.exp(e.deltaY * 0.0012), 1.1, 5);
+  idleAt = performance.now();
+}, { passive: false });
+
+function newGround() {
+  seedA = seedB;
+  seedB = newSeed();
+  morph = 0;
+  groundE.set({ g: { seedA, seedB, morph } });
+  if (!playing) frame(gpu, render);
+}
+
+const clk = clock(gpu);
+let fpsCount = 0, fpsAt = performance.now();
+
+function step(dt) {
+  t += dt;
+  flowT += dt * p.flow;
+  swellT += dt * 1.1;
+  if (morph < 1) morph = Math.min(1, morph + dt / 0.9);
+  // Left alone a few seconds, it starts to turn.
+  const idle = performance.now() - idleAt > 3000;
+  spin += ((idle ? 0.06 : 0) - spin) * (1 - Math.exp(-dt * 1.2));
+  yawGoal += spin * dt;
+  const ease = 1 - Math.exp(-dt * 9);
+  yaw += (yawGoal - yaw) * ease;
+  pitch += (pitchGoal - pitch) * ease;
+  dist += (distGoal - dist) * ease;
+  camera();
+  const a = 0.7 + t * 0.03;
+  groundE.set({ g: { flow: flowT, swellT, morph, swellDir: [Math.cos(a), Math.sin(a)] } });
+  tubeE.set({ f: { time: t % 1000 } });
+}
+
+// An orbit round the middle of the patch. Narrow screens stand further back
+// so the whole patch fits across.
+function camera() {
+  const y = yaw + (tl.active ? tl.x * 0.35 : 0);
+  const pt = clamp(pitch + (tl.active ? (tl.y - 0.5) * 0.25 : 0), 0.2, 1.5);
+  const cp = Math.cos(pt), sp = Math.sin(pt), cy = Math.cos(y), sy = Math.sin(y);
+  const d = dist * Math.max(1, 1.1 / aspect);
+  const lookY = p.relief * 0.35;
+  const camPos = [sy * cp * d, lookY + sp * d, cy * cp * d];
+  sceneE.set({ u: {
+    camPos, fw: [-sy * cp, -sp, -cy * cp], rt: [cy, 0, -sy], up: [-sy * sp, cp, -cy * sp],
+    dist: d, pixX: aspect / (cols * FOCAL), pixY: 1 / (rows * FOCAL),
+  } });
+}
+
+function render(f) {
+  // The ground only needs drawing again while it moves.
+  if (groundDirty || p.flow > 0 || p.swell > 0 || morph < 1) { f.pass(groundT, groundE); groundDirty = false; }
+  f.pass(sceneT, sceneE);
+  f.pass(glowB, downE);    // scene → the lit parts, small
+  f.pass(glowA, blurH);    // glowB → glowA, across
+  f.pass(glowB, blurV);    // glowA → glowB, down
+  f.pass(surf, tubeE);
+}
+
+let loop = null, playing = false;
+function tick(f) {
+  step(Math.min(clk.deltaTime, 0.1));
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of IDS) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', newGround);
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'phosphor-terrain-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+step(0);
+togglePlay();
+</script>
+</body>
+</html>
