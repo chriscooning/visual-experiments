@@ -14,9 +14,55 @@
  *   gets a cheeky line and what to try instead. On the gallery, shows its
  *   #ios-note.
  *
+ * - Pauses the piece while nobody can see it: while none of its canvases is
+ *   on screen (scrolled away, or in a frame that's out of view or hidden),
+ *   requests for the next animation frame are held, and they're all answered
+ *   together the moment one is back in view. While visible, nothing changes.
+ *   (A tab in the background already gets no frames from the browser.)
+ *
  * Include with <script src="controls.js" defer></script>. Pages without a
  * panel still get the slider spacing fix.
  */
+(function () {
+  'use strict';
+  // Out of sight, out of frames. Every piece draws from requestAnimationFrame
+  // (vgpu's frame loop picks it up when the loop starts, the older pieces on
+  // every frame), so holding its callbacks pauses any of them without
+  // touching how they draw.
+  if (!('IntersectionObserver' in window) || !window.requestAnimationFrame) return;
+  var canvases = document.querySelectorAll('canvas');
+  if (!canvases.length) return;
+  var raf = window.requestAnimationFrame.bind(window);
+  var caf = window.cancelAnimationFrame.bind(window);
+  var shown = new Set(), visible = true, held = new Map(), nextHeld = -1, waking = false;
+  window.requestAnimationFrame = function (cb) {
+    if (visible) return raf(cb);
+    // (Held ones get negative ids, so a cancel knows which kind it has.)
+    var id = nextHeld--;
+    held.set(id, cb);
+    return id;
+  };
+  window.cancelAnimationFrame = function (id) {
+    if (id < 0) held.delete(id); else caf(id);
+  };
+  function wake() {
+    if (waking || !held.size) return;
+    waking = true;
+    raf(function (now) {
+      waking = false;
+      var cbs = Array.from(held.values());
+      held.clear();
+      for (var i = 0; i < cbs.length; i++) cbs[i](now);
+    });
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) { if (e.isIntersecting) shown.add(e.target); else shown.delete(e.target); });
+    visible = shown.size > 0;
+    if (visible) wake();
+  });
+  canvases.forEach(function (c) { shown.add(c); io.observe(c); });
+})();
+
 (function () {
   'use strict';
 
