@@ -165,11 +165,25 @@ window.vxLoader = (function () {
 </script>
 <canvas id="canvas"></canvas>
 <div class="panel" id="panel">
+  <div class="control-group"><label>Wall</label>
+    <select id="palette">
+      <option value="ink" selected>Ink blue</option>
+      <option value="black">Black velvet</option>
+      <option value="pale">Pale gallery</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Light</label>
+    <select id="light">
+      <option value="torch" selected>Torch</option>
+      <option value="circle">Circling</option>
+    </select>
+  </div>
   <div class="control-group"><label>Rings <span class="val" id="ringsVal">25</span></label><input type="range" id="rings" min="0" max="100" value="25"></div>
   <div class="control-group"><label>Twist <span class="val" id="twistVal">55</span></label><input type="range" id="twist" min="0" max="100" value="55"></div>
   <div class="control-group"><label>Tile length <span class="val" id="lenVal">45</span></label><input type="range" id="len" min="0" max="100" value="45"></div>
   <div class="control-group"><label>Light height <span class="val" id="elevVal">30</span></label><input type="range" id="elev" min="0" max="100" value="30"></div>
   <div class="control-group"><label>Light speed <span class="val" id="speedVal">35</span></label><input type="range" id="speed" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Ring spin <span class="val" id="spinVal">40</span></label><input type="range" id="spin" min="0" max="100" value="40"></div>
   <div class="control-group"><label>Glass colour <span class="val" id="glassVal">85</span></label><input type="range" id="glass" min="0" max="100" value="85"></div>
   <div class="control-group"><label>Reflections <span class="val" id="reflVal">70</span></label><input type="range" id="refl" min="0" max="100" value="70"></div>
   <div class="control-group"><label>Dispersion <span class="val" id="dispVal">60</span></label><input type="range" id="disp" min="0" max="100" value="60"></div>
@@ -179,7 +193,7 @@ window.vxLoader = (function () {
     <button class="btn" id="save">PNG</button>
   </div>
 </div>
-<div class="hint-pill" id="hintPill">Drag to change the angle · Pinch or scroll to zoom · Tap for new colours · Double-tap to reset</div>
+<div class="hint-pill" id="hintPill">Move the light with your pointer or finger · Drag (two fingers on touch) to turn · Pinch or scroll to zoom · Tap for new colours</div>
 <div class="fps" id="fps"></div>
 <div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
 
@@ -406,11 +420,17 @@ fn scallop(p: vec2f, y0: f32, w: f32, px: f32) -> f32 {
   return strokeA(d, px * 0.55, px) * step(p.y, y0 + w * 0.5);
 }
 
-// Prism Ring: rings of thin dichroic glass tiles standing out from a pale
-// wall, each tilted like a louvre. A raking light circles the sculpture:
-// every tile casts a shadow tinted by the glass the light passes through,
-// throws a streak of the complementary colour it reflects, and leaves a
-// dark contact line where it meets the wall. The wall is the plane z = 0;
+// Prism Ring: rings of thin dichroic glass tiles standing out from a dark
+// wall (ink blue unless the Wall menu says black or the pale gallery wall),
+// each tilted like a louvre, the rings turning slowly, alternate ones the
+// other way. A light moves round the sculpture: a torch you carry with your
+// pointer or finger (drifting round on its own while nobody does), or a
+// raking light circling it. Every tile casts a shadow tinted by the glass
+// the light passes through, throws a streak of
+// the complementary colour it reflects, and leaves a dark contact line
+// where it meets the wall. On a dark wall the white light is held low and
+// the coloured light lifted, so the colour glows out of the dark; the pale
+// wall takes plain light. The wall is the plane z = 0;
 // tiles occupy 0 < z < H. Everything is ray-traced per pixel: the camera
 // ray against the tiles, then from the wall toward the light (shadows)
 // and back along each tile's mirror direction (reflections).
@@ -419,6 +439,9 @@ struct U {
   b: vec4f,   // yaw, pitch, distance, rings
   c: vec4f,   // light azimuth, light elevation, twist, hue
   d: vec4f,   // glass tint, reflections, tile length, dispersion
+  e: vec4f,   // wall colour, dark (0 pale wall in plain light .. 1 dark wall, colour glowing)
+  f: vec4f,   // white light kept, coloured light lift, reflection gain, ring spin
+  g: vec4f,   // torch position, torch (0 the circling light .. 1 the torch)
 }
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -435,12 +458,17 @@ const T = 0.005;
 }
 @diagnostic(off, derivative_uniformity) fn ringN(r: i32) -> f32 { return floor(6.2832 * (R0 + f32(r) * DR) / SP); }
 @diagnostic(off, derivative_uniformity) fn twistOf(r: i32) -> f32 { return u.c.z + 0.18 * f32(r) - 0.3; }
+// How far ring r is turned: a fixed offset per ring plus the spin, alternate
+// rings turning opposite ways, every ring's tiles moving at the same speed.
+@diagnostic(off, derivative_uniformity) fn ringOff(r: i32) -> f32 {
+  return f32(r) * 0.37 + u.f.w * select(1.0, -1.0, (r & 1) == 1) * R0 / (R0 + f32(r) * DR);
+}
 
 // Tile i of ring r: centre on the wall, long axis a, face normal n.
 struct Tile { c: vec2f, a: vec2f, n: vec2f }
 @diagnostic(off, derivative_uniformity) fn tileOf(r: i32, i: f32) -> Tile {
   let N = ringN(r);
-  let th = (i + 0.5) / N * 6.2832 + f32(r) * 0.37;
+  let th = (i + 0.5) / N * 6.2832 + ringOff(r);
   let rad = vec2f(cos(th), sin(th));
   let tan = vec2f(-rad.y, rad.x);
   let ph = twistOf(r) + 0.05 * sin(u.a.x * 0.3 + th * 2.0);
@@ -455,7 +483,7 @@ struct Tile { c: vec2f, a: vec2f, n: vec2f }
   let rings = i32(u.b.w);
   let r = clamp(i32(round((length(q) - R0) / DR)), 0, rings - 1);
   let N = ringN(r);
-  let th = atan2(q.y, q.x) - f32(r) * 0.37;
+  let th = atan2(q.y, q.x) - ringOff(r);
   let i = floor(fract(th / 6.2832) * N);
   return vec2f(f32(r), i);
 }
@@ -504,6 +532,11 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   let az = u.c.x; let el = u.c.y;
   return normalize(vec3f(cos(az) * cos(el), sin(az) * cos(el), sin(el)));
 }
+// Toward the light from a point X: the circling light comes from one
+// direction everywhere, the torch from where it hangs.
+@diagnostic(off, derivative_uniformity) fn lightTo(X: vec3f) -> vec3f {
+  return normalize(mix(lightDir(), normalize(u.g.xyz - X), u.g.w));
+}
 
 // The tiles a short wall-level segment q0 -> q1 can touch, for one of the
 // (at most two) rings it spans: (ring, first index, count).
@@ -513,7 +546,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   if (w == 1 && a1.x == a0.x) { return vec3f(0.0); }
   let r = select(i32(a0.x), i32(a1.x), w == 1);
   let N = ringN(r);
-  let off = f32(r) * 0.37;
+  let off = ringOff(r);
   let i0 = fract((atan2(q0.y, q0.x) - off) / 6.2832) * N;
   let i1 = fract((atan2(q1.y, q1.x) - off) / 6.2832) * N;
   var d = i1 - i0;
@@ -559,11 +592,13 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
 // Light on the wall at P: direct light filtered through any tiles between
 // P and the light, reflected streaks from nearby tiles, contact lines.
 @diagnostic(off, derivative_uniformity) fn wallShade(P: vec2f) -> vec3f {
-  let Ls = lightDir();
+  let Ls = lightTo(vec3f(P, 0.0));
   let glass = u.d.x;
   let ro = vec3f(P, 0.0005);
-  // A spotlight pooled on the sculpture, falling off into the room.
-  let spot = exp(-dot(P, P) / (2.0 * 1.05 * 1.05));
+  // The circling light is a spotlight pooled on the sculpture, falling off
+  // into the room; the torch lights what's near it.
+  let tq = P - u.g.xy;
+  let spot = mix(exp(-dot(P, P) / (2.0 * 1.05 * 1.05)), 2.2 / (1.0 + 3.0 * dot(tq, tq)), u.g.w);
   // Shadows, split into a spectrum at every glass edge.
   let dsp = 0.05 * u.d.w;
   let rot = vec2f(cos(dsp), sin(dsp));
@@ -571,7 +606,11 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   let LsB = normalize(vec3f(Ls.x * rot.x + Ls.y * rot.y, -Ls.x * rot.y + Ls.y * rot.x, Ls.z * (1.0 + dsp * 0.3)));
   let Tr = shadowTrace(P, Ls, LsR, LsB);
   let direct = (0.45 + 0.55 * max(Ls.z, 0.0)) * 1.5 * spot;
-  var light = vec3f(0.2) + direct * Tr;
+  // On a dark wall the room light goes, the white light is held low and the
+  // coloured part of the light (what the glass tints) is lifted.
+  let dk = u.e.w;
+  let chroma = Tr - vec3f(min(Tr.r, min(Tr.g, Tr.b)));
+  var light = mix(vec3f(0.2), u.e.xyz * 0.12, dk) + direct * (Tr * mix(1.0, u.f.x, dk) + chroma * u.f.y * dk);
   // Reflections: each nearby tile mirrors the light onto the wall.
   let refl = u.d.y;
   if (refl > 0.01) {
@@ -594,7 +633,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
           let fall = smoothstep(1.0, 0.7, abs(h.uv.x)) * smoothstep(1.0, 0.8, abs(h.uv.y));
           // Dispersion fans the reflected beam into a spectrum across its width.
           let spec = hsv(fract(dHue(cosI, f32(r)) + 0.5 + h.uv.y * 0.22 * u.d.w + h.uv.x * 0.08), 0.9, 1.0);
-          light += mix(reflC(cosI, f32(r)), spec, 0.7) * refl * 1.1 * direct * fall * (0.4 + 0.6 * (1.0 - cosI));
+          light += mix(reflC(cosI, f32(r)), spec, 0.7) * refl * mix(1.1, u.f.z, dk) * direct * fall * (0.4 + 0.6 * (1.0 - cosI));
         }
       }
     }
@@ -612,7 +651,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
     let sd = length(max(vec2f(lx, ly), vec2f(0.0))) + min(max(lx, ly), 0.0);
     occ = max(occ, exp(-max(sd, 0.0) / 0.006) * 0.55);
   }
-  let wall = vec3f(0.9, 0.895, 0.88) * (0.985 + 0.03 * vnoise(P * 60.0));
+  let wall = u.e.xyz * (mix(0.985, 0.95, dk) + mix(0.03, 0.1, dk) * vnoise(P * 60.0));
   return wall * light * (1.0 - occ);
 }
 
@@ -626,7 +665,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
   let rt = normalize(cross(fw, vec3f(0.0, 1.0, 0.0)));
   let up = cross(rt, fw);
   let rd = normalize(fw * 1.8 + rt * p.x + up * p.y);
-  var col = vec3f(0.1);
+  var col = mix(vec3f(0.1), u.e.xyz * 0.06, u.e.w);
   if (rd.z < -1e-4) {
     let tB = -ro.z / rd.z;
     let B = ro + rd * tB;
@@ -663,7 +702,7 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
     }
     col = wc * Tv;
     if (best.face > 0.0) {
-      let Ls = lightDir();
+      let Ls = lightTo(ro + rd * best.t);
       let n = best.n;
       let cosV = abs(dot(rd, n));
       let fres = 0.04 + 0.96 * pow(1.0 - cosV, 5.0);
@@ -673,19 +712,28 @@ struct Hit { t: f32, face: f32, uv: vec2f, n: vec3f }
       if (best.face == 1.0) {
         // Broad face: the wall seen through the glass, the room and light
         // reflected in it, and a bright rim.
-        col += vec3f(0.85) * fres * 0.6 + rc * spec * 2.2 * u.d.y + rc * fres * 0.5 + vec3f(1.0) * pow(max(dot(rr, Ls), 0.0), 300.0) * 2.0;
+        col += mix(vec3f(0.85), u.e.xyz * 0.75, u.e.w) * fres * 0.6 + rc * spec * 2.2 * u.d.y + rc * fres * 0.5 + vec3f(1.0) * pow(max(dot(rr, Ls), 0.0), 300.0) * 2.0;
         let e = max(abs(best.uv.x), abs(best.uv.y));
-        col = mix(col, col * 0.55, smoothstep(0.9, 0.99, e) * 0.7);
+        // The rim darkens on the pale wall, and glows the glass's colour on a dark one.
+        let rim = smoothstep(mix(0.9, 0.86, u.e.w), 0.99, e);
+        col = mix(col, col * 0.55, rim * 0.7 * (1.0 - u.e.w)) + transC(cosV, bestR) * rim * 0.7 * u.e.w;
         col += vec3f(1.0) * smoothstep(0.93, 1.0, abs(best.uv.y)) * step(0.0, best.uv.y) * 0.18 * max(Ls.z, 0.0);
       } else {
-        // Cut edge: dark glass with a lit line along it.
+        // Cut edge: dark glass with a lit line along it, or on a dark wall
+        // glowing with the light it carries.
         let lit = max(dot(n, Ls), 0.0);
-        col = mix(vec3f(0.22, 0.27, 0.26), transC(0.5, bestR) * 0.5, 0.25) + vec3f(1.0) * lit * 0.8 + rc * spec * 1.2;
+        let plain = mix(vec3f(0.22, 0.27, 0.26), transC(0.5, bestR) * 0.5, 0.25) + vec3f(1.0) * lit * 0.8;
+        let glow = transC(0.5, bestR) * 1.3 + vec3f(1.0) * lit * 0.5;
+        col = mix(plain, glow, u.e.w) + rc * spec * 1.2;
       }
     }
     // Fade the wall into a soft room light toward the edges.
 
   }
+  // The torch itself: a small warm light where it hangs.
+  let tp = u.g.xyz - ro;
+  let dq = length(tp - rd * max(dot(tp, rd), 0.0));
+  col += vec3f(1.0, 0.9, 0.75) * (exp(-dq * dq / 0.00012) * 2.5 + exp(-dq * dq / 0.003) * 0.2) * u.g.w;
   // Filmic tone curve.
   col *= 1.05;
   col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), vec3f(0.0), vec3f(1.0));
@@ -699,7 +747,22 @@ const PIXEL_BUDGET = 1800000;
 const NAME = 'prism-ring';
 const p = {};
 let yaw = 0.35, pitch = 0.22, dist = 3.2, vyaw = 0, vpitch = 0, hue = Math.random(), hueGoal = hue;
-let inputHooked = false, lightAz = 2.3;
+let inputHooked = false, lightAz = 2.3, spinAngle = 0;
+// The walls. On ink blue and black (dark 1) the white light is mostly held
+// back (white) and the coloured light lifted (colour), with brighter
+// reflected streaks (refl); the pale gallery wall (dark 0) takes plain light.
+const WALLS = {
+  ink: { wall: [0.085, 0.095, 0.15], dark: 1, white: 0.8, colour: 3.8, refl: 5 },
+  black: { wall: [0.12, 0.12, 0.125], dark: 1, white: 0.9, colour: 3.4, refl: 5 },
+  pale: { wall: [0.9, 0.895, 0.88], dark: 0, white: 1, colour: 0, refl: 1.1 },
+};
+const flat = (w) => [...w.wall, w.dark, w.white, w.colour, w.refl];
+let wallNow = null;
+// The torch: where it hangs (x, y on the wall, height), how far the light
+// has gone over to it from the circling light, and where a pointer or
+// finger last put it (and when).
+const torch = [0, 0, 0];
+let torchMix = 1, aim = null, aimAt = 0, hovering = false;
 function readControls() {
   p.rings = 2 + Math.round(+$('rings').value / 100 * 4);
   p.twist = -0.3 + +$('twist').value / 100 * 1.6;
@@ -709,7 +772,14 @@ function readControls() {
   p.refl = +$('refl').value / 100 * 1.4;
   p.len = 0.07 + +$('len').value / 100 * 0.1;
   p.disp = +$('disp').value / 100 * 1.6;
-  for (const id of ['rings', 'twist', 'elev', 'speed', 'glass', 'refl', 'len', 'disp']) $(id + 'Val').textContent = $(id).value;
+  p.spin = +$('spin').value / 100 * 0.3;
+  p.torch = $('light').value === 'torch' ? 1 : 0;
+  p.th = 0.15 + +$('elev').value / 100 * 0.6;
+  if (!inputHooked) torchMix = p.torch;
+  if (inputHooked) setCursor();
+  p.wall = flat(WALLS[$('palette').value] || WALLS.ink);
+  if (!wallNow) wallNow = p.wall.slice();
+  for (const id of ['rings', 'twist', 'elev', 'speed', 'spin', 'glass', 'refl', 'len', 'disp']) $(id + 'Val').textContent = $(id).value;
   if (!inputHooked) { inputHooked = true; hookInput(); }
 }
 function generate() { hueGoal += 0.2 + Math.random() * 0.4; }
@@ -720,10 +790,29 @@ function uniforms() {
     b: [yaw + (tl.active ? tl.x * 0.4 : 0), pitch + (tl.active ? (tl.y - 0.5) * 0.4 : 0), z, p.rings],
     c: [lightAz, p.elev, p.twist, hue],
     d: [p.glass, p.refl, p.len, p.disp],
+    e: wallNow.slice(0, 4),
+    f: [...wallNow.slice(4, 7), spinAngle],
+    g: [...torch, torchMix],
   };
 }
 function step(dt) {
   lightAz += dt * p.speed;
+  spinAngle += dt * p.spin;
+  // The torch follows a pointer or finger closely while one is moving it;
+  // otherwise it drifts round the sculpture at the light's speed, in and
+  // out a little.
+  torchMix += (p.torch - torchMix) * (1 - Math.exp(-dt * 4));
+  // (A mouse resting over the piece keeps it; a lifted finger leaves it a moment.)
+  const held = aim && (hovering || performance.now() - aimAt < 2500);
+  const rr = 0.95 + 0.3 * Math.sin(t * 0.21);
+  const goal = held ? aim : [rr * Math.cos(lightAz), rr * Math.sin(lightAz)];
+  if (!torch[2]) { torch[0] = goal[0]; torch[1] = goal[1]; torch[2] = p.th; }
+  const k = 1 - Math.exp(-dt * (held ? 18 : 1.5));
+  torch[0] += (goal[0] - torch[0]) * k;
+  torch[1] += (goal[1] - torch[1]) * k;
+  torch[2] += (p.th - torch[2]) * (1 - Math.exp(-dt * 6));
+  // A change of wall eases in rather than cutting.
+  for (let k = 0; k < wallNow.length; k++) wallNow[k] += (p.wall[k] - wallNow[k]) * (1 - Math.exp(-dt * 4));
   hue += (hueGoal - hue) * (1 - Math.exp(-dt * 1.5));
   if (!pts.size) {
     yaw += vyaw * dt; pitch += vpitch * dt;
@@ -732,41 +821,81 @@ function step(dt) {
     pitch = Math.max(-1.25, Math.min(1.25, pitch));
   }
 }
-// One finger turns the view around the sculpture, two fingers pinch to
-// zoom, the wheel zooms, a tap shifts the colours, a double tap resets.
+// With the torch: a mouse carries it as it moves over the piece and drags
+// to turn the view; on touch one finger carries it and two turn the view.
+// With the circling light, one finger (or a drag) turns the view. Two
+// fingers pinch to zoom, the wheel zooms, a tap shifts the colours, a
+// double tap resets the view.
 const pts = new Map();
-let lastT = 0, downAt = 0, moved = 0, lastTap = 0, tapTimer = 0, pinch = 0;
+let lastT = 0, downAt = 0, moved = 0, lastTap = 0, tapTimer = 0, pinch = 0, mid = null;
+const torchOn = () => p.torch > 0.5;
+// Under the mouse, the torch is the cursor.
+function setCursor() { canvas.style.cursor = pts.size ? 'grabbing' : torchOn() ? 'none' : 'grab'; }
+// Where the camera's ray through a point of the screen meets the plane at
+// height h in front of the wall: the shader's camera, worked backwards.
+function onPlane(q, h) {
+  const yw = yaw + (tl.active ? tl.x * 0.4 : 0), pt = pitch + (tl.active ? (tl.y - 0.5) * 0.4 : 0);
+  const z = dist * Math.max(1, 0.8 / aspect);
+  const ro = [Math.sin(yw) * Math.cos(pt) * z, Math.sin(pt) * z, Math.cos(yw) * Math.cos(pt) * z];
+  const n3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map((c) => c / l); };
+  const fw = n3(ro.map((c) => -c));
+  const rt = n3([-fw[2], 0, fw[0]]);
+  const up = [rt[1] * fw[2] - rt[2] * fw[1], rt[2] * fw[0] - rt[0] * fw[2], rt[0] * fw[1] - rt[1] * fw[0]];
+  const rd = n3([0, 1, 2].map((k) => fw[k] * 1.8 + rt[k] * q[0] - up[k] * q[1]));
+  if (rd[2] > -1e-3) return null;
+  const s = (h - ro[2]) / rd[2];
+  return [ro[0] + rd[0] * s, ro[1] + rd[1] * s];
+}
+function carry(q) { const a = onPlane(q, torch[2] || p.th); if (a) { aim = a; aimAt = performance.now(); } }
 function hookInput() {
-  canvas.style.cursor = 'grab';
+  setCursor();
   canvas.addEventListener('pointerdown', (e) => {
     pts.set(e.pointerId, toP(e));
     lastT = performance.now();
-    if (pts.size === 1) { downAt = lastT; moved = 0; vyaw = 0; vpitch = 0; canvas.style.cursor = 'grabbing'; }
-    if (pts.size === 2) { const v = [...pts.values()]; pinch = Math.hypot(v[1][0] - v[0][0], v[1][1] - v[0][1]); moved = 1; }
+    if (pts.size === 1) { downAt = lastT; moved = 0; vyaw = 0; vpitch = 0; }
+    if (pts.size === 2) { const v = [...pts.values()]; pinch = Math.hypot(v[1][0] - v[0][0], v[1][1] - v[0][1]); mid = [(v[0][0] + v[1][0]) / 2, (v[0][1] + v[1][1]) / 2]; moved = 1; }
+    setCursor();
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (!pts.has(e.pointerId)) return;
+    if (!pts.has(e.pointerId)) {
+      if (e.pointerType === 'mouse' && torchOn()) { hovering = true; carry(toP(e)); }
+      return;
+    }
     const prev = pts.get(e.pointerId), q = toP(e);
     const now = performance.now(), dts = Math.max(0.008, (now - lastT) / 1000);
     pts.set(e.pointerId, q);
     if (pts.size === 1) {
       const dx = q[0] - prev[0], dy = q[1] - prev[1];
       moved += Math.abs(dx) + Math.abs(dy);
-      yaw = Math.max(-1.25, Math.min(1.25, yaw - dx * 2.6));
-      pitch = Math.max(-1.25, Math.min(1.25, pitch + dy * 2.6));
-      vyaw = -dx * 2.6 / dts * 0.5; vpitch = dy * 2.6 / dts * 0.5;
+      if (torchOn() && e.pointerType !== 'mouse') {
+        carry(q);
+      } else {
+        yaw = Math.max(-1.25, Math.min(1.25, yaw - dx * 2.6));
+        pitch = Math.max(-1.25, Math.min(1.25, pitch + dy * 2.6));
+        vyaw = -dx * 2.6 / dts * 0.5; vpitch = dy * 2.6 / dts * 0.5;
+      }
     } else if (pts.size >= 2) {
       const v = [...pts.values()];
       const d = Math.hypot(v[1][0] - v[0][0], v[1][1] - v[0][1]);
       dist = Math.max(0.8, Math.min(7, dist * pinch / Math.max(d, 1e-3)));
       pinch = d;
+      // With the torch, two fingers moving together turn the view.
+      const m = [(v[0][0] + v[1][0]) / 2, (v[0][1] + v[1][1]) / 2];
+      if (torchOn() && mid) {
+        yaw = Math.max(-1.25, Math.min(1.25, yaw - (m[0] - mid[0]) * 2.6));
+        pitch = Math.max(-1.25, Math.min(1.25, pitch + (m[1] - mid[1]) * 2.6));
+      }
+      mid = m;
     }
     lastT = now;
   });
+  // The mouse leaving lets the torch drift off on its own.
+  canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !pts.size) { hovering = false; aim = null; } });
   const end = (e) => {
     if (!pts.has(e.pointerId)) return;
     pts.delete(e.pointerId);
-    canvas.style.cursor = 'grab';
+    if (pts.size < 2) mid = null;
+    setCursor();
     if (pts.size === 0 && performance.now() - lastT > 80) { vyaw = 0; vpitch = 0; }
     if (pts.size === 0 && moved < 0.01 && performance.now() - downAt < 300) {
       const now = performance.now();
