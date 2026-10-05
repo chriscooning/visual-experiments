@@ -129,13 +129,13 @@
       return [pick(['Nice ' + dev + '. Shame about the ' + os + '.',
                     'Your ' + dev + '\u2019s a few updates behind.',
                     'This one\u2019s a little ahead of your ' + dev + '.']),
-              'It needs ' + os + ' 27 or later.'];
+              'Update to ' + os + ' 27 to see this one.'];
     }
     return [pick(['Have you tried not using a potato?',
                   'It\u2019s not you, it\u2019s your browser.',
                   'This browser brought a crayon to a GPU fight.']),
-            ANDROID ? 'This one runs on WebGPU. Open it in a recent Chrome.'
-                    : 'This one runs on WebGPU. Try a recent Chrome or Edge.'];
+            ANDROID ? 'Your browser can\u2019t draw this one. Try an up-to-date Chrome.'
+                    : 'Your browser can\u2019t draw this one. Try an up-to-date Chrome or Edge.'];
   }
 
   // The page's full-screen message, shown where WebGPU is missing altogether.
