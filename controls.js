@@ -6,9 +6,13 @@
  *   canvas is visible on load.
  * - Hides the keyboard/mouse hint pill on phones.
  * - Gives sliders room so the 22px thumb no longer covers its label.
- * - On the WebGPU pieces (the ones with a #nogpu message), tells iPhone and
- *   iPad visitors below iOS 27 that the piece uses experimental web features
- *   and needs iOS 27 or later there; on the gallery, shows its #ios-note.
+ * - On the WebGPU pieces (the ones with a #nogpu message): each page starts
+ *   its loader with its first bytes (the block just inside its <body>); this
+ *   moves it on at each real step of the start and takes it away once the
+ *   first frame is on screen. Where a piece can't run, no loader: iPhone and
+ *   iPad below iOS 27 hear that it needs 27, and a browser without WebGPU
+ *   gets a cheeky line and what to try instead. On the gallery, shows its
+ *   #ios-note.
  *
  * Include with <script src="controls.js" defer></script>. Pages without a
  * panel still get the slider spacing fix.
@@ -44,45 +48,152 @@
     "font-family:'Space Mono',ui-monospace,monospace;font-size:11px;line-height:1.5;letter-spacing:.3px;color:#bbb}",
     '.vx-ios-note button{flex:none;border:0;background:none;color:#777;font-size:15px;line-height:1;padding:1px 2px;cursor:pointer;',
     '-webkit-tap-highlight-color:transparent}',
-    '.nogpu.on~.vx-ios-note{display:none}'
+    '.nogpu.on~.vx-ios-note{display:none}',
+    '.nogpu{flex-direction:column}',
+    '.nogpu .vx-lead{display:block;color:#aaa;margin-bottom:6px}'
   ].join('\n');
 
   var style = document.createElement('style');
   style.textContent = css;
   document.head.appendChild(style);
 
+  // Who's looking. (iPads ask for desktop sites as a Mac, so a Mac with a
+  // touch screen is an iPad.)
+  var UA = navigator.userAgent;
+  var IPAD = /iPad/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+  var IOS = IPAD || /iP(hone|od)/.test(UA);
+  var ANDROID = /Android/.test(UA);
+
   // iPhone and iPad, short of iOS 27, where the WebGPU pieces don't run yet.
   // Safari gives its version (the OS version in its user agent has stood at
   // 18.6 since iOS 26); other iOS browsers don't, so they hear about it too
-  // unless they say they're on 27 or later. (iPads ask for desktop sites as a
-  // Mac, so a Mac with a touch screen is an iPad.)
+  // unless they say they're on 27 or later.
   function iosBelow27() {
-    var ua = navigator.userAgent;
-    var ios = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-    if (!ios) return false;
-    var v = ua.match(/Version\/(\d+)/) || ua.match(/OS (\d+)_\d+/);
+    if (!IOS) return false;
+    var v = UA.match(/Version\/(\d+)/) || UA.match(/OS (\d+)_\d+/);
     return !(v && +v[1] >= 27);
   }
 
-  function iosNote() {
-    var nogpu = document.getElementById('nogpu');
-    var gallery = document.getElementById('ios-note');
-    if ((!nogpu && !gallery) || !iosBelow27()) return;
-    if (gallery) { gallery.hidden = false; return; }
-    var msg = 'Uses experimental web features. On iPhone and iPad it needs iOS 27 or later.';
-    // Where WebGPU is missing altogether, say the same.
-    nogpu.textContent = msg;
+  // What to say where a piece can't run: a cheeky line, picked afresh each
+  // visit, then what to do about it.
+  function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
+  function cheek() {
+    if (IOS) {
+      var dev = IPAD ? 'iPad' : 'iPhone', os = IPAD ? 'iPadOS' : 'iOS';
+      return [pick(['Nice ' + dev + '. Shame about the ' + os + '.',
+                    'Your ' + dev + '\u2019s a few updates behind.',
+                    'This one\u2019s a little ahead of your ' + dev + '.']),
+              'It needs ' + os + ' 27 or later.'];
+    }
+    return [pick(['Have you tried not using a potato?',
+                  'It\u2019s not you, it\u2019s your browser.',
+                  'This browser brought a crayon to a GPU fight.']),
+            ANDROID ? 'This one runs on WebGPU. Open it in a recent Chrome.'
+                    : 'This one runs on WebGPU. Try a recent Chrome or Edge.'];
+  }
+
+  // The page's full-screen message, shown where WebGPU is missing altogether.
+  function setNoGpu(nogpu, msg) {
+    nogpu.textContent = '';
+    var lead = document.createElement('span');
+    lead.className = 'vx-lead';
+    lead.textContent = msg[0];
+    nogpu.appendChild(lead);
+    nogpu.appendChild(document.createTextNode(msg[1]));
+  }
+
+  // On iPhone and iPad below 27, a small note at the top that can be put away.
+  function iosNote(msg) {
     var note = document.createElement('div');
     note.className = 'vx-ios-note';
     note.setAttribute('role', 'note');
     note.innerHTML = '<span></span><button type="button" aria-label="Dismiss">\u00d7</button>';
-    note.firstChild.textContent = msg;
+    note.firstChild.textContent = msg[0] + ' ' + msg[1];
     note.lastChild.addEventListener('click', function () { note.parentNode.removeChild(note); });
     document.body.appendChild(note);
   }
 
+  // A WebGPU piece starting up: the page's loader until the first frame is
+  // on screen, where the piece can run; the message where it can't, or where
+  // it fails to start.
+  function startUp(nogpu) {
+    var msg = cheek();
+    setNoGpu(nogpu, msg);
+    if (iosBelow27()) { iosNote(msg); return; }
+    // The page started its loader with its first bytes (where it can run:
+    // where it can't, there's none) and counted its files coming down; from
+    // here, each step of the start on the GPU moves it on.
+    var L = window.vxLoader;
+    if (!L) return;
+    L.steered = true;
+    var undo = [], done = false;
+    function finish(ok) {
+      if (done) return;
+      done = true;
+      undo.forEach(function (f) { f(); });
+      if (ok) L.done(); else L.stop();
+      window.removeEventListener('error', failed);
+      window.removeEventListener('unhandledrejection', failed);
+    }
+    // Each real step of a WebGPU start moves the percentage on: the adapter,
+    // the device, the shader handed to the compiler, the pipeline built, the
+    // first frame sent. The longest wait is usually the last, while the GPU
+    // compiles and draws, so from there it climbs slowest.
+    function onStep(proto, name, v, c) {
+      if (!proto || typeof proto[name] !== 'function') return;
+      var orig = proto[name];
+      proto[name] = function () {
+        var r = orig.apply(this, arguments);
+        if (r && typeof r.then === 'function') r.then(function () { L.step(v, c); }, function () {});
+        else L.step(v, c);
+        return r;
+      };
+      undo.push(function () { proto[name] = orig; });
+    }
+    onStep(window.GPU && GPU.prototype, 'requestAdapter', 10, 18);
+    onStep(window.GPUAdapter && GPUAdapter.prototype, 'requestDevice', 20, 28);
+    onStep(window.GPUDevice && GPUDevice.prototype, 'createShaderModule', 30, 45);
+    onStep(window.GPUDevice && GPUDevice.prototype, 'createRenderPipeline', 50, 58);
+    onStep(window.GPUDevice && GPUDevice.prototype, 'createRenderPipelineAsync', 50, 58);
+    // The first frame: the first work handed to the GPU, once it's done.
+    var Q = window.GPUQueue && GPUQueue.prototype;
+    if (Q && Q.submit) {
+      var submit = Q.submit;
+      Q.submit = function () {
+        Q.submit = submit;
+        L.step(60, 99, 2500);
+        var r = submit.apply(this, arguments);
+        this.onSubmittedWorkDone().then(function () {
+          requestAnimationFrame(function () { requestAnimationFrame(function () { finish(true); }); });
+        }, function () { finish(false); });
+        return r;
+      };
+      undo.push(function () { Q.submit = submit; });
+    }
+    // The page gives up (it shows its message), or the GPU does before the
+    // first frame: then the message, and no loader.
+    new MutationObserver(function () { if (nogpu.classList.contains('on')) finish(false); })
+      .observe(nogpu, { attributes: true, attributeFilter: ['class'] });
+    function failed(e) {
+      var r = e.reason || e.error || e;
+      if (!/gpu|wgsl|shader/i.test(String((r && (r.message || r.code)) || e.message || '')) && !/vgpu/.test(String(e.filename || ''))) return;
+      finish(false);
+      nogpu.classList.add('on');
+      ['panel', 'hintPill'].forEach(function (id) { var x = document.getElementById(id); if (x) x.style.display = 'none'; });
+      var t = document.querySelector('.vx-toggle');
+      if (t) t.parentNode.removeChild(t);
+    }
+    window.addEventListener('error', failed);
+    window.addEventListener('unhandledrejection', failed);
+    // (Never load for ever.)
+    setTimeout(function () { finish(false); }, 30000);
+  }
+
   function init() {
-    iosNote();
+    var nogpu = document.getElementById('nogpu');
+    if (nogpu) startUp(nogpu);
+    var gallery = document.getElementById('ios-note');
+    if (gallery && iosBelow27()) gallery.hidden = false;
     var panel = document.getElementById('panel') || document.getElementById('attractor-ui');
     if (!panel) return;
 
