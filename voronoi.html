@@ -61,13 +61,14 @@
     </select>
   </div>
   <div class="control-group"><label>Points <span class="val" id="countVal">70</span></label><input type="range" id="count" min="10" max="500" value="70"></div>
-  <div class="control-group"><label>Relax Speed <span class="val" id="relaxVal">30</span></label><input type="range" id="relax" min="0" max="100" value="30"></div>
-  <div class="control-group"><label>Noise Amount <span class="val" id="noiseVal">10</span></label><input type="range" id="noise" min="0" max="100" value="10"></div>
-  <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">20</span></label><input type="range" id="nSpeed" min="0" max="100" value="20"></div>
+  <div class="control-group"><label>Relax Speed <span class="val" id="relaxVal">12</span></label><input type="range" id="relax" min="0" max="100" value="12"></div>
+  <div class="control-group"><label>Noise Amount <span class="val" id="noiseVal">4</span></label><input type="range" id="noise" min="0" max="100" value="4"></div>
+  <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">6</span></label><input type="range" id="nSpeed" min="0" max="100" value="6"></div>
   <div class="control-group"><label>Wobble <span class="val" id="wobbleVal">35</span></label><input type="range" id="wobble" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Coarsening <span class="val" id="coarsenVal">40</span></label><input type="range" id="coarsen" min="0" max="100" value="40"></div>
   <div class="control-group"><label>Size Variety <span class="val" id="varietyVal">60</span></label><input type="range" id="variety" min="0" max="100" value="60"></div>
   <div class="control-group"><label>Roundness <span class="val" id="roundVal">50</span></label><input type="range" id="round" min="0" max="100" value="50"></div>
-  <div class="control-group"><label>Film Flow <span class="val" id="flowVal">35</span></label><input type="range" id="flow" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Film Flow <span class="val" id="flowVal">12</span></label><input type="range" id="flow" min="0" max="100" value="12"></div>
   <div class="control-group"><label>Edge Width <span class="val" id="edgeWVal">1.0</span></label><input type="range" id="edgeW" min="5" max="40" value="10"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -144,14 +145,17 @@ let time=0,filmTime=0,playing=false,animId=null,lastFrame=0;
 // nearest seed to any spot is found within the 5×5 cells around it; the
 // shader searches the same grid.
 // ═══════════════════════════════════════
-const MAX_SEEDS=2000,SEARCH=3,WK=.5;
+const MAX_SEEDS=2000,SEARCH=3,WK=.5,MAX_SIZE=4;
 let seeds=[];
 // Each seed has a size, from a log-normal spread like real foam (many
 // small bubbles, a few big ones). Sizes become power-diagram weights,
 // w = (WK·G·size)², so bigger bubbles push their walls out.
 function gauss(){return Math.sqrt(-2*Math.log(1-Math.random()))*Math.cos(6.28318*Math.random());}
-function newSeed(x,y){return{x,y,ph:Math.random(),g:gauss()};}
-function seedSize(s){const v=+$('variety').value/100;return Math.min(3,Math.max(.35,Math.exp(s.g*.6*v)));}
+// m is a growth factor on top of that: bubbles that swallow a neighbour
+// grow (m eases towards its target mT), small ones shrink away.
+function newSeed(x,y,g=gauss(),m=1,mT=1){return{x,y,ph:Math.random(),g,m,mT};}
+function baseSize(s){const v=+$('variety').value/100;return Math.min(3,Math.max(.35,Math.exp(s.g*.6*v)));}
+function seedSize(s){return Math.min(MAX_SIZE,baseSize(s)*s.m);}
 function initSeeds(n){seeds=[];for(let i=0;i<n;i++)seeds.push(newSeed(Math.random()*W,Math.random()*H));}
 initSeeds(70);
 
@@ -196,7 +200,42 @@ function nearestSeed(x,y){
 // seeds, the picture itself is computed per pixel on the GPU.
 // ═══════════════════════════════════════
 const SAMPLE=6;
+// ═══════════════════════════════════════
+// COARSENING
+// Foam ages: now and then the wall between two neighbours bursts and the
+// bigger bubble takes in the smaller (their areas add); small bubbles
+// slowly lose gas to bigger ones and vanish. When the foam has thinned to
+// about half, new small bubbles well up and grow in.
+// ═══════════════════════════════════════
+function coarsen(){
+  const rate=+$('coarsen').value/100;
+  if(rate<=0||seeds.length<3)return;
+  if(Math.random()<rate*.02){
+    const i=Math.floor(Math.random()*seeds.length),a=seeds[i];
+    let j=-1,bd=Infinity;
+    for(let k=0;k<seeds.length;k++){
+      if(k===i)continue;
+      const dx=seeds[k].x-a.x,dy=seeds[k].y-a.y,d=Math.sqrt(dx*dx+dy*dy)-WK*grid.G*(seedSize(a)+seedSize(seeds[k]))*.5;
+      if(d<bd){bd=d;j=k;}
+    }
+    const b=seeds[j],sa=baseSize(a)*a.mT,sb=baseSize(b)*b.mT,S=Math.sqrt(sa*sa+sb*sb);
+    if(S<=MAX_SIZE){
+      const [big,small]=sa>=sb?[a,b]:[b,a];
+      big.mT=S/baseSize(big);
+      seeds.splice(seeds.indexOf(small),1);
+    }
+  }
+  for(let k=seeds.length-1;k>=0;k--){
+    const s=seeds[k];
+    if(baseSize(s)*s.mT<.6)s.mT-=rate*.0008;
+    if(seedSize(s)<.22)seeds.splice(k,1);
+  }
+  if(seeds.length<+$('count').value*.55&&Math.random()<rate*.06)
+    seeds.push(newSeed(Math.random()*W,Math.random()*H,-.6-Math.random(),.3,1));
+}
+
 function relaxStep(){
+  coarsen();
   const speed=+$('relax').value/100;
   const noiseAmt=+$('noise').value;
   const nSpd=+$('nSpeed').value/1000;
@@ -212,6 +251,7 @@ function relaxStep(){
 
   for(let i=0;i<n;i++){
     const s=seeds[i];
+    s.m+=(s.mT-s.m)*.02;
     if(cc[i]>0){
       s.x+=(cx[i]/cc[i]-s.x)*speed*0.3;
       s.y+=(cy[i]/cc[i]-s.y)*speed*0.3;
@@ -360,8 +400,11 @@ void main(){
     // ── Soap foam, as in a macro photograph under a softbox ──
     // Each bubble is a dome: steep at its walls, flat on top.
     float Rd=R*.8,x=clamp(ds/Rd,0.,1.),u=1.-x;
-    float slope=min(.65*u/sqrt(max(1.-u*u,.03)),5.);
-    vec3 N=normalize(vec3(-slope*gds,1.));
+    float slope=min(.65*u/sqrt(max(1.-u*u,.03)),5.)*mix(1.1,.7,smoothstep(.8,3.,s1.w));
+    // Every bubble sits at its own slight tilt, so each catches the lights
+    // in a different place.
+    vec2 tilt=(vec2(fract(ph*7.31),fract(ph*13.17))-.5)*.4;
+    vec3 N=normalize(vec3(-slope*gds+tilt*x,1.));
     float cv=N.z;
     float F=.02+.98*pow(1.-cv,5.);
     vec3 rv=vec3(2.*cv*N.xy,2.*cv*cv-1.);
@@ -369,7 +412,10 @@ void main(){
     // drained thinner at the top of the bubble, thicker at its foot.
     vec2 w=vec2(vnoise(lc*1.1+ph*31.+vec2(t*.03,0.)),vnoise(lc*1.1+ph*17.+vec2(5.,-t*.025)));
     float mb=vnoise(lc*1.5+w*1.9+vec2(t*.02,ph*9.))+.5*vnoise(lc*3.2+w*2.6+ph*3.);
-    float th=clamp(.34+.2*mb+.1*lc.y+.12*(1.-x),.03,1.4);
+    // Fresh bubbles are thick and reflect near white with a pastel tint;
+    // older, drained ones are thin and vivid.
+    float age=fract(ph*5.73);
+    float th=clamp(mix(.85,.3,age)+.2*mb+.1*lc.y+.12*(1.-x),.03,1.6);
     float ct=sqrt(1.-(1.-cv*cv)/1.77);
     vec3 fc=film(1.33*th*ct);
     // What shows through: a deeper layer of foam, dim and out of focus.
@@ -563,7 +609,7 @@ $('playPause').addEventListener('click',togglePlay);
 $('generate').addEventListener('click',()=>{
   randomizeSelect('palette');
   randomizeSelect('drawMode');
-  randomizeControls(['relax','noise','nSpeed','variety','wobble','round','flow','edgeW']);
+  randomizeControls(['relax','noise','nSpeed','coarsen','variety','wobble','round','flow','edgeW']);
   $('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);
   perlin=new PerlinNoise((Math.random()*1e5)|0);
   time=0;
@@ -572,7 +618,7 @@ $('generate').addEventListener('click',()=>{
 });
 $('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='voronoi-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
 
-['count','relax','noise','nSpeed','variety','wobble','round','flow'].forEach(id=>{
+['count','relax','noise','nSpeed','coarsen','variety','wobble','round','flow'].forEach(id=>{
   const el=$(id),vEl=$(id+'Val');
   el.addEventListener('input',()=>{vEl.textContent=el.value;if(!playing)render();});
 });
