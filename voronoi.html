@@ -65,6 +65,7 @@
   <div class="control-group"><label>Noise Amount <span class="val" id="noiseVal">10</span></label><input type="range" id="noise" min="0" max="100" value="10"></div>
   <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">20</span></label><input type="range" id="nSpeed" min="0" max="100" value="20"></div>
   <div class="control-group"><label>Wobble <span class="val" id="wobbleVal">35</span></label><input type="range" id="wobble" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Size Variety <span class="val" id="varietyVal">60</span></label><input type="range" id="variety" min="0" max="100" value="60"></div>
   <div class="control-group"><label>Roundness <span class="val" id="roundVal">50</span></label><input type="range" id="round" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Film Flow <span class="val" id="flowVal">35</span></label><input type="range" id="flow" min="0" max="100" value="35"></div>
   <div class="control-group"><label>Edge Width <span class="val" id="edgeWVal">1.0</span></label><input type="range" id="edgeW" min="5" max="40" value="10"></div>
@@ -143,9 +144,14 @@ let time=0,filmTime=0,playing=false,animId=null,lastFrame=0;
 // nearest seed to any spot is found within the 5×5 cells around it; the
 // shader searches the same grid.
 // ═══════════════════════════════════════
-const MAX_SEEDS=2000,SEARCH=2;
+const MAX_SEEDS=2000,SEARCH=3,WK=.5;
 let seeds=[];
-function newSeed(x,y){return{x,y,ph:Math.random()};}
+// Each seed has a size, from a log-normal spread like real foam (many
+// small bubbles, a few big ones). Sizes become power-diagram weights,
+// w = (WK·G·size)², so bigger bubbles push their walls out.
+function gauss(){return Math.sqrt(-2*Math.log(1-Math.random()))*Math.cos(6.28318*Math.random());}
+function newSeed(x,y){return{x,y,ph:Math.random(),g:gauss()};}
+function seedSize(s){const v=+$('variety').value/100;return Math.min(3,Math.max(.35,Math.exp(s.g*.6*v)));}
 function initSeeds(n){seeds=[];for(let i=0;i<n;i++)seeds.push(newSeed(Math.random()*W,Math.random()*H));}
 initSeeds(70);
 
@@ -156,6 +162,7 @@ function buildGrid(){
   const gw=Math.ceil(W/G)+1,gh=Math.ceil(H/G)+1,cells=gw*gh;
   const count=new Int32Array(cells),start=new Int32Array(cells),order=new Int32Array(n),cellOf=new Int32Array(n);
   for(let i=0;i<n;i++){
+    seeds[i].sz=seedSize(seeds[i]);
     const gx=Math.min(gw-1,Math.max(0,Math.floor(seeds[i].x/G)));
     const gy=Math.min(gh-1,Math.max(0,Math.floor(seeds[i].y/G)));
     cellOf[i]=gy*gw+gx;count[cellOf[i]]++;
@@ -175,7 +182,7 @@ function nearestSeed(x,y){
       for(let gx=Math.max(0,cx-r);gx<=Math.min(gw-1,cx+r);gx++){
         const c=gy*gw+gx;
         for(let k=start[c],e=k+count[c];k<e;k++){
-          const s=seeds[order[k]],dx=s.x-x,dy=s.y-y,d=dx*dx+dy*dy;
+          const s=seeds[order[k]],dx=s.x-x,dy=s.y-y,ws=WK*G*s.sz,d=dx*dx+dy*dy-ws*ws;
           if(d<bd){bd=d;best=order[k];}
         }
       }
@@ -238,6 +245,7 @@ uniform sampler2D uGrid;    // start, count     (gw × gh)
 uniform vec2 uRes;uniform float uDpr;
 uniform float uG;uniform ivec2 uGridSize;
 uniform float uTime,uWobble,uRound,uEdge;
+const float WK=float(${WK});
 uniform int uMode;          // 0 soap, 1 oil, 2 cells
 uniform vec3 uPa,uPb,uPc,uPd;
 out vec4 outColor;
@@ -271,7 +279,7 @@ void main(){
     vec4 g=texelFetch(uGrid,c,0);int st=int(g.x),cn=int(g.y);
     for(int k=0;k<64;k++){
       if(k>=cn)break;
-      vec4 s=seedAt(st+k);vec2 d=s.xy-q;float dd=dot(d,d);
+      vec4 s=seedAt(st+k);vec2 d=s.xy-q;float ws=WK*uG*s.w;float dd=dot(d,d)-ws*ws;
       if(dd<bd){bd=dd;s1=s;i1=st+k;}
     }
   }
@@ -285,9 +293,11 @@ void main(){
     for(int k=0;k<64;k++){
       if(k>=cn)break;
       if(st+k==i1)continue;
-      vec2 o=seedAt(st+k).xy-s1.xy;float l=length(o);
+      vec4 sb=seedAt(st+k);vec2 o=sb.xy-s1.xy;float l=length(o);
       if(l<1e-3)continue;
-      float w=dot(.5*(s1.xy+seedAt(st+k).xy)-q,o/l);
+      // Distance to the power-diagram wall between the two seeds.
+      float wa2=WK*uG*s1.w,wb2=WK*uG*sb.w;
+      float w=(l*l+wa2*wa2-wb2*wb2)/(2.*l)-dot(q-s1.xy,o/l);
       if(w<wa){wb=wa;wa=w;}else if(w<wb)wb=w;
     }
   }
@@ -299,7 +309,7 @@ void main(){
   vec2 m=max(vec2(rc)-vec2(wa,wb),0.);
   float d=min(wa,wb)>=rc?min(wa,wb):rc-length(m);
 
-  float R=uG*.5,ph=s1.z,di=max(d,0.);
+  float R=uG*.5*s1.w,ph=s1.z,di=max(d,0.);
   vec2 lc=(q-s1.xy)/R;
   float aa=.8/uDpr;
   float line=1.-smoothstep(uEdge-aa,uEdge+aa,abs(d));
@@ -307,37 +317,45 @@ void main(){
   vec3 col;
 
   if(uMode==0){
-    // Soap: the cells are nearly clear; the colour lives in the walls, a
-    // thin bright line with a soft glow whose film colour drifts smoothly
-    // along it, plus a faint inner reflection just inside each wall.
-    float big=vnoise(p/(uG*2.6)+vec2(t*.03,-t*.02))*.5+vnoise(p/(uG*1.1)-vec2(0.,t*.025))*.25;
-    vec3 wallC=mix(pal(.36+.16*big),vec3(1.),.3);
-    float th=.3+.1*lc.y+.07*vnoise(lc*1.1+vec2(ph*23.,ph*41.)+t*.04);
-    vec3 film=mix(pal(th),vec3(.8),.2);
-    col=vec3(.006,.007,.012)+film*.035;
-    col+=film*.2*exp(-di/(R*.16));
-    float inset=di-max(3.,R*.07);
-    col+=wallC*.22*exp(-inset*inset/2.5);
-    col+=wallC*(.32*exp(-abs(d)/(uEdge*3.+2.)));
-    col=mix(col,vec3(.004,.005,.008)+wallC*.05,pocket);
-    col+=wallC*exp(-d*d/(uEdge*uEdge+.15));
-    // A faint window reflection, upper left.
-    vec2 h=lc-vec2(-.36,-.44);h=mat2(.87,.5,-.5,.87)*h;
-    col+=vec3(.16)*exp(-(h.x*h.x*40.+h.y*h.y*140.))*smoothstep(0.,R*.2,di);
+    // Soap foam: thin silvery walls with an iridescent fringe, each bubble
+    // lit from the upper left, and soft pastel film swirling slowly inside
+    // the bigger bubbles (draining thinner, towards gold, at the top).
+    float sw=vnoise(lc*.9+vec2(ph*23.,ph*41.)+vec2(t*.03,-t*.02))+.5*vnoise(lc*1.8+vec2(ph*7.,t*.04));
+    float th=.24+.16*clamp(.5+.35*lc.y,0.,1.)+.1*sw+.12*exp(-di/(R*.25));
+    vec3 film=mix(pal(th),vec3(.85,.88,.95),.35);
+    float big=smoothstep(.7,1.6,s1.w);
+    vec3 base=vec3(.035,.04,.055);
+    // Light through the bubble: a soft dome, brighter towards the walls.
+    float dome=exp(-di/(R*.35));
+    col=base+vec3(.05,.055,.07)*(1.-length(lc)*.4);
+    col+=film*(.05+.12*big)*(.6+.4*sw);
+    col+=film*.28*dome*dome;
+    // Walls: a white core with a coloured fringe either side.
+    float core=exp(-d*d/(uEdge*uEdge*.8+.12));
+    float fringe=exp(-abs(d)/(uEdge*2.5+1.2));
+    col+=mix(film,vec3(1.),.15)*.45*fringe;
+    col=mix(col,base*.6+film*.08,pocket);
+    col+=vec3(.92,.94,1.)*core*.9;
+    // Highlights: a window up-left, a small glint down-right.
+    vec2 h=lc-vec2(-.38,-.42);h=mat2(.87,.5,-.5,.87)*h;
+    col+=vec3(.7)*exp(-(h.x*h.x*26.+h.y*h.y*80.))*smoothstep(0.,R*.12,di);
+    vec2 g=lc-vec2(.42,.46);
+    col+=vec3(.35)*exp(-dot(g,g)*120.)*smoothstep(0.,R*.1,di);
   }else if(uMode==1){
-    // Oil: one smooth, marbled film over dark water, folded by a two-level
-    // domain warp; the cells only show as faint seams.
-    vec2 uv=p/950.;
+    // Oil: a smooth marbled film over dark water, no walls drawn. The cells
+    // only shape it faintly: the film pools a touch thicker in each cell's
+    // middle, so the colour bands bend a little around them.
+    vec2 uv=p/800.;
     vec2 w1=vec2(vnoise(uv*1.3+vec2(t*.015,0.)),vnoise(uv*1.3+vec2(3.1,7.7)-vec2(0.,t*.013)));
-    vec2 w2=vec2(vnoise(uv*2.+w1*1.2+vec2(1.7,9.2)),vnoise(uv*2.+w1*1.2+vec2(8.3,2.8)));
-    float n=vnoise(uv*1.6+w2*1.5+t*.005);
-    float th=.3+.28*n;
+    vec2 w2=vec2(vnoise(uv*2.4+w1*1.4+vec2(1.7,9.2)),vnoise(uv*2.4+w1*1.4+vec2(8.3,2.8)));
+    float n=vnoise(uv*1.4+w2*1.6+t*.005)+.35*vnoise(uv*3.5+w2*2.+vec2(5.,t*.01));
+    float pool=smoothstep(0.,R*.9,max(d,0.));
+    // A thick, steep film: the thickness runs through several orders of
+    // interference, so it shows as many thin bands curling round each other.
+    float th=.42+.55*n+.08*pool;
     vec3 film=pal(th);
-    float sheen=smoothstep(-.35,.75,vnoise(uv*1.1+w1*.9+vec2(4.4,1.9)));
-    col=mix(vec3(.008,.009,.013),film*.85,.15+.75*sheen);
-    col+=vec3(.06)*sheen*sheen;
-    col*=mix(.55,1.,smoothstep(0.,uEdge*2.+1.,di));
-    col=mix(col,col*.4,max(pocket,line*.6));
+    float sheen=smoothstep(-.5,.6,vnoise(uv*.9+w1*.8+vec2(4.4,1.9)));
+    col=mix(vec3(.01,.011,.016),pow(film,vec3(1.4)),.25+.65*sheen);
   }else{
     // Cells: flat palette colour per cell, clean anti-aliased walls.
     vec3 c=pal(.12+ph*.55);
@@ -385,7 +403,7 @@ function render(){
 
   const rows=Math.max(1,Math.ceil(n/1024));
   const sd=new Float32Array(1024*rows*4);
-  for(let k=0;k<n;k++){const s=seeds[order[k]];sd[k*4]=s.x;sd[k*4+1]=s.y;sd[k*4+2]=s.ph;}
+  for(let k=0;k<n;k++){const s=seeds[order[k]];sd[k*4]=s.x;sd[k*4+1]=s.y;sd[k*4+2]=s.ph;sd[k*4+3]=s.sz;}
   const gd=new Float32Array(gw*gh*4);
   for(let c=0;c<gw*gh;c++){gd[c*4]=start[c];gd[c*4+1]=count[c];}
   gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,seedTex);
@@ -451,7 +469,7 @@ $('playPause').addEventListener('click',togglePlay);
 $('generate').addEventListener('click',()=>{
   randomizeSelect('palette');
   randomizeSelect('drawMode');
-  randomizeControls(['relax','noise','nSpeed','wobble','round','flow','edgeW']);
+  randomizeControls(['relax','noise','nSpeed','variety','wobble','round','flow','edgeW']);
   $('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);
   perlin=new PerlinNoise((Math.random()*1e5)|0);
   time=0;
@@ -460,7 +478,7 @@ $('generate').addEventListener('click',()=>{
 });
 $('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='voronoi-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
 
-['count','relax','noise','nSpeed','wobble','round','flow'].forEach(id=>{
+['count','relax','noise','nSpeed','variety','wobble','round','flow'].forEach(id=>{
   const el=$(id),vEl=$(id+'Val');
   el.addEventListener('input',()=>{vEl.textContent=el.value;if(!playing)render();});
 });

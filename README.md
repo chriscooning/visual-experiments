@@ -163,7 +163,7 @@ These need a browser with WebGPU. Where a phone has a motion sensor, `lib/tilt.j
 - **Voronoi Relaxation**
   - Lloyd's algorithm, drawn per pixel in WebGL2
   - Soap bubbles, oil slick, cells; thin-film interference colour
-  - Wobble, roundness, film flow
+  - Size variety (foam: many small bubbles, a few big), wobble, roundness, film flow
   - Click add seeds, drag push
 
 **Data & AI**
