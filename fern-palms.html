@@ -4,8 +4,27 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Fern Palms — WebGPU</title>
+<!-- Fonts load without holding up the first paint. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap" media="print" onload="this.media='all'">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  /* The loader, run by the script just inside <body>, in the site's theme:
+     cheshire's violet (the site's default), or tumeric's amber. */
+  .vx-spin{--vx-ink:#BD93F9;--vx-glow:rgba(189,147,249,.65);--vx-bloom:rgba(107,34,180,.55);
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;
+    white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:var(--vx-ink);
+    text-shadow:0 0 6px var(--vx-glow),0 0 18px var(--vx-bloom);opacity:0;transition:opacity .45s ease}
+  .vx-spin.tumeric{--vx-ink:#dca56e;--vx-glow:rgba(220,165,110,.7);--vx-bloom:rgba(220,165,110,.3)}
+  .vx-spin.in{opacity:1}
+  .vx-spin.out{transition-duration:.25s}
+  .vx-spin .p{width:4ch;text-align:right}
+  .vx-spin .t{width:12ch}
+  .vx-spin i{display:inline-block;font-style:normal;transform-origin:50% 52%}
+  .vx-spin i.x{transform:scaleX(-1)}
+  .vx-spin i.y{transform:rotate(180deg)}
+</style>
+<style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
   canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
@@ -43,6 +62,107 @@
 <script src="controls.js" defer></script>
 </head>
 <body>
+<div class="vx-spin" id="vxSpin" role="img" aria-label="Loading"><span class="p"></span><span class="t"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span></span></span></div>
+<script>
+// The loader, from the page's first bytes until its first frame is on screen
+// (the same in every WebGPU piece; controls.js moves it on and takes it away).
+// On the left, how far along the start is: it sits at a step and creeps
+// toward the next, slowing but never stopping, and each file the page
+// finishes loading is a small step, up to 9%. Beside it, "loading..." typed
+// out like a terminal: each letter flickers through the hero's ASCII ramp
+// before it lands, the dots count up behind a blinking cursor, and every so
+// often letters flicker to capitals (loadING, Loading, loaDING), scrambling
+// through random characters on the way, flip backwards or upside down, or
+// glitch. Where the piece can't run there's no loader; controls.js says why
+// instead.
+window.vxLoader = (function () {
+  var el = document.getElementById('vxSpin'), ua = navigator.userAgent;
+  var ios = /iP(hone|od|ad)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  var v = ua.match(/Version\/(\d+)/) || ua.match(/OS (\d+)_\d+/);
+  if (!navigator.gpu || (ios && !(v && +v[1] >= 27))) { el.parentNode.removeChild(el); return null; }
+  // In the theme picked on the home page (the same site, so its choice is to
+  // hand): tumeric's amber, or cheshire's violet, the site's default.
+  try { if (localStorage.getItem('heroVariant') === 'tumeric') el.classList.add('tumeric'); } catch (e) {}
+  var WORD = 'loading', NOISE = '.,:;i1tfLCG08@#$%&*+=<>/\\|?';
+  var pct = el.firstChild, cell = el.lastChild.children, tail = cell[WORD.length];
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var t0 = Date.now(), typed = 160 + WORD.length * 70, gone = false, files = null;
+  var base = 2, ceil = 9, tau = 1500, since = t0, shown = 0;
+  var fx = null, fxAt = typed + 400 + Math.random() * 800, was = [], turned = [];
+  function rnd(n) { return Math.floor(Math.random() * n); }
+  // One flicker: capitals on a run of letters (DING or ING, one letter, two,
+  // or the lot), or a letter or two flipped or glitched; on and off a few
+  // times, then back. Capitals hold a little longer, to be read.
+  function flicker(ms) {
+    var n = WORD.length, r = Math.random(), kind = r < .55 ? 'caps' : r < .85 ? 'flip' : 'noise';
+    var a = kind === 'flip' ? 2 + rnd(n - 2) : rnd(n), b = a + 1, on = [], t = 0;
+    r = Math.random();
+    if (kind === 'caps' && r < .4) { a = 3 + rnd(2); b = n; }
+    else if (kind === 'caps' && r < .5) { a = 0; b = n; }
+    else if (r > .8) b = Math.min(n, a + 2);
+    for (var k = 1 + rnd(3); k > 0; k--) {
+      var d = kind === 'caps' ? 110 + rnd(140) : 40 + rnd(90);
+      on.push([t, t + d]);
+      t += d + (kind === 'caps' ? 70 : 40) + rnd(60);
+    }
+    return { kind: kind, a: a, b: b, flip: rnd(2) ? 'x' : 'y', at: ms, on: on, end: ms + t };
+  }
+  function draw() {
+    if (gone) return;
+    var now = Date.now(), ms = now - t0, dt = now - since, lit = false;
+    shown = Math.max(shown, base + (ceil - base) * dt / (dt + tau));
+    pct.textContent = Math.min(99, Math.floor(shown)) + '%';
+    if (!still && ms >= typed) {
+      if (!fx && ms >= fxAt) fx = flicker(ms);
+      if (fx && ms >= fx.end) { fx = null; fxAt = ms + 500 + Math.random() * 1300; }
+      for (var j = 0; fx && j < fx.on.length; j++) if (ms - fx.at >= fx.on[j][0] && ms - fx.at < fx.on[j][1]) lit = true;
+    }
+    for (var k = 0; k < WORD.length; k++) {
+      var c = WORD.charAt(k), how = '', hit = lit && k >= fx.a && k < fx.b;
+      if (hit && fx.kind === 'caps') c = c.toUpperCase();
+      if (hit && fx.kind === 'flip') how = fx.flip;
+      // A letter changing case runs through a few random characters first.
+      if (c !== was[k]) { if (was[k]) turned[k] = ms; was[k] = c; }
+      if (!still && (ms < 160 + k * 70 || (hit && fx.kind === 'noise') || ms - turned[k] < 60)) c = NOISE.charAt(rnd(NOISE.length));
+      if (cell[k].textContent !== c) cell[k].textContent = c;
+      if (cell[k].className !== how) cell[k].className = how;
+    }
+    tail.textContent = still ? '..._' : (ms < typed ? '' : '...'.slice(0, Math.floor((ms - typed) / 380) % 4)) + (Math.floor(ms / 530) % 2 ? ' ' : '_');
+    requestAnimationFrame(draw);
+  }
+  // (A beat before it shows, so a quick start never flashes it.)
+  var show = setTimeout(function () { el.classList.add('in'); }, 120);
+  // Away quickly, from wherever it's got to: the piece comes first.
+  function stop() {
+    if (gone) return;
+    gone = true;
+    clearTimeout(show);
+    if (files) files.disconnect();
+    el.classList.add('out');
+    el.classList.remove('in');
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+  }
+  // At v and creeping toward c, half way there after t ms, until the next.
+  function step(v, c, t) { if (v > base) { base = v; ceil = c; tau = t || 1200; since = Date.now(); } }
+  try {
+    files = new PerformanceObserver(function (list) {
+      list.getEntries().forEach(function () { if (base < 9) step(Math.min(9, base + 2), 9, 1500); });
+    });
+    files.observe({ type: 'resource' });
+  } catch (e) {}
+  var api = {
+    step: step,
+    // The piece is on screen: out of its way at once, reading 100% as it goes,
+    // however far the loader had got (typing, fading in, or not yet shown).
+    done: function () { pct.textContent = '100%'; stop(); },
+    stop: stop
+  };
+  // Where controls.js never came to move it on, it doesn't stay.
+  document.addEventListener('DOMContentLoaded', function () { if (!api.steered) stop(); });
+  draw();
+  return api;
+})();
+</script>
 <canvas id="canvas"></canvas>
 <div class="panel" id="panel">
   <div class="control-group"><label>Time <span class="val" id="timeVal">14</span></label><input type="range" id="time" min="0" max="100" value="14"></div>
