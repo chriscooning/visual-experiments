@@ -179,8 +179,8 @@ window.vxLoader = (function () {
   <div class="control-group"><label>Flow <span class="val" id="flowVal">30</span></label><input type="range" id="flow" min="0" max="100" value="30"></div>
   <div class="control-group"><label>Swell <span class="val" id="waveVal">30</span></label><input type="range" id="wave" min="0" max="100" value="30"></div>
   <div class="control-group"><label>Glow <span class="val" id="glowVal">55</span></label><input type="range" id="glow" min="0" max="100" value="55"></div>
-  <div class="control-group"><label>Scanlines <span class="val" id="scanVal">70</span></label><input type="range" id="scan" min="0" max="100" value="70"></div>
-  <div class="control-group"><label>Convergence <span class="val" id="aberrationVal">40</span></label><input type="range" id="aberration" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Scanlines <span class="val" id="scanVal">85</span></label><input type="range" id="scan" min="0" max="100" value="85"></div>
+  <div class="control-group"><label>Convergence <span class="val" id="aberrationVal">55</span></label><input type="range" id="aberration" min="0" max="100" value="55"></div>
   <div class="control-group"><label>Phosphor dots <span class="val" id="maskVal">20</span></label><input type="range" id="mask" min="0" max="100" value="20"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -200,8 +200,8 @@ import { tilt } from './lib/tilt.js';
 // SHADERS
 // 1. Ground: a round patch of land, drawn into a height map each frame:
 //    noise folded through itself so ridges wander and coil, drifting so the
-//    contours slowly flow, with a swell rolling across it. A second channel
-//    says where the ragged rim is.
+//    contours slowly flow, with a swell rolling across it. The other
+//    channels say where the ragged rim is, sharp and softly.
 // 2. Scene: ray-march the height map from an orbiting camera and draw its
 //    contours, each in its height's colour. Lines are measured against the
 //    pixel's footprint across them, so they stay one crisp line wide and fade
@@ -285,7 +285,7 @@ fn rim(a: vec2f, s: vec2f) -> f32 {
   }
   h += g.swell * 0.05 * sin(dot(p, g.swellDir) * 4.0 - g.swellT);
   let H = clamp(0.5 + h, 0.0, 1.0);
-  return vec4f(H, smoothstep(R + 0.012, R - 0.012, r), 0.0, 1.0);
+  return vec4f(H, smoothstep(R + 0.012, R - 0.012, r), smoothstep(R, R - 0.2, r), 1.0);
 }
 `;
 
@@ -305,14 +305,14 @@ struct U {
 @group(0) @binding(1) var ground: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
 
-// Height (0..1) and how far inside the rim, at a point on the ground.
-fn at(xz: vec2f) -> vec2f {
-  return textureSampleLevel(ground, samp, xz / ${2 * EXT} + 0.5, 0.0).xy;
+// Height (0..1), inside the rim or not, and fading toward it.
+fn at(xz: vec2f) -> vec3f {
+  return textureSampleLevel(ground, samp, xz / ${2 * EXT} + 0.5, 0.0).xyz;
 }
 
 fn ramp(h: f32) -> vec3f {
-  var c = mix(u.low, u.mid, smoothstep(0.0, 0.4, h));
-  c = mix(c, u.high, smoothstep(0.42, 0.62, h));
+  var c = mix(u.low, u.mid, smoothstep(0.0, 0.45, h));
+  c = mix(c, u.high, smoothstep(0.5, 0.68, h));
   return mix(c, u.peak, smoothstep(0.8, 1.0, h));
 }
 
@@ -394,11 +394,11 @@ fn ramp(h: f32) -> vec3f {
       let shade = 0.3 + 0.7 * clamp(dot(n, u.light), 0.0, 1.0);
       let hue = ramp(kk / u.levels);
       let depth = mix(1.0, 0.55, smoothstep(u.dist - 0.9, u.dist + 1.2, t));
-      let edge = smoothstep(0.5, 0.95, c0.y);
+      let edge = smoothstep(0.5, 0.95, c0.y) * mix(0.3, 1.0, c0.z);
       col = ramp(c0.x) * 0.02 * shade;
       // Every fifth contour a little heavier, as on a survey map.
-      let I = cov * shade * select(1.5, 2.0, major);
-      col += hue * I + vec3f(0.1 * I * I);
+      let I = cov * shade * select(1.4, 1.8, major);
+      col += hue * I + vec3f(0.15 * I * I);
       col *= depth * edge;
     }
   }
@@ -462,7 +462,7 @@ fn hash(n: u32) -> f32 {
 // line, the red and blue guns land either side of the green, and each line
 // wobbles a hair.
 fn scanline(line: f32, x: f32, v: f32, off: f32) -> vec3f {
-  let xx = x + (hash(u32(line + 1.0) * 1973u + u32(f.time * 24.0) * 9277u) - 0.5) * 0.5 / f.cols;
+  let xx = x + (hash(u32(line + 1.0) * 1973u + u32(f.time * 24.0) * 9277u) - 0.5) * 1.6 / f.cols;
   let s = 0.6 / f.cols;
   let r = textureSampleLevel(scene, samp, vec2f(xx - off - s, v), 0.0).r + textureSampleLevel(scene, samp, vec2f(xx - off + s, v), 0.0).r;
   let gg = textureSampleLevel(scene, samp, vec2f(xx - s, v), 0.0).g + textureSampleLevel(scene, samp, vec2f(xx + s, v), 0.0).g;
@@ -473,7 +473,7 @@ fn scanline(line: f32, x: f32, v: f32, off: f32) -> vec3f {
 // The beams either side, d lines from the one above, wider where they're
 // brighter: how lit the glass is between them.
 fn beam(d: f32, c: vec3f) -> vec3f {
-  let s = mix(vec3f(0.22), vec3f(0.36), clamp(c, vec3f(0.0), vec3f(1.0)));
+  let s = mix(vec3f(0.2), vec3f(0.34), clamp(c, vec3f(0.0), vec3f(1.0)));
   return exp(-0.5 * (d * d) / (s * s)) + exp(-0.5 * (1.0 - d) * (1.0 - d) / (s * s));
 }
 
@@ -492,7 +492,7 @@ fn beam(d: f32, c: vec3f) -> vec3f {
   let y = st.y * f.lines - 0.5;
   let fy = fract(y);
   // The tube's black is never quite black: the raster glows faintly.
-  var col = scanline(round(y), st.x, st.y, off) + vec3f(0.0035, 0.0038, 0.0048);
+  var col = scanline(round(y), st.x, st.y, off) + vec3f(0.0025, 0.0028, 0.0036);
   // (Worked out on the picture's own light; drawn once it's in range.)
   let scan = mix(vec3f(1.0), beam(fy, col), f.scan);
 
@@ -560,7 +560,7 @@ function readControls() {
 }
 readControls();
 
-const GRID = 512;
+const GRID = 256;
 const FOCAL = 1.6;
 const VIEW = { yaw: 0.65, pitch: 1.0, dist: 3.3 };
 const newSeed = () => [Math.random() * 200 - 100, Math.random() * 200 - 100];
@@ -611,7 +611,7 @@ const sun = Math.hypot(-0.5, 0.75, 0.45);
 const sceneE = effect(gpu, SCENE, { set: { u: {
   camPos: [0, 1, 3], aspect: 1, fw: [0, 0, -1], focal: FOCAL, rt: [1, 0, 0], relief: p.relief,
   up: [0, 1, 0], levels: p.levels, low: p.pal[0], pixX: 0.001, mid: p.pal[1], pixY: 0.001,
-  high: p.pal[2], lineW: 1.1, peak: p.pal[3], dist: VIEW.dist, light: [-0.5 / sun, 0.75 / sun, 0.45 / sun], texel: 2 * EXT / GRID,
+  high: p.pal[2], lineW: 1.0, peak: p.pal[3], dist: VIEW.dist, light: [-0.5 / sun, 0.75 / sun, 0.45 / sun], texel: 2 * EXT / GRID,
 }, ground: groundT, samp: linear } });
 const downE = effect(gpu, DOWN, { set: { p: { texel: [0.01, 0.01], threshold: 0.1 }, src: sceneT, samp: linear } });
 const blurH = effect(gpu, BLUR, { set: { p: { dir: [0.01, 0] }, src: glowB, samp: linear } });
