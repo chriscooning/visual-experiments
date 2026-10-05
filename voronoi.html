@@ -240,28 +240,60 @@ in vec2 aPos;void main(){gl_Position=vec4(aPos,0.,1.);}`;
 
 const FS=`#version 300 es
 precision highp float;precision highp int;
-uniform sampler2D uSeeds;   // x, y, phase, -   (1024 per row)
-uniform sampler2D uGrid;    // start, count     (gw × gh)
+uniform sampler2D uSeeds;   // x, y, phase, size   (1024 per row)
+uniform sampler2D uGrid;    // start, count        (gw × gh)
 uniform vec2 uRes;uniform float uDpr;
 uniform float uG;uniform ivec2 uGridSize;
 uniform float uTime,uWobble,uRound,uEdge;
 const float WK=float(${WK});
 uniform int uMode;          // 0 soap, 1 oil, 2 cells
+uniform int uFilm;          // 1: true thin-film colour, 0: the cosine palette
 uniform vec3 uPa,uPb,uPc,uPd;
 out vec4 outColor;
 
 vec3 pal(float t){return uPa+uPb*cos(6.28318*(uPc*t+uPd));}
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+vec2 hash2(vec2 p){return vec2(hash(p),hash(p+17.31));}
 float vnoise(vec2 p){
   vec2 i=floor(p),f=fract(p),u=f*f*f*(f*(f*6.-15.)+10.);
   return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+1.),u.x),u.y)*2.-1.;
 }
-float fbm(vec2 p){
-  float v=0.,a=.5;mat2 r=mat2(.8,.6,-.6,.8);
-  for(int i=0;i<4;i++){v+=a*vnoise(p);p=r*p*2.03+11.7;a*=.5;}
-  return v;
-}
 vec4 seedAt(int k){return texelFetch(uSeeds,ivec2(k&1023,k>>10),0);}
+
+// Reflectance of a thin film of optical path n·d·cosθt (µm), averaged over
+// three wavelengths per channel so the higher orders wash out to pastel and
+// then white, as real films do. The other palettes stand in for it.
+vec3 film(float opd){
+  if(uFilm==0)return pal(opd/1.33);
+  float k=12.566*opd;
+  vec3 a=vec3(.62,.54,.45),b=vec3(.68,.575,.475),c=vec3(.585,.51,.425);
+  return (3.-cos(k/a)-cos(k/b)-cos(k/c))/6.;
+}
+
+// Cheap cellular noise on a jittered grid: (F1, F2 - F1, cell id).
+vec3 cellular(vec2 p){
+  vec2 i=floor(p),f=fract(p);float f1=8.,f2=8.;float id=0.;
+  for(int y=-1;y<=1;y++)for(int x=-1;x<=1;x++){
+    vec2 g=vec2(x,y),o=hash2(i+g);vec2 r=g+o-f;float d=dot(r,r);
+    if(d<f1){f2=f1;f1=d;id=hash(i+g+3.7);}else if(d<f2)f2=d;
+  }
+  f1=sqrt(f1);f2=sqrt(f2);return vec3(f1,f2-f1,id);
+}
+
+// The studio: a dark room, a large softbox overhead (a little up-left) and
+// a thin strip light low on the right. r is a reflected ray, z towards us.
+vec3 env(vec3 r){
+  vec3 c=vec3(.012,.014,.02)+vec3(.05,.055,.065)*max(r.z,0.);
+  vec2 sp=r.xy/max(r.z,.05)-vec2(-.28,-.36);
+  vec2 b=abs(sp)-vec2(.62,.44);
+  float box=length(max(b,0.))+min(max(b.x,b.y),0.);
+  c+=vec3(3.6,3.5,3.4)*smoothstep(.12,-.1,box)*step(0.,r.z);
+  c+=vec3(.35,.36,.4)*smoothstep(1.4,.2,length(sp))*step(0.,r.z);
+  c+=vec3(.9,.92,1.)*exp(-pow((r.y+.1)/.08,2.))*smoothstep(.2,.9,r.x)*.8;
+  return c;
+}
+
+vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
 
 void main(){
   vec2 p=vec2(gl_FragCoord.x,uRes.y-gl_FragCoord.y)/uDpr;
@@ -271,7 +303,7 @@ void main(){
   vec2 q=p+uWobble*uG*.22*vec2(vnoise(wq+vec2(0.,t*.04)),vnoise(wq+vec2(5.2,1.3)-vec2(t*.035,0.)));
 
   ivec2 gc=ivec2(floor(q/uG));
-  // Pass 1: nearest seed.
+  // Pass 1: nearest seed (power distance, so bigger bubbles reach further).
   float bd=1e20;vec4 s1=vec4(0.);int i1=-1;
   for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
     ivec2 c=gc+ivec2(dx,dy);
@@ -283,9 +315,11 @@ void main(){
       if(dd<bd){bd=dd;s1=s;i1=st+k;}
     }
   }
-  if(i1<0){outColor=vec4(.035,.035,.045,1.);return;}
-  // Pass 2: the two nearest walls of that cell.
-  float wa=1e20,wb=1e20;
+  if(i1<0){outColor=vec4(.01,.01,.014,1.);return;}
+  float R=uG*.5*s1.w,ph=s1.z;
+  // Pass 2: the cell's two nearest walls, and a smooth minimum over all of
+  // them (with its gradient) to raise a smooth dome over the cell.
+  float wa=1e20,wb=1e20,ks=R*.22,se=0.;vec2 sg=vec2(0.);
   for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
     ivec2 c=gc+ivec2(dx,dy);
     if(c.x<0||c.y<0||c.x>=uGridSize.x||c.y>=uGridSize.y)continue;
@@ -299,72 +333,101 @@ void main(){
       float wa2=WK*uG*s1.w,wb2=WK*uG*sb.w;
       float w=(l*l+wa2*wa2-wb2*wb2)/(2.*l)-dot(q-s1.xy,o/l);
       if(w<wa){wb=wa;wa=w;}else if(w<wb)wb=w;
+      float e=exp(-clamp(w,-ks*4.,ks*40.)/ks);se+=e;sg+=e*o/l;
     }
   }
   wb=min(wb,1e4);
+  float ds=se>0.?-ks*log(se):1e4;
+  vec2 gds=se>0.?-sg/se:vec2(0.);
   // Rounded corners: a fillet where two walls meet. Past the fillet (d < 0)
-  // is the Plateau border, the little three-cornered pocket of liquid
-  // where three walls join.
+  // is the Plateau border, the pocket of liquid where three walls join.
   float rc=uRound*uG*.3;
   vec2 m=max(vec2(rc)-vec2(wa,wb),0.);
   float d=min(wa,wb)>=rc?min(wa,wb):rc-length(m);
-
-  float R=uG*.5*s1.w,ph=s1.z,di=max(d,0.);
+  float di=max(d,0.);
   vec2 lc=(q-s1.xy)/R;
   float aa=.8/uDpr;
-  float line=1.-smoothstep(uEdge-aa,uEdge+aa,abs(d));
-  float pocket=smoothstep(-uEdge+aa,-uEdge-aa,d);
   vec3 col;
 
   if(uMode==0){
-    // Soap foam: thin silvery walls with an iridescent fringe, each bubble
-    // lit from the upper left, and soft pastel film swirling slowly inside
-    // the bigger bubbles (draining thinner, towards gold, at the top).
-    float sw=vnoise(lc*.9+vec2(ph*23.,ph*41.)+vec2(t*.03,-t*.02))+.5*vnoise(lc*1.8+vec2(ph*7.,t*.04));
-    float th=.24+.16*clamp(.5+.35*lc.y,0.,1.)+.1*sw+.12*exp(-di/(R*.25));
-    vec3 film=mix(pal(th),vec3(.85,.88,.95),.35);
-    float big=smoothstep(.7,1.6,s1.w);
-    vec3 base=vec3(.035,.04,.055);
-    // Light through the bubble: a soft dome, brighter towards the walls.
-    float dome=exp(-di/(R*.35));
-    col=base+vec3(.05,.055,.07)*(1.-length(lc)*.4);
-    col+=film*(.05+.12*big)*(.6+.4*sw);
-    col+=film*.28*dome*dome;
-    // Walls: a white core with a coloured fringe either side.
-    float core=exp(-d*d/(uEdge*uEdge*.8+.12));
-    float fringe=exp(-abs(d)/(uEdge*2.5+1.2));
-    col+=mix(film,vec3(1.),.15)*.45*fringe;
-    col=mix(col,base*.6+film*.08,pocket);
-    col+=vec3(.92,.94,1.)*core*.9;
-    // Highlights: a window up-left, a small glint down-right.
-    vec2 h=lc-vec2(-.38,-.42);h=mat2(.87,.5,-.5,.87)*h;
-    col+=vec3(.7)*exp(-(h.x*h.x*26.+h.y*h.y*80.))*smoothstep(0.,R*.12,di);
-    vec2 g=lc-vec2(.42,.46);
-    col+=vec3(.35)*exp(-dot(g,g)*120.)*smoothstep(0.,R*.1,di);
+    // ── Soap foam, as in a macro photograph under a softbox ──
+    // Each bubble is a dome: steep at its walls, flat on top.
+    float Rd=R*.8,x=clamp(ds/Rd,0.,1.),u=1.-x;
+    float slope=min(.65*u/sqrt(max(1.-u*u,.03)),5.);
+    vec3 N=normalize(vec3(-slope*gds,1.));
+    float cv=N.z;
+    float F=.02+.98*pow(1.-cv,5.);
+    vec3 rv=vec3(2.*cv*N.xy,2.*cv*cv-1.);
+    // Film thickness: Marangoni swirls marbling each bubble, slowly turning;
+    // drained thinner at the top of the bubble, thicker at its foot.
+    vec2 w=vec2(vnoise(lc*1.1+ph*31.+vec2(t*.03,0.)),vnoise(lc*1.1+ph*17.+vec2(5.,-t*.025)));
+    float mb=vnoise(lc*1.5+w*1.9+vec2(t*.02,ph*9.))+.5*vnoise(lc*3.2+w*2.6+ph*3.);
+    float th=clamp(.34+.2*mb+.1*lc.y+.12*(1.-x),.03,1.4);
+    float ct=sqrt(1.-(1.-cv*cv)/1.77);
+    vec3 fc=film(1.33*th*ct);
+    // What shows through: a deeper layer of foam, dim and out of focus.
+    vec3 lo=cellular((p+N.xy*R*.25)/(uG*.42)+ph);
+    vec3 under=vec3(.008,.009,.013)+vec3(.009,.01,.013)*exp(-lo.y*3.)*(.5+.5*lo.z);
+    col=under*(1.-F)+env(rv)*fc*(.12+2.6*F);
+    // The walls: tubes of liquid, dark, with a bright line of light along
+    // their crest; the Plateau borders are the same liquid, pooled.
+    float wbw=uEdge*1.7+.7;
+    float tube=smoothstep(wbw+aa,wbw-aa,d);
+    vec3 liquid=vec3(.006,.007,.01)+env(vec3(0.,0.,1.))*.004;
+    col=mix(col,liquid,tube*.92);
+    vec2 gn=length(gds)>1e-4?normalize(gds):vec2(0.);
+    float lit=.12+.88*pow(max(dot(gn,normalize(vec2(.3,.4))),0.),1.5);
+    float core=exp(-pow(d-wbw*.35,2.)/(uEdge*uEdge*.3+.1));
+    col+=vec3(.85,.88,.95)*core*lit*.9;
+    // A little depth of field: light falls off towards the frame edge.
+    vec2 vg=p/vec2(uRes/uDpr)-.5;
+    col*=1.-.35*dot(vg,vg);
+    col=aces(col*1.1);
   }else if(uMode==1){
-    // Oil: a smooth marbled film over dark water, no walls drawn. The cells
-    // only shape it faintly: the film pools a touch thicker in each cell's
-    // middle, so the colour bands bend a little around them.
-    vec2 uv=p/800.;
-    vec2 w1=vec2(vnoise(uv*1.3+vec2(t*.015,0.)),vnoise(uv*1.3+vec2(3.1,7.7)-vec2(0.,t*.013)));
-    vec2 w2=vec2(vnoise(uv*2.4+w1*1.4+vec2(1.7,9.2)),vnoise(uv*2.4+w1*1.4+vec2(8.3,2.8)));
-    float n=vnoise(uv*1.4+w2*1.6+t*.005)+.35*vnoise(uv*3.5+w2*2.+vec2(5.,t*.01));
-    float pool=smoothstep(0.,R*.9,max(d,0.));
-    // A thick, steep film: the thickness runs through several orders of
-    // interference, so it shows as many thin bands curling round each other.
-    float th=.42+.55*n+.08*pool;
-    vec3 film=pal(th);
-    float sheen=smoothstep(-.5,.6,vnoise(uv*.9+w1*.8+vec2(4.4,1.9)));
-    col=mix(vec3(.01,.011,.016),pow(film,vec3(1.4)),.25+.65*sheen);
+    // ── Oil on still water, seen from above under an overcast sky ──
+    // Small ripples tilt the surface, so the sky they mirror wavers.
+    vec2 rp=p/55.;
+    vec2 rip=vec2(vnoise(rp+vec2(t*.05,0.)),vnoise(rp+vec2(4.7,1.3)-vec2(0.,t*.045)))
+            +.5*vec2(vnoise(rp*2.3+vec2(9.,t*.08)),vnoise(rp*2.3+vec2(2.,3.)-t*.07));
+    vec3 N=normalize(vec3(rip*.09,1.));
+    float cv=N.z,F=.02+.98*pow(1.-cv,5.);
+    // The sky: soft overcast, brighter towards the top of the frame, cloud.
+    vec2 sv=p/vec2(uRes/uDpr)+N.xy*.6;
+    vec3 sky=mix(vec3(.8,.83,.9),vec3(.3,.33,.4),smoothstep(-.1,1.1,sv.y));
+    sky*=.75+.3*vnoise(sv*vec2(2.2,3.)+vec2(t*.004,0.));
+    // The slick: thinnest (silver-grey, then blue and violet) at its
+    // spreading edge, thicker (gold, magenta, green) inside, folded by the
+    // flow; the Voronoi cells break it gently into rafts.
+    vec2 uv=p/700.+N.xy*.02;
+    vec2 w1=vec2(vnoise(uv*1.2+vec2(t*.012,0.)),vnoise(uv*1.2+vec2(3.1,7.7)-vec2(0.,t*.01)));
+    vec2 w2=vec2(vnoise(uv*2.6+w1*1.3+vec2(1.7,9.2)),vnoise(uv*2.6+w1*1.3+vec2(8.3,2.8)));
+    float slick=smoothstep(-.25,.35,vnoise(uv*.8+w1*.7+vec2(2.,t*.004)));
+    // Towards its edge the slick breaks up along the Voronoi cells into
+    // rafts, with dark water opening in the channels between them.
+    float chan=smoothstep(R*.05,R*.45,ds);
+    slick*=mix(1.,chan,smoothstep(.95,.3,slick));
+    float mb=vnoise(uv*1.6+w2*1.7+t*.005)+.4*vnoise(uv*4.+w2*2.2);
+    float th=slick*(.1+.3*(.5+.5*mb))+.012;
+    float ct=sqrt(1.-(1.-cv*cv)/2.16);
+    vec3 fc=film(1.47*th*ct);
+    // Deep water, a touch of green.
+    vec3 deep=vec3(.006,.011,.013);
+    col=deep+sky*(F*1.4+.012)+sky*slick*fc*.3;
+    vec2 vg=p/vec2(uRes/uDpr)-.5;
+    col*=1.-.3*dot(vg,vg);
+    col=aces(col*1.15);
   }else{
     // Cells: flat palette colour per cell, clean anti-aliased walls.
+    float line=1.-smoothstep(uEdge-aa,uEdge+aa,abs(d));
+    float pocket=smoothstep(-uEdge+aa,-uEdge-aa,d);
     vec3 c=pal(.12+ph*.55);
     float rim=exp(-di/(R*.4));
     col=c*(.28+.25*rim);
     col=mix(col,c*.12,pocket);
     col=mix(col,c,line);
+    col=pow(col,vec3(2.2));
   }
-  outColor=vec4(clamp(col,0.,1.),1.);
+  outColor=vec4(pow(clamp(col,0.,1.),vec3(1./2.2)),1.);
 }`;
 
 function compile(type,src){
@@ -384,7 +447,7 @@ function initGL(){
   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
   const loc=gl.getAttribLocation(prog,'aPos');
   gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-  ['uSeeds','uGrid','uRes','uDpr','uG','uGridSize','uTime','uWobble','uRound','uEdge','uMode','uPa','uPb','uPc','uPd']
+  ['uSeeds','uGrid','uRes','uDpr','uG','uGridSize','uTime','uWobble','uRound','uEdge','uMode','uFilm','uPa','uPb','uPc','uPd']
     .forEach(n=>U[n]=gl.getUniformLocation(prog,n));
   const mk=()=>{const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
@@ -419,6 +482,7 @@ function render(){
   gl.uniform1f(U.uWobble,+$('wobble').value/100);
   gl.uniform1f(U.uRound,+$('round').value/100);
   gl.uniform1f(U.uEdge,+$('edgeW').value/10*0.5);
+  gl.uniform1i(U.uFilm,$('palette').value==='film'?1:0);
   gl.uniform1i(U.uMode,MODES[$('drawMode').value]??0);
   gl.viewport(0,0,canvas.width,canvas.height);
   gl.drawArrays(gl.TRIANGLES,0,3);
