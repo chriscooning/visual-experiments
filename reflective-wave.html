@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Reflective Wave — WebGPU</title>
+<!-- Fonts load without holding up the first paint. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap" media="print" onload="this.media='all'">
+<style>
+  /* The loader, run by the script just inside <body>, in the site's theme:
+     cheshire's violet (the site's default), or tumeric's amber. */
+  .vx-spin{--vx-ink:#BD93F9;--vx-glow:rgba(189,147,249,.65);--vx-bloom:rgba(107,34,180,.55);
+    position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:25;pointer-events:none;display:flex;gap:.8em;
+    white-space:pre;font:15px/1 'Share Tech Mono','Space Mono',ui-monospace,monospace;letter-spacing:.06em;color:var(--vx-ink);
+    text-shadow:0 0 6px var(--vx-glow),0 0 18px var(--vx-bloom);opacity:0;transition:opacity .45s ease}
+  .vx-spin.tumeric{--vx-ink:#dca56e;--vx-glow:rgba(220,165,110,.7);--vx-bloom:rgba(220,165,110,.3)}
+  .vx-spin.in{opacity:1}
+  .vx-spin.out{transition-duration:.25s}
+  .vx-spin .p{width:4ch;text-align:right}
+  .vx-spin .t{width:12ch}
+  .vx-spin i{display:inline-block;font-style:normal;transform-origin:50% 52%}
+  .vx-spin i.x{transform:scaleX(-1)}
+  .vx-spin i.y{transform:rotate(180deg)}
+</style>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+  .nogpu{position:fixed;inset:0;display:none;align-items:center;justify-content:center;padding:24px;text-align:center;
+    font-family:'Space Mono',monospace;font-size:11px;letter-spacing:1px;line-height:1.8;color:#666}
+  .nogpu.on{display:flex}
+  .panel.texture .star-only{display:none}
+</style>
+<script src="controls.js" defer></script>
+</head>
+<body>
+<div class="vx-spin" id="vxSpin" role="img" aria-label="Loading"><span class="p"></span><span class="t"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span></span></span></div>
+<script>
+// The loader, from the page's first bytes until its first frame is on screen
+// (the same in every WebGPU piece; controls.js moves it on and takes it away).
+// On the left, how far along the start is: it sits at a step and creeps
+// toward the next, slowing but never stopping, and each file the page
+// finishes loading is a small step, up to 9%. Beside it, "loading..." typed
+// out like a terminal: each letter flickers through the hero's ASCII ramp
+// before it lands, the dots count up behind a blinking cursor, and every so
+// often letters flicker to capitals (loadING, Loading, loaDING), scrambling
+// through random characters on the way, flip backwards or upside down, or
+// glitch. Where the piece can't run there's no loader; controls.js says why
+// instead.
+window.vxLoader = (function () {
+  var el = document.getElementById('vxSpin'), ua = navigator.userAgent;
+  var ios = /iP(hone|od|ad)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  var v = ua.match(/Version\/(\d+)/) || ua.match(/OS (\d+)_\d+/);
+  if (!navigator.gpu || (ios && !(v && +v[1] >= 27))) { el.parentNode.removeChild(el); return null; }
+  // In the theme picked on the home page (the same site, so its choice is to
+  // hand): tumeric's amber, or cheshire's violet, the site's default.
+  try { if (localStorage.getItem('heroVariant') === 'tumeric') el.classList.add('tumeric'); } catch (e) {}
+  var WORD = 'loading', NOISE = '.,:;i1tfLCG08@#$%&*+=<>/\\|?';
+  var pct = el.firstChild, cell = el.lastChild.children, tail = cell[WORD.length];
+  var still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var t0 = Date.now(), typed = 160 + WORD.length * 70, gone = false, files = null;
+  var base = 2, ceil = 9, tau = 1500, since = t0, shown = 0;
+  var fx = null, fxAt = typed + 400 + Math.random() * 800, was = [], turned = [];
+  function rnd(n) { return Math.floor(Math.random() * n); }
+  // One flicker: capitals on a run of letters (DING or ING, one letter, two,
+  // or the lot), or a letter or two flipped or glitched; on and off a few
+  // times, then back. Capitals hold a little longer, to be read.
+  function flicker(ms) {
+    var n = WORD.length, r = Math.random(), kind = r < .55 ? 'caps' : r < .85 ? 'flip' : 'noise';
+    var a = kind === 'flip' ? 2 + rnd(n - 2) : rnd(n), b = a + 1, on = [], t = 0;
+    r = Math.random();
+    if (kind === 'caps' && r < .4) { a = 3 + rnd(2); b = n; }
+    else if (kind === 'caps' && r < .5) { a = 0; b = n; }
+    else if (r > .8) b = Math.min(n, a + 2);
+    for (var k = 1 + rnd(3); k > 0; k--) {
+      var d = kind === 'caps' ? 110 + rnd(140) : 40 + rnd(90);
+      on.push([t, t + d]);
+      t += d + (kind === 'caps' ? 70 : 40) + rnd(60);
+    }
+    return { kind: kind, a: a, b: b, flip: rnd(2) ? 'x' : 'y', at: ms, on: on, end: ms + t };
+  }
+  function draw() {
+    if (gone) return;
+    var now = Date.now(), ms = now - t0, dt = now - since, lit = false;
+    shown = Math.max(shown, base + (ceil - base) * dt / (dt + tau));
+    pct.textContent = Math.min(99, Math.floor(shown)) + '%';
+    if (!still && ms >= typed) {
+      if (!fx && ms >= fxAt) fx = flicker(ms);
+      if (fx && ms >= fx.end) { fx = null; fxAt = ms + 500 + Math.random() * 1300; }
+      for (var j = 0; fx && j < fx.on.length; j++) if (ms - fx.at >= fx.on[j][0] && ms - fx.at < fx.on[j][1]) lit = true;
+    }
+    for (var k = 0; k < WORD.length; k++) {
+      var c = WORD.charAt(k), how = '', hit = lit && k >= fx.a && k < fx.b;
+      if (hit && fx.kind === 'caps') c = c.toUpperCase();
+      if (hit && fx.kind === 'flip') how = fx.flip;
+      // A letter changing case runs through a few random characters first.
+      if (c !== was[k]) { if (was[k]) turned[k] = ms; was[k] = c; }
+      if (!still && (ms < 160 + k * 70 || (hit && fx.kind === 'noise') || ms - turned[k] < 60)) c = NOISE.charAt(rnd(NOISE.length));
+      if (cell[k].textContent !== c) cell[k].textContent = c;
+      if (cell[k].className !== how) cell[k].className = how;
+    }
+    tail.textContent = still ? '..._' : (ms < typed ? '' : '...'.slice(0, Math.floor((ms - typed) / 380) % 4)) + (Math.floor(ms / 530) % 2 ? ' ' : '_');
+    requestAnimationFrame(draw);
+  }
+  // (A beat before it shows, so a quick start never flashes it.)
+  var show = setTimeout(function () { el.classList.add('in'); }, 120);
+  // Away quickly, from wherever it's got to: the piece comes first.
+  function stop() {
+    if (gone) return;
+    gone = true;
+    clearTimeout(show);
+    if (files) files.disconnect();
+    el.classList.add('out');
+    el.classList.remove('in');
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 300);
+  }
+  // At v and creeping toward c, half way there after t ms, until the next.
+  function step(v, c, t) { if (v > base) { base = v; ceil = c; tau = t || 1200; since = Date.now(); } }
+  try {
+    files = new PerformanceObserver(function (list) {
+      list.getEntries().forEach(function () { if (base < 9) step(Math.min(9, base + 2), 9, 1500); });
+    });
+    files.observe({ type: 'resource' });
+  } catch (e) {}
+  var api = {
+    step: step,
+    // The piece is on screen: out of its way at once, reading 100% as it goes,
+    // however far the loader had got (typing, fading in, or not yet shown).
+    done: function () { pct.textContent = '100%'; stop(); },
+    stop: stop
+  };
+  // Where controls.js never came to move it on, it doesn't stay.
+  document.addEventListener('DOMContentLoaded', function () { if (!api.steered) stop(); });
+  draw();
+  return api;
+})();
+</script>
+<canvas id="canvas"></canvas>
+<div class="panel texture" id="panel">
+  <div class="control-group"><label>View</label>
+    <select id="view">
+      <option value="texture" selected>Texture</option>
+      <option value="star">Star</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="mono" selected>Mono</option>
+      <option value="sun">Sun</option>
+      <option value="blue">Blue giant</option>
+      <option value="ember">Ember</option>
+      <option value="violet">Violet</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Flow <span class="val" id="flowVal">35</span></label><input type="range" id="flow" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Relief <span class="val" id="reliefVal">50</span></label><input type="range" id="relief" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Glow <span class="val" id="glowVal">50</span></label><input type="range" id="glow" min="0" max="100" value="50"></div>
+  <div class="control-group star-only"><label>Chemistry <span class="val" id="chemVal">70</span></label><input type="range" id="chem" min="0" max="100" value="70"></div>
+  <div class="control-group star-only"><label>Pattern <span class="val" id="patternVal">50</span></label><input type="range" id="pattern" min="0" max="100" value="50"></div>
+  <div class="control-group star-only"><label>Dust <span class="val" id="dustVal">50</span></label><input type="range" id="dust" min="0" max="100" value="50"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to push the flow · Pinch or scroll to zoom · H controls</div>
+<div class="fps" id="fps"></div>
+<div class="nogpu" id="nogpu">This one runs on WebGPU, which this browser doesn't offer yet.<br>Try a recent Chrome, Edge or Safari.</div>
+
+<script type="module">
+import { init, effect, surface, target, sampler, frameLoop, clock, frame } from './lib/vgpu.js';
+import { tilt } from './lib/tilt.js';
+
+// ═══════════════════════════════════════
+// SHADERS
+// The texture: noise warped through itself twice (each layer pushes the
+// next around), read as smoke with the light behind it: thin smoke glows,
+// thick smoke goes dark and billows like cloud tops in a side light, and
+// its edges catch the light. It drifts and slowly boils, and the bright
+// parts run past white, so they glow.
+// The star: the same texture wrapped round a sphere and stored flat (an
+// octahedral map), pushing the surface out and in and setting how hot each
+// part burns. A chemical reaction (Gray-Scott: two substances feeding,
+// diffusing and eating each other) runs across the surface, seeded by the
+// texture, which also decides where it grows spots and where it grows
+// mazes. Around it a corona, and dust streaming away.
+// ═══════════════════════════════════════
+const NOISE = /* wgsl */ `
+// Gradient noise on an integer hash, the same on every GPU.
+fn pcg3(i: vec3i) -> vec3f {
+  var v = bitcast<vec3u>(i) * 1664525u + 1013904223u;
+  v.x += v.y * v.z;
+  v.y += v.z * v.x;
+  v.z += v.x * v.y;
+  v = v ^ (v >> vec3u(16u));
+  v.x += v.y * v.z;
+  v.y += v.z * v.x;
+  v.z += v.x * v.y;
+  return vec3f(v >> vec3u(8u)) * (2.0 / 16777216.0) - 1.0;
+}
+fn noise3(p: vec3f) -> f32 {
+  let fl = floor(p);
+  let i = vec3i(fl);
+  let f = p - fl;
+  let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  let a = dot(pcg3(i), f);
+  let b = dot(pcg3(i + vec3i(1, 0, 0)), f - vec3f(1.0, 0.0, 0.0));
+  let c = dot(pcg3(i + vec3i(0, 1, 0)), f - vec3f(0.0, 1.0, 0.0));
+  let d = dot(pcg3(i + vec3i(1, 1, 0)), f - vec3f(1.0, 1.0, 0.0));
+  let e = dot(pcg3(i + vec3i(0, 0, 1)), f - vec3f(0.0, 0.0, 1.0));
+  let g = dot(pcg3(i + vec3i(1, 0, 1)), f - vec3f(1.0, 0.0, 1.0));
+  let h = dot(pcg3(i + vec3i(0, 1, 1)), f - vec3f(0.0, 1.0, 1.0));
+  let k = dot(pcg3(i + vec3i(1, 1, 1)), f - vec3f(1.0, 1.0, 1.0));
+  return mix(mix(mix(a, b, u.x), mix(c, d, u.x), u.y), mix(mix(e, g, u.x), mix(h, k, u.x), u.y), u.z);
+}
+// Each octave twice as fine and turned, so no grid shows through.
+const M3 = mat3x3f(0.0, 0.8, 0.6, -0.8, 0.36, -0.48, -0.6, -0.48, 0.64);
+fn fbm3(q: vec3f, oct: i32) -> f32 {
+  var p = q;
+  var a = 0.5;
+  var s = 0.0;
+  for (var k = 0; k < oct; k++) {
+    s += a * noise3(p);
+    p = M3 * p * 2.03 + vec3f(1.3, 4.7, 2.9);
+    a *= 0.5;
+  }
+  return s;
+}
+// Rounded bumps with creases between, like the tops of clouds.
+fn billow3(q: vec3f, oct: i32) -> f32 {
+  var p = q;
+  var a = 0.5;
+  var s = 0.0;
+  for (var k = 0; k < oct; k++) {
+    s += a * abs(noise3(p));
+    p = M3 * p * 2.03 + vec3f(1.3, 4.7, 2.9);
+    a *= 0.5;
+  }
+  return s;
+}
+`;
+
+// A sphere stored flat: the octahedral map folds it into one square.
+const OCT = /* wgsl */ `
+fn octUV(n: vec3f) -> vec2f {
+  var p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+  if (n.z < 0.0) {
+    p = (1.0 - abs(p.yx)) * select(vec2f(-1.0), vec2f(1.0), p >= vec2f(0.0));
+  }
+  return p * 0.5 + 0.5;
+}
+fn octDir(uv: vec2f) -> vec3f {
+  let f = uv * 2.0 - 1.0;
+  var n = vec3f(f, 1.0 - abs(f.x) - abs(f.y));
+  let t = clamp(-n.z, 0.0, 1.0);
+  n.x += select(t, -t, n.x >= 0.0);
+  n.y += select(t, -t, n.y >= 0.0);
+  return normalize(n);
+}
+`;
+
+const RAMP = /* wgsl */ `
+fn ramp(x: f32) -> vec3f {
+  let t = clamp(x, 0.0, 1.0);
+  var c = mix(u.c0, u.c1, smoothstep(0.0, 0.38, t));
+  c = mix(c, u.c2, smoothstep(0.32, 0.7, t));
+  return mix(c, u.c3, smoothstep(0.62, 1.0, t));
+}
+`;
+
+// ── The texture, flat: (smoke, swirl, billows) per pixel. Dragging leaves
+// smudges that push it along and slowly let go.
+const FIELD = NOISE + /* wgsl */ `
+struct W { span: vec2f, center: vec2f, time: f32, seed: f32, smR: f32, pad: f32, smudge: array<vec4f, 16> }
+@group(0) @binding(0) var<uniform> w: W;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  var p = w.center + (uv - 0.5) * w.span;
+  for (var i = 0; i < 16; i++) {
+    let s = w.smudge[i];
+    let d = p - s.xy;
+    p -= s.zw * exp(-dot(d, d) / (w.smR * w.smR));
+  }
+  let z = w.seed + w.time;
+  let q = vec2f(fbm3(vec3f(p, z), 3), fbm3(vec3f(p + vec2f(5.2, 1.3), z), 3));
+  let r = vec2f(fbm3(vec3f(p + 2.2 * q + vec2f(1.7, 9.2), z * 1.1 + 3.0), 3),
+                fbm3(vec3f(p + 2.2 * q + vec2f(8.3, 2.8), z * 1.1 + 7.0), 3));
+  let P = vec3f(p + 2.2 * r, z * 0.9 + 11.0);
+  // Billows on lightly warped ground, so they stay round like cloud tops.
+  let B = billow3(vec3f((p + 0.6 * r) * 2.6, z * 1.3 + 5.0), 4);
+  return vec4f(fbm3(P, 4), length(q), B, 0.0);
+}
+`;
+
+const FLAT = /* wgsl */ `
+struct U { texel: vec2f, relief: f32, sheen: f32, c0: vec3f, time: f32, c1: vec3f, aspect: f32, c2: vec3f, bright: f32, c3: vec3f, pad: f32 }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var field: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+` + RAMP + /* wgsl */ `
+// How thick the smoke is: its body, billowing at the edges.
+fn thick(s: vec4f) -> f32 { return s.x + 0.25 * (s.z - 0.3); }
+fn height(uv: vec2f) -> f32 { let s = textureSampleLevel(field, samp, uv, 0.0); return s.z + 0.3 * s.x; }
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let s = textureSampleLevel(field, samp, uv, 0.0);
+  let fx = height(uv + vec2f(u.texel.x, 0.0)) - height(uv - vec2f(u.texel.x, 0.0));
+  let fy = height(uv + vec2f(0.0, u.texel.y)) - height(uv - vec2f(0.0, u.texel.y));
+  let n = normalize(vec3f(-fx * u.relief, fy * u.relief, 1.0));
+  let L = normalize(vec3f(-0.6, 0.5, 0.55));
+  let dif = clamp(dot(n, L), 0.0, 1.0);
+  // Light from behind, through the smoke: thin smoke glows, thick smoke
+  // goes dark, and the thick masses show their billows in the side light.
+  let dens = smoothstep(-0.2, 0.16, thick(s));
+  // The masses: billows lit from the side, darker down in the creases.
+  let creases = 0.55 + 0.45 * smoothstep(0.05, 0.35, s.z);
+  var lum = exp(-3.0 * dens) * 0.95 + dens * (0.07 + 0.55 * dif * dif) * creases;
+  // Their edges catch the light coming round them, like clouds against
+  // the sun, and the warp's fastest swirls draw bright wisps in the gaps.
+  lum += 0.18 * exp(-pow((dens - 0.3) / 0.1, 2.0)) * dif;
+  lum += 0.12 * smoothstep(0.6, 1.2, s.y) * dens * (1.0 - dens) * 4.0;
+  // A faint sheen where the masses face the light.
+  let hv = normalize(L + vec3f(0.0, 0.0, 1.0));
+  let spec = pow(clamp(dot(n, hv), 0.0, 1.0), 30.0) * u.sheen * dens;
+  // The brightest parts run past white, so they glow.
+  let col = ramp(lum) * (0.85 + u.bright * smoothstep(0.8, 1.3, lum)) + vec3f(spec);
+  return vec4f(col, 1.0);
+}
+`;
+
+// ── The star's texture, on the sphere (octahedral map): (height, swirl, warp).
+const TEXS = NOISE + OCT + /* wgsl */ `
+struct S { seed: vec3f, time: f32, scale: f32, p0: f32, p1: f32, p2: f32 }
+@group(0) @binding(0) var<uniform> s: S;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let p = octDir(uv) * s.scale + s.seed;
+  let z = s.time;
+  let q = vec3f(fbm3(p + vec3f(0.0, 0.0, z), 3), fbm3(p + vec3f(5.2, 1.3, 2.1 - z), 3), fbm3(p + vec3f(2.9, 7.4 + z, 4.4), 3));
+  let r = vec3f(fbm3(p + 3.0 * q + vec3f(1.7, 9.2, 3.3), 4), fbm3(p + 3.0 * q + vec3f(8.3, 2.8, 6.1), 4), fbm3(p + 3.0 * q + vec3f(4.4, 6.6, 0.7), 4));
+  let f = fbm3(p + 3.0 * r, 6);
+  return vec4f(f, length(q), length(r), 1.0);
+}
+`;
+
+// ── The chemistry (Gray-Scott), on the same map. x = the substance that's
+// fed in, y = the one that feeds on it. Neighbours are found by direction,
+// a fixed step across the sphere, so the patterns are the same size
+// everywhere and run straight across the map's folds.
+const CHEM = OCT + /* wgsl */ `
+struct C { tap: vec4f, h: f32, fA: f32, kA: f32, fB: f32, kB: f32, bias: f32, tapOn: f32, pad: f32 }
+@group(0) @binding(0) var<uniform> c: C;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var tex: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+fn at(d: vec3f) -> vec2f { return textureSampleLevel(src, samp, octUV(d), 0.0).xy; }
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let n = octDir(uv);
+  let here = textureSampleLevel(src, samp, uv, 0.0).xy;
+  let up = select(vec3f(0.0, 0.0, 1.0), vec3f(1.0, 0.0, 0.0), abs(n.z) > 0.9);
+  let t1 = normalize(cross(up, n)) * c.h;
+  let t2 = cross(n, t1);
+  let side = at(normalize(n + t1)) + at(normalize(n - t1)) + at(normalize(n + t2)) + at(normalize(n - t2));
+  let diag = at(normalize(n + t1 + t2)) + at(normalize(n + t1 - t2)) + at(normalize(n - t1 + t2)) + at(normalize(n - t1 - t2));
+  let lap = 0.2 * side + 0.05 * diag - here;
+  // The texture picks the recipe: spots where it's low, mazes where it's high.
+  let tx = textureSampleLevel(tex, samp, uv, 0.0).x;
+  let m = smoothstep(-0.22, 0.22, tx + c.bias);
+  let F = mix(c.fA, c.fB, m);
+  let K = mix(c.kA, c.kB, m);
+  let r = here.x * here.y * here.y;
+  var a = here.x + (lap.x - r + F * (1.0 - here.x));
+  var b = here.y + (0.5 * lap.y + r - (F + K) * here.y);
+  // Fed by a tap: a splash of the second substance.
+  if (c.tapOn > 0.5 && dot(n, c.tap.xyz) > c.tap.w) { a = 0.5; b = 0.25; }
+  return vec4f(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0), 0.0, 1.0);
+}
+`;
+
+// The first state: the first substance everywhere, the second laid in
+// winding bands about as wide as the patterns it'll make, so they settle
+// in a few hundred steps rather than creeping out from a few seeds.
+const SEED = NOISE + OCT + /* wgsl */ `
+struct D { seed: vec3f, pad: f32 }
+@group(0) @binding(0) var<uniform> d: D;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let n = octDir(uv);
+  let tx = textureSampleLevel(tex, samp, uv, 0.0).x;
+  let band = noise3(n * 16.0 + d.seed) + 0.5 * noise3(n * 32.0 + d.seed.zxy);
+  let on = step(0.08 - 0.1 * smoothstep(-0.2, 0.3, tx), band);
+  return vec4f(1.0 - 0.5 * on, 0.25 * on, 0.0, 1.0);
+}
+`;
+
+// ── The star: ray-march the pushed-out sphere, burning hottest where the
+// texture's high and the chemistry's thin, darker toward the limb. Off it,
+// the corona and the dust.
+const STAR = NOISE + OCT + /* wgsl */ `
+struct U {
+  camPos: vec3f, aspect: f32,
+  fw: vec3f, focal: f32,
+  rt: vec3f, relief: f32,
+  up: vec3f, chem: f32,
+  c0: vec3f, spin: f32,
+  c1: vec3f, corona: f32,
+  c2: vec3f, dust: f32,
+  c3: vec3f, time: f32,
+  rho0: f32, pxH: f32, bound: f32, chemRelief: f32,
+}
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var texS: texture_2d<f32>;
+@group(0) @binding(2) var chemT: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+` + RAMP + /* wgsl */ `
+// World direction to the star's own (it turns slowly about its axis).
+fn local(d: vec3f) -> vec3f {
+  let c = cos(u.spin);
+  let s = sin(u.spin);
+  return vec3f(c * d.x - s * d.z, d.y, s * d.x + c * d.z);
+}
+fn texAt(d: vec3f) -> vec4f { return textureSampleLevel(texS, samp, octUV(local(d)), 0.0); }
+fn chemAt(d: vec3f) -> f32 { return textureSampleLevel(chemT, samp, octUV(local(d)), 0.0).y; }
+fn radius(d: vec3f) -> f32 { return 1.0 + u.relief * texAt(d).x + u.chemRelief * chemAt(d); }
+
+fn hash2(p: vec2i) -> vec3f { return pcg3(vec3i(p, 77)) * 0.5 + 0.5; }
+
+// Specks streaming out from the star on a log-polar grid, so they thin
+// out as they go; each a pixel or so across.
+fn dust(q: vec2f, cells: f32, speed: f32, salt: i32) -> f32 {
+  let rho = length(q) / u.rho0;
+  if (rho < 0.98) { return 0.0; }
+  let th = atan2(q.y, q.x) + 3.14159265;
+  let cw = 6.2831853 / cells;
+  let sl = log(rho) - u.time * speed;
+  let ci = vec2i(i32(floor(th / cw)), i32(floor(sl / cw)));
+  let h = pcg3(vec3i(ci, salt)) * 0.5 + 0.5;
+  let thd = (f32(ci.x) + 0.2 + 0.6 * h.x) * cw - 3.14159265;
+  let rd = exp((f32(ci.y) + 0.2 + 0.6 * h.y) * cw + u.time * speed);
+  let qd = vec2f(cos(thd), sin(thd)) * rd * u.rho0;
+  let dpx = length(q - qd) * u.pxH;
+  let live = step(h.z, u.dust * exp(-(rd - 1.0) * 4.5));
+  let tw = 0.55 + 0.45 * sin(u.time * (2.0 + 3.0 * h.x) + h.y * 40.0);
+  return live * tw * exp(-dpx * dpx * 0.9) * (0.6 + 0.8 * h.y);
+}
+
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let q = vec2f((uv.x - 0.5) * u.aspect, 0.5 - uv.y);
+  let ro = u.camPos;
+  let rd = normalize(u.fw * u.focal + u.rt * q.x + u.up * q.y);
+  var col = vec3f(0.0);
+  var hit = false;
+  // Into the sphere the surface can reach, then step to it.
+  let b = dot(ro, rd);
+  let disc = b * b - (dot(ro, ro) - u.bound * u.bound);
+  var t = 0.0;
+  if (disc > 0.0) {
+    t = max(-b - sqrt(disc), 0.0);
+    let tEnd = -b + sqrt(disc);
+    for (var i = 0; i < 72; i++) {
+      let p = ro + rd * t;
+      let r = length(p);
+      let h = r - radius(p / r);
+      if (h < 0.0004) { hit = true; break; }
+      t += h * 0.6;
+      if (t > tEnd) { break; }
+    }
+  }
+  if (hit) {
+    let p = ro + rd * t;
+    let d = normalize(p);
+    let r = length(p);
+    let upv = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(d.y) > 0.9);
+    let t1 = normalize(cross(upv, d));
+    let t2 = cross(d, t1);
+    let e = 0.004;
+    let ta = texAt(normalize(d + t1 * e)); let tb = texAt(normalize(d - t1 * e));
+    let tc = texAt(normalize(d + t2 * e)); let td = texAt(normalize(d - t2 * e));
+    let ca = chemAt(normalize(d + t1 * e)); let cb = chemAt(normalize(d - t1 * e));
+    let cc = chemAt(normalize(d + t2 * e)); let cd = chemAt(normalize(d - t2 * e));
+    let gT = vec2f(ta.x - tb.x, tc.x - td.x) / (2.0 * e);
+    let gC = vec2f(ca - cb, cc - cd) / (2.0 * e);
+    // The shape's own normal, and a stronger one for the light, so the
+    // chemistry reads as raised.
+    let gs = u.relief * gT + u.chemRelief * gC;
+    let n = normalize(d - (gs.x * t1 + gs.y * t2) / r);
+    let gb = u.relief * gT * 0.8 + gC * 0.06;
+    let nb = normalize(d - (gb.x * t1 + gb.y * t2) / r);
+    let tx = texAt(d);
+    let v = chemAt(d);
+    let mu = clamp(dot(n, -rd), 0.0, 1.0);
+    // How hot: the texture's highs burn brightest, the chemistry's
+    // stripes run cooler, and the limb is cooler still.
+    var heat = 0.78 + 0.75 * tx.x + 0.08 * (tx.y - 0.5);
+    heat -= u.chem * smoothstep(0.08, 0.3, v) * 0.32;
+    heat += 0.05 * noise3(local(d) * 90.0);
+    heat *= mix(0.5, 1.0, pow(mu, 0.5));
+    let L = normalize(vec3f(-0.5, 0.6, 0.62));
+    let lit = 0.8 + 0.35 * dot(nb, normalize(L - rd * 0.5));
+    col = ramp(heat) * (0.2 + 2.2 * heat * heat) * lit;
+  } else {
+    // The corona: brightest hugging the limb, a long faint halo beyond.
+    let bb = length(ro - rd * dot(ro, rd));
+    if (dot(ro, rd) < 0.0) {
+      let x = max(bb - 1.0, 0.0);
+      col = (ramp(0.55) * exp(-x * 12.0) * 0.8 + ramp(0.4) * exp(-x * 4.0) * 0.06) * u.corona;
+    }
+    // As many specks round the star as suits its size on screen.
+    let ring = clamp(u.rho0 * u.pxH * 0.5, 50.0, 420.0);
+    let sp = dust(q, ring, 0.035, 1) + dust(q, ring * 0.62, 0.055, 2) + 0.7 * dust(q, ring * 1.58, 0.025, 3);
+    col += ramp(0.75) * sp * 1.6;
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+const DOWN = /* wgsl */ `
+struct P { texel: vec2f, threshold: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  var c = vec3f(0.0);
+  for (var y = -1; y <= 1; y++) {
+    for (var x = -1; x <= 1; x++) {
+      c += textureSampleLevel(src, samp, uv + vec2f(f32(x), f32(y)) * p.texel * 0.33, 0.0).rgb;
+    }
+  }
+  c /= 9.0;
+  let l = max(c.r, max(c.g, c.b));
+  return vec4f(c * smoothstep(p.threshold, p.threshold + 0.6, l), 1.0);
+}
+`;
+
+const BLUR = /* wgsl */ `
+struct P { dir: vec2f }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  let w = array<f32, 5>(0.227, 0.194, 0.122, 0.054, 0.016);
+  var c = textureSampleLevel(src, samp, uv, 0.0).rgb * w[0];
+  for (var i = 1; i < 5; i++) {
+    let o = p.dir * f32(i) * 1.6;
+    c += (textureSampleLevel(src, samp, uv + o, 0.0).rgb + textureSampleLevel(src, samp, uv - o, 0.0).rgb) * w[i];
+  }
+  return vec4f(c, 1.0);
+}
+`;
+
+const FINISH = /* wgsl */ `
+struct F { glow: f32, time: f32, aspect: f32, grain: f32 }
+@group(0) @binding(0) var<uniform> f: F;
+@group(0) @binding(1) var scene: texture_2d<f32>;
+@group(0) @binding(2) var glow: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+fn hash(n: u32) -> f32 {
+  var x = n * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  x = (x >> 22u) ^ x;
+  return f32(x >> 8u) / 16777216.0;
+}
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  var col = textureSampleLevel(scene, samp, uv, 0.0).rgb + textureSampleLevel(glow, samp, uv, 0.0).rgb * f.glow;
+  let c = (uv - 0.5) * vec2f(f.aspect, 1.0);
+  col *= 1.0 - 0.3 * smoothstep(0.45, 1.3, length(c));
+  // Highlights roll off into white instead of clipping.
+  col = col * (2.51 * col + 0.03) / (col * (2.43 * col + 0.59) + 0.14);
+  col = pow(clamp(col, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2));
+  col += (hash(u32(pos.x) + u32(pos.y) * 8191u + u32(f.time * 60.0) * 131071u) - 0.5) * f.grain;
+  return vec4f(col, 1.0);
+}
+`;
+
+// ═══════════════════════════════════════
+// PALETTES: shadow, low, high, white-hot
+// ═══════════════════════════════════════
+const hex = (s) => [1, 3, 5].map((i) => Math.pow(parseInt(s.slice(i, i + 2), 16) / 255, 2.2));
+const PALETTES = {
+  mono:   ['#050505', '#3c3b39', '#a9a6a0', '#f6f3ec'],
+  sun:    ['#2a0400', '#e24a00', '#ffb340', '#fff3d6'],
+  blue:   ['#01061a', '#1b3c9e', '#62a6ff', '#eaf5ff'],
+  ember:  ['#0e0000', '#6e0c00', '#e5531a', '#ffd9a0'],
+  violet: ['#070214', '#4a1a8a', '#b26cff', '#f6eaff'],
+};
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('canvas');
+const IDS = ['flow', 'relief', 'glow', 'chem', 'pattern', 'dust'];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// Each view keeps its own palette: the texture starts grey, the star a sun.
+const viewPalette = { texture: 'mono', star: 'sun' };
+const p = {};
+function readControls() {
+  p.view = $('view').value;
+  viewPalette[p.view] = $('palette').value;
+  p.flow = +$('flow').value / 100;
+  p.relief = +$('relief').value / 100;
+  p.glow = +$('glow').value / 100;
+  p.chem = +$('chem').value / 100;
+  p.pattern = +$('pattern').value / 100;
+  p.dust = +$('dust').value / 100;
+  p.pal = PALETTES[$('palette').value].map(hex);
+  for (const id of IDS) $(id + 'Val').textContent = $(id).value;
+}
+readControls();
+
+// The star's maps, each side: finer on big screens, where there's power to spare.
+const TEX = matchMedia('(pointer: fine) and (min-width: 900px)').matches ? 1024 : 512;
+const FOCAL = 1.9;
+const newSeed = () => [Math.random() * 100, Math.random() * 100, Math.random() * 100];
+let seed = newSeed();
+let t = 0, flowT = 0, spin = 0;
+let yaw = 0.4, pitch = 0.25, dist = 4.4, yawGoal = yaw, pitchGoal = pitch, distGoal = dist;
+let zoom = 1, zoomGoal = 1, center = [0, 0];
+let idleAt = -1e9, tapDir = null, tapping = false, warm = 0;
+const tl = tilt();
+
+let gpu, chemFormat = 'rgba16float';
+try {
+  if (!navigator.gpu) throw new Error('no webgpu');
+  // The chemistry's small steps need full floats where they can be
+  // filtered; elsewhere half floats do.
+  let feats = [];
+  try {
+    const a = await navigator.gpu.requestAdapter();
+    if (a && a.features.has('float32-filterable')) { feats = ['float32-filterable']; chemFormat = 'rgba32float'; }
+  } catch (e) {}
+  gpu = await init({ requiredFeatures: feats });
+} catch (e) {
+  $('nogpu').classList.add('on');
+  $('panel').style.display = 'none';
+  $('hintPill').style.display = 'none';
+  document.querySelector('.vx-toggle')?.remove();
+  throw e;
+}
+
+const surf = surface(gpu, canvas, { dpr: ((b) => { const d = Math.min(2, devicePixelRatio || 1); if (!matchMedia('(pointer: fine) and (min-width: 900px)').matches) return [1, b < 3e6 ? 1.5 : 2]; const s = Math.min(2, Math.sqrt(b / (innerWidth * innerHeight))); const v = Math.max(d, s); return [v, v]; })(4e6) });
+const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear' });
+
+let cssW = 1, cssH = 1, aspect = 1;
+function layout() {
+  cssW = Math.max(1, canvas.clientWidth || innerWidth);
+  cssH = Math.max(1, canvas.clientHeight || innerHeight);
+}
+layout();
+// The flat texture is soft, so it's worked out a little under one per CSS
+// pixel; the light on it at full resolution.
+const fieldSize = () => [Math.max(1, Math.round(cssW * 0.75)), Math.max(1, Math.round(cssH * 0.75))];
+const full = () => [Math.max(1, surf.size[0]), Math.max(1, surf.size[1])];
+const quarter = () => [Math.max(1, Math.round(cssW / 4)), Math.max(1, Math.round(cssH / 4))];
+const fieldT = target(gpu, { size: fieldSize(), format: 'rgba16float' });
+const sceneT = target(gpu, { size: full(), format: 'rgba16float' });
+const glowA = target(gpu, { size: quarter(), format: 'rgba16float' });
+const glowB = target(gpu, { size: quarter(), format: 'rgba16float' });
+const texS = target(gpu, { size: [TEX, TEX], format: 'rgba16float' });
+const chemA = target(gpu, { size: [TEX, TEX], format: chemFormat });
+const chemB = target(gpu, { size: [TEX, TEX], format: chemFormat });
+
+const smudges = Array.from({ length: 16 }, () => [0, 0, 0, 0]);
+let smI = 0;
+const fieldE = effect(gpu, FIELD, { set: { w: { span: [1, 1], center, time: 0, seed: seed[0], smR: 0.2, pad: 0, smudge: smudges } } });
+const flatE = effect(gpu, FLAT, { set: { u: {
+  texel: [0.001, 0.001], relief: 1, sheen: 0.5, c0: p.pal[0], time: 0, c1: p.pal[1], aspect: 1, c2: p.pal[2], bright: 1.2, c3: p.pal[3], pad: 0,
+}, field: fieldT, samp: linear } });
+const texE = effect(gpu, TEXS, { set: { s: { seed, time: 0, scale: 1.6, p0: 0, p1: 0, p2: 0 } } });
+const seedE = effect(gpu, SEED, { set: { d: { seed, pad: 0 }, tex: texS, samp: linear } });
+// Spots at one end of the recipe, mazes at the other.
+const RECIPE = { h: 0.0085 * 512 / TEX, fA: 0.0367, kA: 0.0649, fB: 0.0545, kB: 0.062 };
+const chemSet = { c: { tap: [0, 0, 1, 1], ...RECIPE, bias: 0, tapOn: 0, pad: 0 }, tex: texS, samp: linear };
+const chemAB = effect(gpu, CHEM, { set: { ...chemSet, src: chemA } });
+const chemBA = effect(gpu, CHEM, { set: { ...chemSet, src: chemB } });
+const starE = effect(gpu, STAR, { set: { u: {
+  camPos: [0, 0, 3], aspect: 1, fw: [0, 0, -1], focal: FOCAL, rt: [1, 0, 0], relief: 0.1, up: [0, 1, 0], chem: p.chem,
+  c0: p.pal[0], spin: 0, c1: p.pal[1], corona: 1, c2: p.pal[2], dust: p.dust, c3: p.pal[3], time: 0,
+  rho0: 0.5, pxH: 600, bound: 1.2, chemRelief: 0.012,
+}, texS, chemT: chemA, samp: linear } });
+const downE = effect(gpu, DOWN, { set: { p: { texel: [0.01, 0.01], threshold: 0.6 }, src: sceneT, samp: linear } });
+const blurH = effect(gpu, BLUR, { set: { p: { dir: [0.01, 0] }, src: glowB, samp: linear } });
+const blurV = effect(gpu, BLUR, { set: { p: { dir: [0, 0.01] }, src: glowA, samp: linear } });
+const finE = effect(gpu, FINISH, { set: { f: { glow: 1, time: 0, aspect: 1, grain: 0.02 }, scene: sceneT, glow: glowB, samp: linear } });
+
+surf.onResize(({ width, height }) => {
+  layout();
+  aspect = width / height;
+  fieldT.resize(fieldSize());
+  sceneT.resize(full());
+  glowA.resize(quarter()); glowB.resize(quarter());
+  flatE.set({ u: { texel: [1 / fieldT.size[0], 1 / fieldT.size[1]], aspect }, field: fieldT });
+  downE.set({ p: { texel: [1 / glowA.size[0], 1 / glowA.size[1]] }, src: sceneT });
+  blurH.set({ p: { dir: [1 / glowA.size[0], 0] }, src: glowB });
+  blurV.set({ p: { dir: [0, 1 / glowA.size[1]] }, src: glowA });
+  finE.set({ f: { aspect }, scene: sceneT, glow: glowB });
+  starE.set({ u: { aspect, pxH: height } });
+  applyControls();
+});
+
+let texDirty = true;
+function applyControls() {
+  const was = p.view;
+  readControls();
+  const c = p.pal;
+  flatE.set({ u: { c0: c[0], c1: c[1], c2: c[2], c3: c[3], relief: 2 + 14 * p.relief, sheen: 0.12 * p.relief } });
+  starE.set({ u: { c0: c[0], c1: c[1], c2: c[2], c3: c[3], relief: 0.01 + 0.1 * p.relief, chem: p.chem, dust: p.dust * 0.9,
+    chemRelief: 0.015 * p.chem, bound: 1 + (0.01 + 0.1 * p.relief) * 0.75 + 0.015 * p.chem + 0.01 } });
+  for (const e of [chemAB, chemBA]) e.set({ c: { bias: (p.pattern - 0.5) * 0.5 } });
+  finE.set({ f: { glow: (0.3 + 1.6 * p.glow) * (p.view === 'star' ? 0.35 : 1) } });
+  $('panel').classList.toggle('texture', p.view === 'texture');
+  $('hintPill').textContent = p.view === 'star'
+    ? 'Drag to turn · Pinch or scroll to zoom · Tap the star to feed it · H controls'
+    : 'Drag to push the flow · Pinch or scroll to zoom · H controls';
+  if (was !== p.view) texDirty = true;
+}
+$('view').addEventListener('change', () => {
+  // Each view comes back in its own palette.
+  $('palette').value = viewPalette[$('view').value];
+  applyControls();
+  if (!playing) frame(gpu, render);
+});
+
+// ═══════════════════════════════════════
+// TOUCH: on the texture, drag to push it along (it slowly lets go); on
+// the star, drag to turn it and tap it to feed the chemistry. Pinch or
+// scroll to zoom either.
+// ═══════════════════════════════════════
+const pointers = new Map();
+let downAt = 0, moved = 0, pinch = 0;
+const spread = () => { const [a, b] = [...pointers.values()]; return Math.hypot(a[0] - b[0], a[1] - b[1]); };
+// Screen point to the flat texture's own coordinates.
+// (Tall screens see more of it, so the smoke is the same size on a phone.)
+const span = () => { const h = 2.2 * zoom * Math.pow(Math.max(1, 1 / aspect), 0.6); return [h * aspect, h]; };
+const toField = (x, y) => { const s = span(); return [center[0] + (x / cssW - 0.5) * s[0], center[1] + (y / cssH - 0.5) * s[1]]; };
+canvas.addEventListener('pointerdown', (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pointers.size === 1) { downAt = performance.now(); moved = 0; }
+  else { moved = 1e9; pinch = pointers.size === 2 ? spread() : 0; }
+  idleAt = performance.now();
+});
+canvas.addEventListener('pointermove', (e) => {
+  const q = pointers.get(e.pointerId);
+  if (!q) return;
+  const dx = e.clientX - q[0], dy = e.clientY - q[1];
+  const from = [q[0], q[1]];
+  q[0] = e.clientX; q[1] = e.clientY;
+  if (pointers.size === 1) {
+    moved += Math.abs(dx) + Math.abs(dy);
+    if (p.view === 'star') {
+      yawGoal -= dx / Math.max(1, cssW) * 4;
+      pitchGoal = clamp(pitchGoal + dy / Math.max(1, cssH) * 3, -1.3, 1.3);
+    } else if (Math.abs(dx) + Math.abs(dy) > 0) {
+      const a = toField(from[0], from[1]), b = toField(e.clientX, e.clientY);
+      smudges[smI] = [b[0], b[1], (b[0] - a[0]) * 2.5, (b[1] - a[1]) * 2.5];
+      smI = (smI + 1) % smudges.length;
+    }
+  } else if (pointers.size === 2) {
+    const s = spread();
+    if (pinch > 0 && s > 0) { if (p.view === 'star') distGoal = clamp(distGoal * pinch / s, 1.6, 7); else zoomGoal = clamp(zoomGoal * pinch / s, 0.35, 3); }
+    pinch = s;
+  }
+  idleAt = performance.now();
+});
+const release = (e) => {
+  if (!pointers.delete(e.pointerId)) return;
+  if (pointers.size < 2) pinch = 0;
+  if (!pointers.size && e.type === 'pointerup' && moved < 8 && performance.now() - downAt < 400 && p.view === 'star') feed(e.clientX, e.clientY);
+  idleAt = performance.now();
+};
+canvas.addEventListener('pointerup', release);
+canvas.addEventListener('pointercancel', release);
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const k = Math.exp(e.deltaY * 0.0012);
+  if (p.view === 'star') distGoal = clamp(distGoal * k, 1.6, 7); else zoomGoal = clamp(zoomGoal * k, 0.35, 3);
+  idleAt = performance.now();
+}, { passive: false });
+
+// Where a tap lands on the star (the plain sphere is near enough), in the
+// star's own frame: the chemistry gets a splash there.
+let cam = null;
+function feed(x, y) {
+  if (!cam) return;
+  const qx = (x / cssW - 0.5) * aspect, qy = 0.5 - y / cssH;
+  const d = cam.fw.map((v, i) => v * FOCAL + cam.rt[i] * qx + cam.up[i] * qy);
+  const l = Math.hypot(...d); const rd = d.map((v) => v / l);
+  const b = rd[0] * cam.pos[0] + rd[1] * cam.pos[1] + rd[2] * cam.pos[2];
+  const c = cam.pos[0] ** 2 + cam.pos[1] ** 2 + cam.pos[2] ** 2 - 1;
+  if (b * b - c < 0) return;
+  const tt = -b - Math.sqrt(b * b - c);
+  const w = cam.pos.map((v, i) => v + rd[i] * tt);
+  const cs = Math.cos(spin), sn = Math.sin(spin);
+  tapDir = [cs * w[0] - sn * w[2], w[1], sn * w[0] + cs * w[2]];
+}
+
+function newWorld() {
+  seed = newSeed();
+  smudges.forEach((s) => s.fill(0));
+  fieldE.set({ w: { seed: seed[0] } });
+  texE.set({ s: { seed } });
+  seedE.set({ d: { seed } });
+  texDirty = true;
+  reseed = true;
+  if (!playing) frame(gpu, render);
+}
+let reseed = true;
+
+const clk = clock(gpu);
+let fpsCount = 0, fpsAt = performance.now();
+
+function step(dt) {
+  t += dt;
+  flowT += dt * p.flow * 0.06;
+  // The smoke drifts as well as changing, so it reads as flowing.
+  center[0] += dt * p.flow * 0.04;
+  spin += dt * 0.03;
+  // Smudges let go over a second or two.
+  for (const s of smudges) { s[2] *= Math.exp(-dt * 1.4); s[3] *= Math.exp(-dt * 1.4); }
+  const ease = 1 - Math.exp(-dt * 8);
+  zoom += (zoomGoal - zoom) * ease;
+  // Left alone a few seconds, the star turns.
+  if (performance.now() - idleAt > 3000) yawGoal += dt * 0.05;
+  yaw += (yawGoal - yaw) * ease;
+  pitch += (pitchGoal - pitch) * ease;
+  dist += (distGoal - dist) * ease;
+  const s = span();
+  fieldE.set({ w: { span: s, center, time: flowT, smR: 0.18 * s[1], smudge: smudges } });
+  texE.set({ s: { time: flowT * 0.8 } });
+  camera();
+  starE.set({ u: { spin, time: t } });
+  finE.set({ f: { time: t % 1000 } });
+}
+
+function camera() {
+  const y = yaw + (tl.active ? tl.x * 0.4 : 0);
+  const pt = clamp(pitch + (tl.active ? (tl.y - 0.5) * 0.3 : 0), -1.4, 1.4);
+  const cp = Math.cos(pt), sp = Math.sin(pt), cy = Math.cos(y), sy = Math.sin(y);
+  // Narrow screens stand further back, so the star fits across.
+  const d = dist * Math.max(1, 1.05 / aspect);
+  const pos = [sy * cp * d, sp * d, cy * cp * d];
+  const fw = [-sy * cp, -sp, -cy * cp], rt = [cy, 0, -sy], up = [-sy * sp, cp, -cy * sp];
+  cam = { pos, fw, rt, up };
+  starE.set({ u: { camPos: pos, fw, rt, up, rho0: FOCAL / Math.sqrt(d * d - 1) } });
+}
+
+function render(f) {
+  if (p.view === 'texture') {
+    f.pass(fieldT, fieldE);
+    f.pass(sceneT, flatE);
+  } else {
+    // The texture only needs redrawing while it flows.
+    if (texDirty || p.flow > 0) { f.pass(texS, texE); texDirty = false; }
+    if (reseed) { f.pass(chemA, seedE); reseed = false; warm = 1200; }
+    // The chemistry: a few steps a frame, and a burst after each new start
+    // so the patterns are already grown when it shows.
+    let n = 8 + Math.min(warm, 56);
+    warm = Math.max(0, warm - 56);
+    if (p.chem <= 0) n = 0;
+    // A tap splashes the chemistry for one frame's worth of steps. (Uniforms
+    // written mid-frame all land before the frame runs, so it's on for the
+    // whole frame and off again the next.)
+    if (tapDir || tapping) {
+      const l = tapDir ? Math.hypot(...tapDir) : 1;
+      const c = tapDir ? { tap: [tapDir[0] / l, tapDir[1] / l, tapDir[2] / l, Math.cos(0.06)], tapOn: 1 } : { tapOn: 0 };
+      chemAB.set({ c }); chemBA.set({ c });
+      tapping = !!tapDir;
+      tapDir = null;
+    }
+    for (let i = 0; i < n; i += 2) {
+      f.pass(chemB, chemAB);
+      f.pass(chemA, chemBA);
+    }
+    f.pass(sceneT, starE);
+  }
+  f.pass(glowB, downE);
+  f.pass(glowA, blurH);
+  f.pass(glowB, blurV);
+  f.pass(surf, finE);
+}
+
+let loop = null, playing = false;
+function tick(f) {
+  step(Math.min(clk.deltaTime, 0.1));
+  render(f);
+  fpsCount++;
+  const now = performance.now();
+  if (now - fpsAt > 1000) { $('fps').textContent = fpsCount + ' fps'; fpsCount = 0; fpsAt = now; }
+}
+
+function togglePlay() {
+  playing = !playing;
+  if (playing) {
+    $('playPause').classList.add('playing'); $('playIcon').style.display = 'none';
+    $('pauseIcon').style.display = 'block'; $('playLabel').textContent = 'Pause';
+    loop = frameLoop(gpu, tick);
+  } else {
+    $('playPause').classList.remove('playing'); $('playIcon').style.display = 'block';
+    $('pauseIcon').style.display = 'none'; $('playLabel').textContent = 'Play';
+    if (loop) loop.stop();
+    loop = null;
+    $('fps').textContent = '';
+  }
+}
+
+for (const id of IDS) $(id).addEventListener('input', applyControls);
+$('palette').addEventListener('change', applyControls);
+$('playPause').addEventListener('click', togglePlay);
+$('generate').addEventListener('click', newWorld);
+$('save').addEventListener('click', () => {
+  frame(gpu, render);
+  const a = document.createElement('a');
+  a.download = 'reflective-wave-' + Date.now() + '.png';
+  a.href = canvas.toDataURL('image/png');
+  a.click();
+});
+
+const panel = $('panel'), hintPill = $('hintPill');
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'h' || e.key === 'H') {
+    panel.classList.toggle('hidden');
+    hintPill.classList.remove('show'); void hintPill.offsetWidth; hintPill.classList.add('show');
+  }
+});
+
+applyControls();
+step(0);
+togglePlay();
+</script>
+</body>
+</html>
