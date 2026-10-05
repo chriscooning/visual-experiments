@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Voronoi — Lloyd's Relaxation</title>
+<title>Voronoi — Soap Film</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -44,25 +44,29 @@
 <div class="panel" id="panel">
   <div class="control-group"><label>Palette</label>
     <select id="palette">
+      <option value="film" selected>Iridescent</option>
       <option value="mono">Monochrome</option>
       <option value="cool">Cool Blues</option>
       <option value="warm">Warm Ember</option>
-      <option value="neon" selected>Neon</option>
+      <option value="neon">Neon</option>
       <option value="cyber">Cyber</option>
       <option value="gold">Gold</option>
     </select>
   </div>
-  <div class="control-group"><label>Draw Mode</label>
+  <div class="control-group"><label>Style</label>
     <select id="drawMode">
+      <option value="soap" selected>Soap Bubbles</option>
+      <option value="oil">Oil Slick</option>
       <option value="cells">Cells</option>
-      <option value="edges" selected>Edges</option>
-      <option value="points">Points + Delaunay</option>
     </select>
   </div>
-  <div class="control-group"><label>Points <span class="val" id="countVal">100</span></label><input type="range" id="count" min="10" max="500" value="100"></div>
-  <div class="control-group"><label>Relax Speed <span class="val" id="relaxVal">40</span></label><input type="range" id="relax" min="0" max="100" value="40"></div>
+  <div class="control-group"><label>Points <span class="val" id="countVal">70</span></label><input type="range" id="count" min="10" max="500" value="70"></div>
+  <div class="control-group"><label>Relax Speed <span class="val" id="relaxVal">30</span></label><input type="range" id="relax" min="0" max="100" value="30"></div>
   <div class="control-group"><label>Noise Amount <span class="val" id="noiseVal">10</span></label><input type="range" id="noise" min="0" max="100" value="10"></div>
   <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">20</span></label><input type="range" id="nSpeed" min="0" max="100" value="20"></div>
+  <div class="control-group"><label>Wobble <span class="val" id="wobbleVal">35</span></label><input type="range" id="wobble" min="0" max="100" value="35"></div>
+  <div class="control-group"><label>Roundness <span class="val" id="roundVal">50</span></label><input type="range" id="round" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Film Flow <span class="val" id="flowVal">35</span></label><input type="range" id="flow" min="0" max="100" value="35"></div>
   <div class="control-group"><label>Edge Width <span class="val" id="edgeWVal">1.0</span></label><input type="range" id="edgeW" min="5" max="40" value="10"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -75,7 +79,7 @@
 
 <script>
 // ═══════════════════════════════════════
-// PERLIN NOISE
+// PERLIN NOISE (drives the seed drift)
 // ═══════════════════════════════════════
 class PerlinNoise{
   constructor(seed){
@@ -98,212 +102,305 @@ class PerlinNoise{
 
 // ═══════════════════════════════════════
 // PALETTES
+// Cosine palettes a + b·cos(2π(c·t + d)), t = film thickness.
+// "film" is real thin-film interference: c = 2·n/λ for red, green and blue
+// (n = 1.33, λ in µm) and d = ½ for the half-wave flip off the front face,
+// so a thinning film runs through Newton's colours down to black.
 // ═══════════════════════════════════════
 const palettes={
-  mono:t=>{const v=40+t*180|0;return`rgb(${v},${v},${v})`;},
-  cool:t=>`rgb(${20+t*50|0},${60+t*120|0},${120+t*135|0})`,
-  warm:t=>`rgb(${120+t*135|0},${30+t*80|0},${10+t*30|0})`,
-  neon:t=>`hsl(${(t*280+180)%360},90%,50%)`,
-  cyber:t=>`rgb(${10+t*30|0},${120+t*135|0},${100+t*120|0})`,
-  gold:t=>`rgb(${120+t*135|0},${100+t*120|0},${10+t*40|0})`
+  film:{a:[.5,.5,.5],b:[.5,.5,.5],c:[4.09,5.02,5.91],d:[.5,.5,.5]},
+  mono:{a:[.5,.5,.52],b:[.45,.45,.45],c:[1.6,1.6,1.6],d:[0,0,0]},
+  cool:{a:[.25,.45,.7],b:[.2,.3,.3],c:[1.6,1.6,1.6],d:[.1,.2,.3]},
+  warm:{a:[.6,.3,.12],b:[.4,.25,.12],c:[1.6,1.6,1.6],d:[0,.15,.2]},
+  neon:{a:[.5,.5,.5],b:[.5,.5,.5],c:[1.6,1.6,1.6],d:[.5,.83,.17]},
+  cyber:{a:[.15,.6,.5],b:[.15,.4,.35],c:[1.6,1.6,1.6],d:[.5,0,.1]},
+  gold:{a:[.65,.55,.25],b:[.35,.3,.2],c:[1.6,1.6,1.6],d:[0,.05,.12]}
 };
-
-// ═══════════════════════════════════════
-// CANVAS
-// ═══════════════════════════════════════
-const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
-let W,H;
-function resize(){W=canvas.width=window.innerWidth;H=canvas.height=window.innerHeight;}
-resize();
-
-let perlin=new PerlinNoise((Math.random()*1e5)|0);
-let time=0,playing=false,animId=null,lastFrame=0;
 
 function $(id){return document.getElementById(id)}
 
 // ═══════════════════════════════════════
-// POINTS
+// CANVAS + WEBGL2
+// Seeds and the drawing live in CSS pixels; the canvas is drawn at device
+// resolution, capped so a big retina screen doesn't shade ~10M pixels.
 // ═══════════════════════════════════════
-let seeds=[];
-
-function initSeeds(n){
-  seeds=[];
-  for(let i=0;i<n;i++)seeds.push({x:Math.random()*W,y:Math.random()*H});
+const canvas=$('canvas');
+const gl=canvas.getContext('webgl2',{antialias:false,alpha:false});
+let W,H,DPR;
+function resize(){
+  W=window.innerWidth;H=window.innerHeight;
+  DPR=Math.min(window.devicePixelRatio||1,2,Math.sqrt(4.2e6/(W*H)));
+  canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);
 }
-initSeeds(100);
+resize();
+
+let perlin=new PerlinNoise((Math.random()*1e5)|0);
+let time=0,filmTime=0,playing=false,animId=null,lastFrame=0;
 
 // ═══════════════════════════════════════
-// VORONOI via brute-force (low-res)
+// SEEDS + SPATIAL GRID
+// Seeds are bucketed into square cells about one seed-spacing wide, so the
+// nearest seed to any spot is found within the 5×5 cells around it; the
+// shader searches the same grid.
 // ═══════════════════════════════════════
-const SCALE=4; // 1/4 resolution
-let cellMap=null; // Uint16Array, each pixel -> nearest seed index
-let cellCentroids=null;
+const MAX_SEEDS=2000,SEARCH=2;
+let seeds=[];
+function newSeed(x,y){return{x,y,ph:Math.random()};}
+function initSeeds(n){seeds=[];for(let i=0;i<n;i++)seeds.push(newSeed(Math.random()*W,Math.random()*H));}
+initSeeds(70);
 
-function computeVoronoi(){
-  const sw=Math.ceil(W/SCALE),sh=Math.ceil(H/SCALE);
+let grid={G:1,gw:1,gh:1,start:null,count:null,order:null};
+function buildGrid(){
   const n=seeds.length;
-  if(!cellMap||cellMap.length!==sw*sh)cellMap=new Uint16Array(sw*sh);
-
-  // Brute force: for each pixel, find nearest seed
-  for(let y=0;y<sh;y++){
-    const wy=y*SCALE+SCALE/2;
-    for(let x=0;x<sw;x++){
-      const wx=x*SCALE+SCALE/2;
-      let minD=Infinity,minI=0;
-      for(let i=0;i<n;i++){
-        const dx=seeds[i].x-wx,dy=seeds[i].y-wy;
-        const d=dx*dx+dy*dy;
-        if(d<minD){minD=d;minI=i;}
-      }
-      cellMap[y*sw+x]=minI;
-    }
-  }
-
-  // Compute centroids
-  cellCentroids=new Array(n);
-  const cx=new Float64Array(n),cy=new Float64Array(n),cc=new Float64Array(n);
-  for(let y=0;y<sh;y++){
-    const wy=y*SCALE+SCALE/2;
-    for(let x=0;x<sw;x++){
-      const wx=x*SCALE+SCALE/2;
-      const idx=cellMap[y*sw+x];
-      cx[idx]+=wx;cy[idx]+=wy;cc[idx]++;
-    }
-  }
+  const G=Math.max(12,1.15*Math.sqrt(W*H/Math.max(n,1)));
+  const gw=Math.ceil(W/G)+1,gh=Math.ceil(H/G)+1,cells=gw*gh;
+  const count=new Int32Array(cells),start=new Int32Array(cells),order=new Int32Array(n),cellOf=new Int32Array(n);
   for(let i=0;i<n;i++){
-    if(cc[i]>0)cellCentroids[i]={x:cx[i]/cc[i],y:cy[i]/cc[i]};
-    else cellCentroids[i]={x:seeds[i].x,y:seeds[i].y};
+    const gx=Math.min(gw-1,Math.max(0,Math.floor(seeds[i].x/G)));
+    const gy=Math.min(gh-1,Math.max(0,Math.floor(seeds[i].y/G)));
+    cellOf[i]=gy*gw+gx;count[cellOf[i]]++;
   }
+  for(let c=1;c<cells;c++)start[c]=start[c-1]+count[c-1];
+  const fill=start.slice();
+  for(let i=0;i<n;i++)order[fill[cellOf[i]]++]=i;
+  grid={G,gw,gh,start,count,order};
+}
+
+function nearestSeed(x,y){
+  const {G,gw,gh,start,count,order}=grid;
+  const cx=Math.floor(x/G),cy=Math.floor(y/G);
+  let best=-1,bd=Infinity;
+  for(let r=SEARCH;best<0&&r<=SEARCH+2;r++){
+    for(let gy=Math.max(0,cy-r);gy<=Math.min(gh-1,cy+r);gy++)
+      for(let gx=Math.max(0,cx-r);gx<=Math.min(gw-1,cx+r);gx++){
+        const c=gy*gw+gx;
+        for(let k=start[c],e=k+count[c];k<e;k++){
+          const s=seeds[order[k]],dx=s.x-x,dy=s.y-y,d=dx*dx+dy*dy;
+          if(d<bd){bd=d;best=order[k];}
+        }
+      }
+  }
+  return best;
 }
 
 // ═══════════════════════════════════════
 // RELAXATION STEP
+// Centroids from a coarse sample of the plane; that's only for moving the
+// seeds, the picture itself is computed per pixel on the GPU.
 // ═══════════════════════════════════════
+const SAMPLE=6;
 function relaxStep(){
   const speed=+$('relax').value/100;
   const noiseAmt=+$('noise').value;
   const nSpd=+$('nSpeed').value/1000;
-
-  computeVoronoi();
-
   const n=seeds.length;
-  for(let i=0;i<n;i++){
-    const c=cellCentroids[i];
-    // Lerp toward centroid
-    seeds[i].x+=(c.x-seeds[i].x)*speed*0.3;
-    seeds[i].y+=(c.y-seeds[i].y)*speed*0.3;
 
-    // Noise perturbation
-    if(noiseAmt>0){
-      const nx=perlin.fbm(seeds[i].x*0.003+time*nSpd,seeds[i].y*0.003+i*0.1,3);
-      const ny=perlin.fbm(seeds[i].x*0.003+100+time*nSpd,seeds[i].y*0.003+100+i*0.1,3);
-      seeds[i].x+=nx*noiseAmt*0.3;
-      seeds[i].y+=ny*noiseAmt*0.3;
+  buildGrid();
+  const cx=new Float64Array(n),cy=new Float64Array(n),cc=new Float64Array(n);
+  for(let y=SAMPLE/2;y<H;y+=SAMPLE)
+    for(let x=SAMPLE/2;x<W;x+=SAMPLE){
+      const i=nearestSeed(x,y);
+      if(i>=0){cx[i]+=x;cy[i]+=y;cc[i]++;}
     }
 
-    // Keep in bounds
-    seeds[i].x=Math.max(0,Math.min(W,seeds[i].x));
-    seeds[i].y=Math.max(0,Math.min(H,seeds[i].y));
+  for(let i=0;i<n;i++){
+    const s=seeds[i];
+    if(cc[i]>0){
+      s.x+=(cx[i]/cc[i]-s.x)*speed*0.3;
+      s.y+=(cy[i]/cc[i]-s.y)*speed*0.3;
+    }
+    if(noiseAmt>0){
+      const nx=perlin.fbm(s.x*0.003+time*nSpd,s.y*0.003+i*0.1,3);
+      const ny=perlin.fbm(s.x*0.003+100+time*nSpd,s.y*0.003+100+i*0.1,3);
+      s.x+=nx*noiseAmt*0.3;
+      s.y+=ny*noiseAmt*0.3;
+    }
+    s.x=Math.max(0,Math.min(W,s.x));
+    s.y=Math.max(0,Math.min(H,s.y));
   }
-
   time+=1;
+  filmTime+=+$('flow').value/100;
 }
 
 // ═══════════════════════════════════════
-// MOUSE
+// SHADERS
+// For each pixel: find the nearest seed, then the distance to that cell's
+// walls (the bisectors with every neighbour, not just the second-nearest
+// seed), round the corners where walls meet, and shade the film inside.
 // ═══════════════════════════════════════
-let dragging=false,dragX=0,dragY=0;
+const VS=`#version 300 es
+in vec2 aPos;void main(){gl_Position=vec4(aPos,0.,1.);}`;
+
+const FS=`#version 300 es
+precision highp float;precision highp int;
+uniform sampler2D uSeeds;   // x, y, phase, -   (1024 per row)
+uniform sampler2D uGrid;    // start, count     (gw × gh)
+uniform vec2 uRes;uniform float uDpr;
+uniform float uG;uniform ivec2 uGridSize;
+uniform float uTime,uWobble,uRound,uEdge;
+uniform int uMode;          // 0 soap, 1 oil, 2 cells
+uniform vec3 uPa,uPb,uPc,uPd;
+out vec4 outColor;
+
+vec3 pal(float t){return uPa+uPb*cos(6.28318*(uPc*t+uPd));}
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float vnoise(vec2 p){
+  vec2 i=floor(p),f=fract(p),u=f*f*f*(f*(f*6.-15.)+10.);
+  return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+1.),u.x),u.y)*2.-1.;
+}
+float fbm(vec2 p){
+  float v=0.,a=.5;mat2 r=mat2(.8,.6,-.6,.8);
+  for(int i=0;i<4;i++){v+=a*vnoise(p);p=r*p*2.03+11.7;a*=.5;}
+  return v;
+}
+vec4 seedAt(int k){return texelFetch(uSeeds,ivec2(k&1023,k>>10),0);}
+
+void main(){
+  vec2 p=vec2(gl_FragCoord.x,uRes.y-gl_FragCoord.y)/uDpr;
+  float t=uTime;
+  // Wobble: bend space a little so the walls sway like soap, not ruled lines.
+  vec2 wq=p/(uG*.9);
+  vec2 q=p+uWobble*uG*.22*vec2(vnoise(wq+vec2(0.,t*.04)),vnoise(wq+vec2(5.2,1.3)-vec2(t*.035,0.)));
+
+  ivec2 gc=ivec2(floor(q/uG));
+  // Pass 1: nearest seed.
+  float bd=1e20;vec4 s1=vec4(0.);int i1=-1;
+  for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
+    ivec2 c=gc+ivec2(dx,dy);
+    if(c.x<0||c.y<0||c.x>=uGridSize.x||c.y>=uGridSize.y)continue;
+    vec4 g=texelFetch(uGrid,c,0);int st=int(g.x),cn=int(g.y);
+    for(int k=0;k<64;k++){
+      if(k>=cn)break;
+      vec4 s=seedAt(st+k);vec2 d=s.xy-q;float dd=dot(d,d);
+      if(dd<bd){bd=dd;s1=s;i1=st+k;}
+    }
+  }
+  if(i1<0){outColor=vec4(.035,.035,.045,1.);return;}
+  // Pass 2: the two nearest walls of that cell.
+  float wa=1e20,wb=1e20;
+  for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
+    ivec2 c=gc+ivec2(dx,dy);
+    if(c.x<0||c.y<0||c.x>=uGridSize.x||c.y>=uGridSize.y)continue;
+    vec4 g=texelFetch(uGrid,c,0);int st=int(g.x),cn=int(g.y);
+    for(int k=0;k<64;k++){
+      if(k>=cn)break;
+      if(st+k==i1)continue;
+      vec2 o=seedAt(st+k).xy-s1.xy;float l=length(o);
+      if(l<1e-3)continue;
+      float w=dot(.5*(s1.xy+seedAt(st+k).xy)-q,o/l);
+      if(w<wa){wb=wa;wa=w;}else if(w<wb)wb=w;
+    }
+  }
+  wb=min(wb,1e4);
+  // Rounded corners: a fillet where two walls meet. Past the fillet (d < 0)
+  // is the Plateau border, the little three-cornered pocket of liquid
+  // where three walls join.
+  float rc=uRound*uG*.3;
+  vec2 m=max(vec2(rc)-vec2(wa,wb),0.);
+  float d=min(wa,wb)>=rc?min(wa,wb):rc-length(m);
+
+  float R=uG*.5,ph=s1.z,di=max(d,0.);
+  vec2 lc=(q-s1.xy)/R;
+  float aa=.8/uDpr;
+  float line=1.-smoothstep(uEdge-aa,uEdge+aa,abs(d));
+  float pocket=smoothstep(-uEdge+aa,-uEdge-aa,d);
+  vec3 col;
+
+  if(uMode==0){
+    // Soap: mostly clear film, colour gathering towards the walls. The film
+    // drains, thin (gold, then black) at the top of each bubble and banded
+    // lower down, stirred by a slow swirl, and thicker at the walls.
+    float sw=fbm(lc*1.3+vec2(ph*17.,ph*29.)+vec2(t*.05,-t*.035));
+    float th=mix(.1,.62,clamp(.5+.4*lc.y+.28*sw,0.,1.));
+    th+=.3*exp(-di/(R*.1));
+    vec3 film=pal(th);
+    float rim=exp(-di/(R*.3));
+    col=film*(.06+.2*(.5+.5*sw)+.7*rim*rim);
+    col+=film*.35*exp(-di/(uEdge*2.+1.));
+    // A window reflection on each bubble, upper left.
+    vec2 h=lc-vec2(-.34,-.42);h=mat2(.87,.5,-.5,.87)*h;
+    col+=vec3(.4)*exp(-(h.x*h.x*34.+h.y*h.y*110.))*smoothstep(0.,R*.15,di);
+    col=mix(col,film*.1+vec3(.012,.012,.018),pocket);
+    col=mix(col,mix(film,vec3(1.),.35)*.95,line);
+    col+=vec3(.012,.012,.02);
+  }else if(uMode==1){
+    // Oil: one continuous film over the whole plane, swirled into broad
+    // bands over dark water; the cells only nudge its thickness and the
+    // walls show as dark seams.
+    vec2 uv=p/720.;
+    vec2 w=vec2(fbm(uv*1.5+vec2(t*.02,0.)),fbm(uv*1.5+vec2(3.1,7.7)-vec2(0.,t*.018)));
+    float th=.34+.36*fbm(uv+w*1.4+t*.006)+(ph-.5)*.06*smoothstep(0.,R*.5,di);
+    vec3 film=pal(th);
+    float sheen=.5+.5*fbm(uv*2.2+w*.8);
+    col=mix(vec3(.012,.013,.018),pow(film,vec3(1.3)),.3+.65*sheen*sheen);
+    col*=mix(.35,1.,smoothstep(0.,uEdge*3.+1.,di));
+    col=mix(col,vec3(.01,.01,.014),max(pocket,line*.85));
+  }else{
+    // Cells: flat palette colour per cell, clean anti-aliased walls.
+    vec3 c=pal(.12+ph*.55);
+    float rim=exp(-di/(R*.4));
+    col=c*(.28+.25*rim);
+    col=mix(col,c*.12,pocket);
+    col=mix(col,c,line);
+  }
+  outColor=vec4(pow(clamp(col,0.,1.),vec3(.95)),1.);
+}`;
+
+function compile(type,src){
+  const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+let prog,U={},seedTex,gridTex;
+function initGL(){
+  prog=gl.createProgram();
+  gl.attachShader(prog,compile(gl.VERTEX_SHADER,VS));
+  gl.attachShader(prog,compile(gl.FRAGMENT_SHADER,FS));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,'aPos');
+  gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  ['uSeeds','uGrid','uRes','uDpr','uG','uGridSize','uTime','uWobble','uRound','uEdge','uMode','uPa','uPb','uPc','uPd']
+    .forEach(n=>U[n]=gl.getUniformLocation(prog,n));
+  const mk=()=>{const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);return t;};
+  seedTex=mk();gridTex=mk();
+  gl.uniform1i(U.uSeeds,0);gl.uniform1i(U.uGrid,1);
+}
 
 // ═══════════════════════════════════════
 // RENDER
 // ═══════════════════════════════════════
+const MODES={soap:0,oil:1,cells:2};
 function render(){
-  const mode=$('drawMode').value;
-  const pal=$('palette').value;
-  const col=palettes[pal];
-  const edgeW=+$('edgeW').value/10;
-  const n=seeds.length;
+  buildGrid();
+  const {G,gw,gh,start,count,order}=grid,n=seeds.length;
 
-  ctx.fillStyle='#0a0a0c';ctx.fillRect(0,0,W,H);
+  const rows=Math.max(1,Math.ceil(n/1024));
+  const sd=new Float32Array(1024*rows*4);
+  for(let k=0;k<n;k++){const s=seeds[order[k]];sd[k*4]=s.x;sd[k*4+1]=s.y;sd[k*4+2]=s.ph;}
+  const gd=new Float32Array(gw*gh*4);
+  for(let c=0;c<gw*gh;c++){gd[c*4]=start[c];gd[c*4+1]=count[c];}
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,seedTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,1024,rows,0,gl.RGBA,gl.FLOAT,sd);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,gridTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA32F,gw,gh,0,gl.RGBA,gl.FLOAT,gd);
 
-  computeVoronoi();
-
-  const sw=Math.ceil(W/SCALE),sh=Math.ceil(H/SCALE);
-
-  if(mode==='cells'){
-    // Draw filled cells
-    for(let y=0;y<sh;y++){
-      for(let x=0;x<sw;x++){
-        const idx=cellMap[y*sw+x];
-        ctx.fillStyle=col(idx/n);
-        ctx.fillRect(x*SCALE,y*SCALE,SCALE,SCALE);
-      }
-    }
-  }else if(mode==='edges'){
-    // Draw cell colors dimmed, then edges
-    for(let y=0;y<sh;y++){
-      for(let x=0;x<sw;x++){
-        const idx=cellMap[y*sw+x];
-        const t=idx/n;
-        ctx.fillStyle=col(t);
-        ctx.globalAlpha=0.15;
-        ctx.fillRect(x*SCALE,y*SCALE,SCALE,SCALE);
-      }
-    }
-    ctx.globalAlpha=1;
-
-    // Find edges: pixels where neighbor has different cell
-    ctx.strokeStyle='none';
-    for(let y=1;y<sh-1;y++){
-      for(let x=1;x<sw-1;x++){
-        const idx=cellMap[y*sw+x];
-        const r=cellMap[y*sw+x+1];
-        const d=cellMap[(y+1)*sw+x];
-        if(idx!==r||idx!==d){
-          ctx.fillStyle=col(idx/n);
-          ctx.fillRect(x*SCALE,y*SCALE,SCALE*edgeW,SCALE*edgeW);
-        }
-      }
-    }
-
-    // Draw seed points
-    for(let i=0;i<n;i++){
-      ctx.fillStyle='#fff';
-      ctx.beginPath();ctx.arc(seeds[i].x,seeds[i].y,2,0,Math.PI*2);ctx.fill();
-    }
-  }else{
-    // Points + Delaunay edges (approximate via nearest neighbors)
-    // Draw seed points large
-    for(let i=0;i<n;i++){
-      ctx.fillStyle=col(i/n);
-      ctx.beginPath();ctx.arc(seeds[i].x,seeds[i].y,4,0,Math.PI*2);ctx.fill();
-    }
-
-    // Approximate Delaunay by drawing edges between cells that share a boundary
-    const neighbors=new Set();
-    for(let y=0;y<sh-1;y++){
-      for(let x=0;x<sw-1;x++){
-        const a=cellMap[y*sw+x];
-        const b=cellMap[y*sw+x+1];
-        const c=cellMap[(y+1)*sw+x];
-        if(a!==b){const key=Math.min(a,b)*10000+Math.max(a,b);neighbors.add(key);}
-        if(a!==c){const key=Math.min(a,c)*10000+Math.max(a,c);neighbors.add(key);}
-      }
-    }
-
-    ctx.lineWidth=edgeW*0.5;
-    ctx.globalAlpha=0.3;
-    for(const key of neighbors){
-      const a=Math.floor(key/10000),b=key%10000;
-      const t=(a+b)/(2*n);
-      ctx.strokeStyle=col(t);
-      ctx.beginPath();
-      ctx.moveTo(seeds[a].x,seeds[a].y);
-      ctx.lineTo(seeds[b].x,seeds[b].y);
-      ctx.stroke();
-    }
-    ctx.globalAlpha=1;
-  }
+  const p=palettes[$('palette').value]||palettes.film;
+  gl.uniform3fv(U.uPa,p.a);gl.uniform3fv(U.uPb,p.b);gl.uniform3fv(U.uPc,p.c);gl.uniform3fv(U.uPd,p.d);
+  gl.uniform2f(U.uRes,canvas.width,canvas.height);gl.uniform1f(U.uDpr,DPR);
+  gl.uniform1f(U.uG,G);gl.uniform2i(U.uGridSize,gw,gh);
+  gl.uniform1f(U.uTime,filmTime);
+  gl.uniform1f(U.uWobble,+$('wobble').value/100);
+  gl.uniform1f(U.uRound,+$('round').value/100);
+  gl.uniform1f(U.uEdge,+$('edgeW').value/10*0.5);
+  gl.uniform1i(U.uMode,MODES[$('drawMode').value]??0);
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.drawArrays(gl.TRIANGLES,0,3);
 }
 
 // ═══════════════════════════════════════
@@ -351,7 +448,7 @@ $('playPause').addEventListener('click',togglePlay);
 $('generate').addEventListener('click',()=>{
   randomizeSelect('palette');
   randomizeSelect('drawMode');
-  randomizeControls(['relax','noise','nSpeed','edgeW']);
+  randomizeControls(['relax','noise','nSpeed','wobble','round','flow','edgeW']);
   $('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);
   perlin=new PerlinNoise((Math.random()*1e5)|0);
   time=0;
@@ -360,7 +457,7 @@ $('generate').addEventListener('click',()=>{
 });
 $('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='voronoi-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
 
-['count','relax','noise','nSpeed'].forEach(id=>{
+['count','relax','noise','nSpeed','wobble','round','flow'].forEach(id=>{
   const el=$(id),vEl=$(id+'Val');
   el.addEventListener('input',()=>{vEl.textContent=el.value;if(!playing)render();});
 });
@@ -371,34 +468,30 @@ $('drawMode').addEventListener('change',()=>{if(!playing)render();});
 // Adjust seed count dynamically
 $('count').addEventListener('input',()=>{
   const n=+$('count').value;
-  while(seeds.length<n)seeds.push({x:Math.random()*W,y:Math.random()*H});
+  while(seeds.length<n)seeds.push(newSeed(Math.random()*W,Math.random()*H));
   if(seeds.length>n)seeds.length=n;
-});
-
-// Mouse: click to add point, drag to push
-canvas.addEventListener('mousedown',e=>{
-  e.preventDefault();
-  dragging=true;dragX=e.clientX;dragY=e.clientY;
-  // Add a new seed
-  seeds.push({x:e.clientX,y:e.clientY});
-  $('count').value=seeds.length;$('countVal').textContent=seeds.length;
   if(!playing)render();
 });
-canvas.addEventListener('mousemove',e=>{
-  if(!dragging)return;
-  const mx=e.clientX,my=e.clientY;
-  // Push nearby seeds away
+
+// Mouse/touch: press to add a point, drag to push points aside
+let dragging=false;
+function addSeed(x,y){
+  if(seeds.length>=MAX_SEEDS)return;
+  seeds.push(newSeed(x,y));
+  $('count').value=seeds.length;$('countVal').textContent=seeds.length;
+  if(!playing)render();
+}
+function push(mx,my){
   const pushR=100;
   for(let i=0;i<seeds.length;i++){
     const dx=seeds[i].x-mx,dy=seeds[i].y-my;
     const d=Math.sqrt(dx*dx+dy*dy);
-    if(d<pushR&&d>1){
-      const f=(pushR-d)/pushR*3;
-      seeds[i].x+=dx/d*f;seeds[i].y+=dy/d*f;
-    }
+    if(d<pushR&&d>1){const f=(pushR-d)/pushR*3;seeds[i].x+=dx/d*f;seeds[i].y+=dy/d*f;}
   }
   if(!playing)render();
-});
+}
+canvas.addEventListener('mousedown',e=>{e.preventDefault();dragging=true;addSeed(e.clientX,e.clientY);});
+canvas.addEventListener('mousemove',e=>{if(dragging)push(e.clientX,e.clientY);});
 canvas.addEventListener('mouseup',()=>{dragging=false;});
 canvas.addEventListener('mouseleave',()=>{dragging=false;});
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
@@ -410,26 +503,8 @@ canvas.addEventListener('wheel',e=>{
   v=Math.max(0,Math.min(100,v));el.value=v;vEl.textContent=v;
 },{passive:false});
 
-// Touch
-canvas.addEventListener('touchstart',e=>{
-  e.preventDefault();dragging=true;
-  const tx=e.touches[0].clientX,ty=e.touches[0].clientY;
-  seeds.push({x:tx,y:ty});
-  $('count').value=seeds.length;$('countVal').textContent=seeds.length;
-  if(!playing)render();
-},{passive:false});
-canvas.addEventListener('touchmove',e=>{
-  e.preventDefault();
-  if(!dragging)return;
-  const mx=e.touches[0].clientX,my=e.touches[0].clientY;
-  const pushR=100;
-  for(let i=0;i<seeds.length;i++){
-    const dx=seeds[i].x-mx,dy=seeds[i].y-my;
-    const d=Math.sqrt(dx*dx+dy*dy);
-    if(d<pushR&&d>1){const f=(pushR-d)/pushR*3;seeds[i].x+=dx/d*f;seeds[i].y+=dy/d*f;}
-  }
-  if(!playing)render();
-},{passive:false});
+canvas.addEventListener('touchstart',e=>{e.preventDefault();dragging=true;addSeed(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+canvas.addEventListener('touchmove',e=>{e.preventDefault();if(dragging)push(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
 canvas.addEventListener('touchend',e=>{e.preventDefault();dragging=false;},{passive:false});
 
 // Panel toggle
@@ -438,10 +513,15 @@ document.addEventListener('keydown',e=>{if(e.key==='h'||e.key==='H'){panel.class
 
 // Resize
 let rTimer;
-window.addEventListener('resize',()=>{clearTimeout(rTimer);rTimer=setTimeout(()=>{resize();cellMap=null;if(!playing)render();},100);});
+window.addEventListener('resize',()=>{clearTimeout(rTimer);rTimer=setTimeout(()=>{resize();if(!playing)render();},100);});
 
 // Init
-togglePlay();
+if(!gl){
+  hintPill.textContent='This piece needs WebGL2';hintPill.style.animation='none';hintPill.style.color='#aaa';
+}else{
+  initGL();
+  togglePlay();
+}
 </script>
 </body>
 </html>
