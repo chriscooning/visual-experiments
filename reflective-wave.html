@@ -174,11 +174,15 @@ window.vxLoader = (function () {
   </div>
   <div class="control-group"><label>Palette</label>
     <select id="palette">
-      <option value="mono" selected>Mono</option>
+      <option value="nebula" selected>Nebula</option>
+      <option value="mono">Mono</option>
       <option value="sun">Sun</option>
       <option value="blue">Blue giant</option>
       <option value="ember">Ember</option>
       <option value="violet">Violet</option>
+      <option value="patina">Patina</option>
+      <option value="rose">Rose</option>
+      <option value="gold">Gold</option>
     </select>
   </div>
   <div class="control-group"><label>Flow <span class="val" id="flowVal">35</span></label><input type="range" id="flow" min="0" max="100" value="35"></div>
@@ -186,6 +190,7 @@ window.vxLoader = (function () {
   <div class="control-group"><label>Glow <span class="val" id="glowVal">50</span></label><input type="range" id="glow" min="0" max="100" value="50"></div>
   <div class="control-group star-only"><label>Chemistry <span class="val" id="chemVal">70</span></label><input type="range" id="chem" min="0" max="100" value="70"></div>
   <div class="control-group star-only"><label>Pattern <span class="val" id="patternVal">50</span></label><input type="range" id="pattern" min="0" max="100" value="50"></div>
+  <div class="control-group star-only"><label>Corona <span class="val" id="coronaVal">60</span></label><input type="range" id="corona" min="0" max="100" value="60"></div>
   <div class="control-group star-only"><label>Dust <span class="val" id="dustVal">50</span></label><input type="range" id="dust" min="0" max="100" value="50"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -209,11 +214,13 @@ import { tilt } from './lib/tilt.js';
 // its edges catch the light. It drifts and slowly boils, and the bright
 // parts run past white, so they glow.
 // The star: the same texture wrapped round a sphere and stored flat (an
-// octahedral map), pushing the surface out and in and setting how hot each
-// part burns. A chemical reaction (Gray-Scott: two substances feeding,
-// diffusing and eating each other) runs across the surface, seeded by the
-// texture, which also decides where it grows spots and where it grows
-// mazes. Around it a corona, and dust streaming away.
+// octahedral map), setting how hot each part burns. A chemical reaction
+// (Gray-Scott: two substances feeding, diffusing and eating each other) runs
+// across the surface, seeded by the texture, which also decides where it
+// grows spots and where it grows mazes. On top: boiling convection cells,
+// sunspots, limb darkening, a glowing rim, flames and corona streamers, all
+// far brighter than a screen can show, then bloomed at six sizes and tone
+// mapped (AgX) so it burns to white and glows.
 // ═══════════════════════════════════════
 const NOISE = /* wgsl */ `
 // Gradient noise on an integer hash, the same on every GPU.
@@ -421,9 +428,15 @@ struct D { seed: vec3f, pad: f32 }
 }
 `;
 
-// ── The star: ray-march the pushed-out sphere, burning hottest where the
-// texture's high and the chemistry's thin, darker toward the limb. Off it,
-// the corona and the dust.
+// ── The star: a ball of plasma, lit from within. The disc is a plain sphere;
+// its heat comes from the texture (hot active regions), the chemistry
+// (cooler spots and mazes), boiling convection cells at two sizes, a few
+// sunspots, and bright faculae near the edge. The edge itself shows cooler,
+// higher gas, so it's darker and redder (limb darkening), as real stars are.
+// Everything is far brighter than a screen can show: the bloom and the tone
+// mapping that follow burn the middle to white and spill its light round it.
+// Off the disc: a thin glowing rim, flames licking off the edge (taller where
+// an eruption is building), corona streamers flowing slowly outward, and dust.
 const STAR = NOISE + OCT + /* wgsl */ `
 struct U {
   camPos: vec3f, aspect: f32,
@@ -434,7 +447,7 @@ struct U {
   c1: vec3f, corona: f32,
   c2: vec3f, dust: f32,
   c3: vec3f, time: f32,
-  rho0: f32, pxH: f32, bound: f32, chemRelief: f32,
+  rho0: f32, pxH: f32, seed: f32, dist: f32,
 }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var texS: texture_2d<f32>;
@@ -449,9 +462,66 @@ fn local(d: vec3f) -> vec3f {
 }
 fn texAt(d: vec3f) -> vec4f { return textureSampleLevel(texS, samp, octUV(local(d)), 0.0); }
 fn chemAt(d: vec3f) -> f32 { return textureSampleLevel(chemT, samp, octUV(local(d)), 0.0).y; }
-fn radius(d: vec3f) -> f32 { return 1.0 + u.relief * texAt(d).x + u.chemRelief * chemAt(d); }
 
-fn hash2(p: vec2i) -> vec3f { return pcg3(vec3i(p, 77)) * 0.5 + 0.5; }
+// Convection cells: how far to the nearest cell centre and the next
+// (Worley), the centres wandering so the cells boil.
+fn cells(p: vec3f, t: f32) -> vec2f {
+  let ip = floor(p);
+  let fp = p - ip;
+  var f1 = 9.0;
+  var f2 = 9.0;
+  for (var z = -1; z <= 1; z++) {
+    for (var y = -1; y <= 1; y++) {
+      for (var x = -1; x <= 1; x++) {
+        let c = vec3f(f32(x), f32(y), f32(z));
+        let h = pcg3(vec3i(ip + c)) * 0.5 + 0.5;
+        let o = 0.5 + 0.4 * sin(t * (0.5 + h.yzx) + h * 6.2831853);
+        let dv = c + o - fp;
+        let dd = dot(dv, dv);
+        if (dd < f1) { f2 = f1; f1 = dd; } else if (dd < f2) { f2 = dd; }
+      }
+    }
+  }
+  return sqrt(vec2f(f1, f2));
+}
+// Bright rounded cells with soft dark lanes between: 0 in a lane, near 1 in
+// a cell's middle. The lookup is warped a little so no edge runs straight.
+fn granules(p: vec3f, t: f32) -> f32 {
+  let w = vec3f(noise3(p * 0.9), noise3(p * 0.9 + 13.1), noise3(p * 0.9 + 27.7));
+  let f = cells(p + w * 0.6, t);
+  return smoothstep(0.0, 0.6, f.y - f.x) * (0.6 + 0.4 * (1.0 - smoothstep(0.0, 1.1, f.x)));
+}
+
+// Sunspots, few and round: how far from the nearest spot's middle, in spot
+// radii (under 1 is inside it). A coarse grid round the star; only a few of
+// its cells near the surface hold a spot, set onto the surface itself.
+fn spots(L: vec3f, off: vec3f) -> f32 {
+  let p = L * 5.0 + off;
+  let ip = floor(p);
+  var best = 9.0;
+  for (var z = -1; z <= 1; z++) {
+    for (var y = -1; y <= 1; y++) {
+      for (var x = -1; x <= 1; x++) {
+        let c = ip + vec3f(f32(x), f32(y), f32(z));
+        let h = pcg3(vec3i(c) + vec3i(31, 17, 5)) * 0.5 + 0.5;
+        let at = (c + vec3f(0.5) + (h.yzx - 0.5) * 0.8 - off) / 5.0;
+        if (h.x < 0.96 || abs(length(at) - 1.0) > 0.12) { continue; }
+        best = min(best, length(L - normalize(at)) / (0.03 + 0.04 * h.z));
+      }
+    }
+  }
+  return best;
+}
+
+// Noise streaming outward from the star: read along each direction at a
+// distance that slides with time, as two copies half a cycle apart, faded
+// across so it never jumps back.
+fn outward(dir: vec3f, a: f32, b: f32, h: f32, t: f32, rise: f32, oct: i32) -> f32 {
+  let ph = fract(t);
+  let n1 = fbm3(dir * (a + b * h - rise * ph) + vec3f(1.7, 9.2, 3.1), oct);
+  let n2 = fbm3(dir * (a + b * h - rise * fract(ph + 0.5)) + vec3f(8.3, 2.8, 5.6), oct);
+  return mix(n1, n2, abs(2.0 * ph - 1.0));
+}
 
 // Specks streaming out from the star on a log-polar grid, so they thin
 // out as they go; each a pixel or so across.
@@ -476,67 +546,83 @@ fn dust(q: vec2f, cells: f32, speed: f32, salt: i32) -> f32 {
   let q = vec2f((uv.x - 0.5) * u.aspect, 0.5 - uv.y);
   let ro = u.camPos;
   let rd = normalize(u.fw * u.focal + u.rt * q.x + u.up * q.y);
-  var col = vec3f(0.0);
-  var hit = false;
-  // Into the sphere the surface can reach, then step to it.
+  // Where the ray passes closest to the star's centre, how far out that is
+  // (in star radii), and one pixel's width there.
   let b = dot(ro, rd);
-  let disc = b * b - (dot(ro, ro) - u.bound * u.bound);
-  var t = 0.0;
-  if (disc > 0.0) {
-    t = max(-b - sqrt(disc), 0.0);
-    let tEnd = -b + sqrt(disc);
-    for (var i = 0; i < 72; i++) {
-      let p = ro + rd * t;
-      let r = length(p);
-      let h = r - radius(p / r);
-      if (h < 0.0004) { hit = true; break; }
-      t += h * 0.6;
-      if (t > tEnd) { break; }
-    }
+  let pc = ro - rd * b;
+  let r = length(pc);
+  let h = max(r - 1.0, 0.0);
+  let around = local(pc / max(r, 1e-5));
+  let px = u.dist / (u.focal * u.pxH);
+
+  // ── Off the disc (and across its very edge, where the two blend).
+  var col = vec3f(0.0);
+  if (b < 0.0 && r > 1.0 - px) {
+    // A thin rim of glowing gas hugging the edge.
+    col += ramp(0.5) * 2.4 * exp(-h / (0.007 + px));
+    // Flames licking off the edge, taller where an eruption is building.
+    let erupt = smoothstep(0.05, 0.4, fbm3(around * 2.4 + vec3f(u.seed, 0.0, u.time * 0.02), 3));
+    let reach = mix(0.05, 0.28, erupt) * (0.4 + 0.6 * min(u.corona, 1.5));
+    // Tongues stretched outward (finer round the edge than along it), with
+    // ragged edges; hot at the base, redder toward the tips.
+    let fl = 0.5 + outward(around, 30.0, 9.0, h, u.time * 0.35, 3.0, 4);
+    let k = h / reach;
+    let flame = smoothstep(k, k + 0.12, fl) * exp(-k * 0.9);
+    col += ramp(mix(0.72, 0.18, clamp(k, 0.0, 1.0))) * flame * (2.0 + 4.0 * erupt) * u.corona;
+    // The corona: streamers flowing slowly outward over a smooth glow.
+    let st = outward(around, 8.0, 1.5, log(1.0 + h), u.time * 0.035, 1.2, 3);
+    let rays = pow(clamp(0.5 + st * 1.4, 0.0, 1.0), 3.0);
+    let fall = exp(-h * 1.2) / (1.0 + h * 5.0);
+    col += ramp(0.6) * (0.35 * exp(-h * 4.0) + 1.6 * rays * fall) * u.corona;
   }
-  if (hit) {
-    let p = ro + rd * t;
-    let d = normalize(p);
-    let r = length(p);
+  // Dust streaming away, bright enough to glint.
+  let ring = clamp(u.rho0 * u.pxH * 0.5, 50.0, 420.0);
+  let sp = dust(q, ring, 0.035, 1) + dust(q, ring * 0.62, 0.055, 2) + 0.7 * dust(q, ring * 1.58, 0.025, 3);
+  col += ramp(0.75) * sp * 4.0;
+
+  // ── The disc.
+  if (r < 1.0 + px && b < 0.0) {
+    let t = -b - sqrt(max(b * b - (dot(ro, ro) - 1.0), 0.0));
+    let d = normalize(ro + rd * t);
+    let L = local(d);
+    let mu = clamp(dot(d, -rd), 0.0, 1.0);
+    let tx = texAt(d);
+    let v = chemAt(d);
+    // A little relief from the texture and the chemistry, so it has depth.
     let upv = select(vec3f(0.0, 1.0, 0.0), vec3f(1.0, 0.0, 0.0), abs(d.y) > 0.9);
     let t1 = normalize(cross(upv, d));
     let t2 = cross(d, t1);
-    let e = 0.004;
-    let ta = texAt(normalize(d + t1 * e)); let tb = texAt(normalize(d - t1 * e));
-    let tc = texAt(normalize(d + t2 * e)); let td = texAt(normalize(d - t2 * e));
-    let ca = chemAt(normalize(d + t1 * e)); let cb = chemAt(normalize(d - t1 * e));
-    let cc = chemAt(normalize(d + t2 * e)); let cd = chemAt(normalize(d - t2 * e));
-    let gT = vec2f(ta.x - tb.x, tc.x - td.x) / (2.0 * e);
-    let gC = vec2f(ca - cb, cc - cd) / (2.0 * e);
-    // The shape's own normal, and a stronger one for the light, so the
-    // chemistry reads as raised.
-    let gs = u.relief * gT + u.chemRelief * gC;
-    let n = normalize(d - (gs.x * t1 + gs.y * t2) / r);
-    let gb = u.relief * gT * 0.8 + gC * 0.06;
-    let nb = normalize(d - (gb.x * t1 + gb.y * t2) / r);
-    let tx = texAt(d);
-    let v = chemAt(d);
-    let mu = clamp(dot(n, -rd), 0.0, 1.0);
-    // How hot: the texture's highs burn brightest, the chemistry's
-    // stripes run cooler, and the limb is cooler still.
-    var heat = 0.78 + 0.75 * tx.x + 0.08 * (tx.y - 0.5);
-    heat -= u.chem * smoothstep(0.08, 0.3, v) * 0.32;
-    heat += 0.05 * noise3(local(d) * 90.0);
-    heat *= mix(0.5, 1.0, pow(mu, 0.5));
-    let L = normalize(vec3f(-0.5, 0.6, 0.62));
-    let lit = 0.8 + 0.35 * dot(nb, normalize(L - rd * 0.5));
-    col = ramp(heat) * (0.2 + 2.2 * heat * heat) * lit;
-  } else {
-    // The corona: brightest hugging the limb, a long faint halo beyond.
-    let bb = length(ro - rd * dot(ro, rd));
-    if (dot(ro, rd) < 0.0) {
-      let x = max(bb - 1.0, 0.0);
-      col = (ramp(0.55) * exp(-x * 12.0) * 0.8 + ramp(0.4) * exp(-x * 4.0) * 0.06) * u.corona;
-    }
-    // As many specks round the star as suits its size on screen.
-    let ring = clamp(u.rho0 * u.pxH * 0.5, 50.0, 420.0);
-    let sp = dust(q, ring, 0.035, 1) + dust(q, ring * 0.62, 0.055, 2) + 0.7 * dust(q, ring * 1.58, 0.025, 3);
-    col += ramp(0.75) * sp * 1.6;
+    let e = 0.006;
+    let gT = vec2f(texAt(normalize(d + t1 * e)).x - texAt(normalize(d - t1 * e)).x,
+                   texAt(normalize(d + t2 * e)).x - texAt(normalize(d - t2 * e)).x) / (2.0 * e);
+    let gC = vec2f(chemAt(normalize(d + t1 * e)) - chemAt(normalize(d - t1 * e)),
+                   chemAt(normalize(d + t2 * e)) - chemAt(normalize(d - t2 * e))) / (2.0 * e);
+    let gs = (gT * 0.08 + gC * 0.025) * u.relief * 2.0;
+    let nb = normalize(d - gs.x * t1 - gs.y * t2);
+    let emboss = 1.0 + 0.7 * dot(nb - d, normalize(vec3f(-0.5, 0.6, 0.62) - rd * 0.3));
+    // Convection cells, faded out before they're too small to draw cleanly.
+    let foot = px / max(mu, 0.15);
+    let fine = smoothstep(1.2, 3.0, (1.0 / 46.0) / foot);
+    let broad = smoothstep(1.2, 3.0, (1.0 / 11.0) / foot);
+    var gran = mix(1.0, 0.8 + 0.2 * granules(L * 46.0, u.time * 0.7), fine * 0.9);
+    gran *= mix(1.0, 0.86 + 0.14 * granules(L * 11.0 + 7.3, u.time * 0.15), broad);
+    // A few sunspots: a dark middle (the umbra) in a dimmer, streaky ring.
+    let sd = spots(L, vec3f(u.seed * 1.7, 0.0, 0.0));
+    let pen = (1.0 - smoothstep(0.85, 1.0, sd)) * (0.8 + 0.2 * noise3(L * 140.0));
+    let umb = 1.0 - smoothstep(0.38, 0.5, sd);
+    // How hot.
+    var heat = 0.86 + 0.55 * tx.x;
+    heat -= u.chem * smoothstep(0.08, 0.3, v) * 0.16;
+    heat *= mix(gran, 1.0, pen);
+    heat *= 1.0 - 0.36 * pen - 0.3 * umb;
+    // Faculae: active regions shine brighter toward the edge.
+    heat += 0.25 * smoothstep(0.0, 0.3, tx.x) * pow(1.0 - mu, 2.0) * (1.0 - pen);
+    // Limb darkening, and redder toward the edge.
+    let m = 1.0 - mu;
+    let limb = 1.0 - 0.55 * m - 0.2 * m * m;
+    let hc = heat * mix(0.7, 1.0, sqrt(mu));
+    let disc = ramp(hc) * (0.35 + 7.0 * pow(max(hc, 0.0), 4.0)) * limb * emboss;
+    col = mix(col, disc, smoothstep(1.0 + px, 1.0 - px, r));
   }
   return vec4f(col, 1.0);
 }
@@ -600,6 +686,103 @@ fn hash(n: u32) -> f32 {
 }
 `;
 
+// ── The star's bloom: its light spread at six sizes at once, each half the
+// last, then added back up the chain, so it glows close in and far out (the
+// way physically based bloom does it). Then AgX tone mapping, so light far
+// past white rolls off and pales toward white instead of clipping, the way
+// film and eyes see something blinding.
+const BLOOM_DOWN = /* wgsl */ `
+struct P { texel: vec2f, threshold: f32, knee: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+fn tap(uv: vec2f, x: f32, y: f32) -> vec3f { return textureSampleLevel(src, samp, uv + vec2f(x, y) * p.texel, 0.0).rgb; }
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  // Thirteen taps in overlapping boxes (Jimenez, 2014): a wide, smooth halving.
+  let a = tap(uv, -2.0, 2.0);
+  let b = tap(uv, 0.0, 2.0);
+  let c = tap(uv, 2.0, 2.0);
+  let d = tap(uv, -2.0, 0.0);
+  let e = tap(uv, 0.0, 0.0);
+  let f = tap(uv, 2.0, 0.0);
+  let g = tap(uv, -2.0, -2.0);
+  let h = tap(uv, 0.0, -2.0);
+  let i = tap(uv, 2.0, -2.0);
+  let j = tap(uv, -1.0, 1.0);
+  let k = tap(uv, 1.0, 1.0);
+  let l = tap(uv, -1.0, -1.0);
+  let m = tap(uv, 1.0, -1.0);
+  var col = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
+  if (p.threshold >= 0.0) {
+    // The first halving keeps only light past what the screen can show,
+    // eased in.
+    let br = max(col.r, max(col.g, col.b));
+    var soft = clamp(br - p.threshold + p.knee, 0.0, 2.0 * p.knee);
+    soft = soft * soft / (4.0 * p.knee + 1e-4);
+    col *= max(soft, br - p.threshold) / max(br, 1e-4);
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+const BLOOM_UP = /* wgsl */ `
+struct P { texel: vec2f, radius: f32, pad: f32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var src: texture_2d<f32>;
+@group(0) @binding(2) var samp: sampler;
+fn tap(uv: vec2f, x: f32, y: f32) -> vec3f { return textureSampleLevel(src, samp, uv + vec2f(x, y) * p.texel * p.radius, 0.0).rgb; }
+@fragment fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
+  // A 3×3 tent from the level below, added onto this one.
+  let col = tap(uv, 0.0, 0.0) * 4.0
+    + (tap(uv, 0.0, 1.0) + tap(uv, -1.0, 0.0) + tap(uv, 1.0, 0.0) + tap(uv, 0.0, -1.0)) * 2.0
+    + (tap(uv, -1.0, 1.0) + tap(uv, 1.0, 1.0) + tap(uv, -1.0, -1.0) + tap(uv, 1.0, -1.0));
+  return vec4f(col / 16.0, 1.0);
+}
+`;
+
+const STARFIN = /* wgsl */ `
+struct F { bloom: f32, exposure: f32, time: f32, aspect: f32 }
+@group(0) @binding(0) var<uniform> f: F;
+@group(0) @binding(1) var scene: texture_2d<f32>;
+@group(0) @binding(2) var glow: texture_2d<f32>;
+@group(0) @binding(3) var samp: sampler;
+fn hash(n: u32) -> f32 {
+  var x = n * 747796405u + 2891336453u;
+  x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+  x = (x >> 22u) ^ x;
+  return f32(x >> 8u) / 16777216.0;
+}
+// AgX (Troy Sobotka's, in Benjamin Wrensch's fit), with a little more punch
+// than its base look. Its output is already display-encoded.
+fn agx(c: vec3f) -> vec3f {
+  let inset = mat3x3f(0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+                      0.0784335999999992, 0.878468636469772, 0.0784336,
+                      0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+  let outset = mat3x3f(1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+                       -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+                       -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
+  let lo = -12.47393;
+  let hi = 4.026069;
+  var v = (clamp(log2(max(inset * c, vec3f(1e-10))), vec3f(lo), vec3f(hi)) - lo) / (hi - lo);
+  let v2 = v * v;
+  let v4 = v2 * v2;
+  v = 15.5 * v4 * v2 - 40.14 * v4 * v + 31.96 * v4 - 6.868 * v2 * v + 0.4298 * v2 + 0.1191 * v - 0.00232;
+  let luma = dot(v, vec3f(0.2126, 0.7152, 0.0722));
+  v = pow(max(v, vec3f(0.0)), vec3f(1.25));
+  v = luma + 1.35 * (v - luma);
+  return outset * v;
+}
+@fragment fn fs_main(@location(0) uv: vec2f, @builtin(position) pos: vec4f) -> @location(0) vec4f {
+  var col = textureSampleLevel(scene, samp, uv, 0.0).rgb + textureSampleLevel(glow, samp, uv, 0.0).rgb * f.bloom;
+  col *= f.exposure;
+  let c = (uv - 0.5) * vec2f(f.aspect, 1.0);
+  col *= 1.0 - 0.25 * smoothstep(0.5, 1.4, length(c));
+  var o = clamp(agx(col), vec3f(0.0), vec3f(1.0));
+  o += (hash(u32(pos.x) + u32(pos.y) * 8191u + u32(f.time * 60.0) * 131071u) - 0.5) * 0.015;
+  return vec4f(o, 1.0);
+}
+`;
+
 // ═══════════════════════════════════════
 // PALETTES: shadow, low, high, white-hot
 // ═══════════════════════════════════════
@@ -610,15 +793,19 @@ const PALETTES = {
   blue:   ['#01061a', '#1b3c9e', '#62a6ff', '#eaf5ff'],
   ember:  ['#0e0000', '#6e0c00', '#e5531a', '#ffd9a0'],
   violet: ['#070214', '#4a1a8a', '#b26cff', '#f6eaff'],
+  nebula: ['#050a26', '#3d1f8f', '#ff5aa8', '#dffaff'],
+  patina: ['#041a17', '#146b5e', '#e8834a', '#fff0e0'],
+  rose:   ['#160409', '#6b1238', '#ff7aa8', '#fff1f6'],
+  gold:   ['#0b0703', '#5a3d12', '#e3b25a', '#fff6dc'],
 };
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('canvas');
-const IDS = ['flow', 'relief', 'glow', 'chem', 'pattern', 'dust'];
+const IDS = ['flow', 'relief', 'glow', 'chem', 'pattern', 'corona', 'dust'];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-// Each view keeps its own palette: the texture starts grey, the star a sun.
-const viewPalette = { texture: 'mono', star: 'sun' };
+// Each view keeps its own palette: the smoke starts in Nebula, the star a sun.
+const viewPalette = { texture: 'nebula', star: 'sun' };
 const p = {};
 function readControls() {
   p.view = $('view').value;
@@ -629,6 +816,7 @@ function readControls() {
   p.chem = +$('chem').value / 100;
   p.pattern = +$('pattern').value / 100;
   p.dust = +$('dust').value / 100;
+  p.corona = +$('corona').value / 100 * 1.5;
   p.pal = PALETTES[$('palette').value].map(hex);
   for (const id of IDS) $(id + 'Val').textContent = $(id).value;
 }
@@ -640,7 +828,7 @@ const FOCAL = 1.9;
 const newSeed = () => [Math.random() * 100, Math.random() * 100, Math.random() * 100];
 let seed = newSeed();
 let t = 0, flowT = 0, spin = 0;
-let yaw = 0.4, pitch = 0.25, dist = 4.4, yawGoal = yaw, pitchGoal = pitch, distGoal = dist;
+let yaw = 0.4, pitch = 0.25, dist = 5.6, yawGoal = yaw, pitchGoal = pitch, distGoal = dist;
 let zoom = 1, zoomGoal = 1, center = [0, 0];
 let idleAt = -1e9, tapDir = null, tapping = false, warm = 0;
 const tl = tilt();
@@ -682,6 +870,10 @@ const fieldT = target(gpu, { size: fieldSize(), format: 'rgba16float' });
 const sceneT = target(gpu, { size: full(), format: 'rgba16float' });
 const glowA = target(gpu, { size: quarter(), format: 'rgba16float' });
 const glowB = target(gpu, { size: quarter(), format: 'rgba16float' });
+// The star's bloom: six levels, each half the size of the last.
+const LEVELS = 6;
+const bloomSize = (i) => [Math.max(1, Math.round(surf.size[0] / 2 ** (i + 1))), Math.max(1, Math.round(surf.size[1] / 2 ** (i + 1)))];
+const bloomT = Array.from({ length: LEVELS }, (_, i) => target(gpu, { size: bloomSize(i), format: 'rgba16float' }));
 const texS = target(gpu, { size: [TEX, TEX], format: 'rgba16float' });
 const chemA = target(gpu, { size: [TEX, TEX], format: chemFormat });
 const chemB = target(gpu, { size: [TEX, TEX], format: chemFormat });
@@ -700,10 +892,19 @@ const chemSet = { c: { tap: [0, 0, 1, 1], ...RECIPE, bias: 0, tapOn: 0, pad: 0 }
 const chemAB = effect(gpu, CHEM, { set: { ...chemSet, src: chemA } });
 const chemBA = effect(gpu, CHEM, { set: { ...chemSet, src: chemB } });
 const starE = effect(gpu, STAR, { set: { u: {
-  camPos: [0, 0, 3], aspect: 1, fw: [0, 0, -1], focal: FOCAL, rt: [1, 0, 0], relief: 0.1, up: [0, 1, 0], chem: p.chem,
-  c0: p.pal[0], spin: 0, c1: p.pal[1], corona: 1, c2: p.pal[2], dust: p.dust, c3: p.pal[3], time: 0,
-  rho0: 0.5, pxH: 600, bound: 1.2, chemRelief: 0.012,
+  camPos: [0, 0, 3], aspect: 1, fw: [0, 0, -1], focal: FOCAL, rt: [1, 0, 0], relief: p.relief, up: [0, 1, 0], chem: p.chem,
+  c0: p.pal[0], spin: 0, c1: p.pal[1], corona: p.corona, c2: p.pal[2], dust: p.dust, c3: p.pal[3], time: 0,
+  rho0: 0.5, pxH: 600, seed: seed[0], dist: 5,
 }, texS, chemT: chemA, samp: linear } });
+// Down the chain: the first step from the scene keeps only what's past white.
+const bloomDown = bloomT.map((tg, i) => effect(gpu, BLOOM_DOWN, { set: {
+  p: { texel: [0.001, 0.001], threshold: i ? -1 : 1, knee: 0.5 }, src: i ? bloomT[i - 1] : sceneT, samp: linear,
+} }));
+// Back up: each level adds the one below onto itself.
+const bloomUp = bloomT.slice(1).map((tg) => effect(gpu, BLOOM_UP, { blend: 'additive', set: {
+  p: { texel: [0.01, 0.01], radius: 1, pad: 0 }, src: tg, samp: linear,
+} }));
+const starFinE = effect(gpu, STARFIN, { set: { f: { bloom: 0.3, exposure: 1, time: 0, aspect: 1 }, scene: sceneT, glow: bloomT[0], samp: linear } });
 const downE = effect(gpu, DOWN, { set: { p: { texel: [0.01, 0.01], threshold: 0.6 }, src: sceneT, samp: linear } });
 const blurH = effect(gpu, BLUR, { set: { p: { dir: [0.01, 0] }, src: glowB, samp: linear } });
 const blurV = effect(gpu, BLUR, { set: { p: { dir: [0, 0.01] }, src: glowA, samp: linear } });
@@ -720,6 +921,13 @@ surf.onResize(({ width, height }) => {
   blurH.set({ p: { dir: [1 / glowA.size[0], 0] }, src: glowB });
   blurV.set({ p: { dir: [0, 1 / glowA.size[1]] }, src: glowA });
   finE.set({ f: { aspect }, scene: sceneT, glow: glowB });
+  bloomT.forEach((tg, i) => tg.resize(bloomSize(i)));
+  bloomDown.forEach((e, i) => {
+    const from = i ? bloomT[i - 1] : sceneT;
+    e.set({ p: { texel: [1 / from.size[0], 1 / from.size[1]] }, src: from });
+  });
+  bloomUp.forEach((e, i) => e.set({ p: { texel: [1 / bloomT[i + 1].size[0], 1 / bloomT[i + 1].size[1]] }, src: bloomT[i + 1] }));
+  starFinE.set({ f: { aspect }, scene: sceneT, glow: bloomT[0] });
   starE.set({ u: { aspect, pxH: height } });
   applyControls();
 });
@@ -730,10 +938,10 @@ function applyControls() {
   readControls();
   const c = p.pal;
   flatE.set({ u: { c0: c[0], c1: c[1], c2: c[2], c3: c[3], relief: 2 + 14 * p.relief, sheen: 0.12 * p.relief } });
-  starE.set({ u: { c0: c[0], c1: c[1], c2: c[2], c3: c[3], relief: 0.01 + 0.1 * p.relief, chem: p.chem, dust: p.dust * 0.9,
-    chemRelief: 0.015 * p.chem, bound: 1 + (0.01 + 0.1 * p.relief) * 0.75 + 0.015 * p.chem + 0.01 } });
+  starE.set({ u: { c0: c[0], c1: c[1], c2: c[2], c3: c[3], relief: p.relief, chem: p.chem, dust: p.dust * 0.9, corona: p.corona } });
+  starFinE.set({ f: { bloom: 0.05 + 0.5 * p.glow } });
   for (const e of [chemAB, chemBA]) e.set({ c: { bias: (p.pattern - 0.5) * 0.5 } });
-  finE.set({ f: { glow: (0.3 + 1.6 * p.glow) * (p.view === 'star' ? 0.35 : 1) } });
+  finE.set({ f: { glow: 0.3 + 1.6 * p.glow } });
   $('panel').classList.toggle('texture', p.view === 'texture');
   $('hintPill').textContent = p.view === 'star'
     ? 'Drag to turn · Pinch or scroll to zoom · Tap the star to feed it · H controls'
@@ -827,6 +1035,7 @@ function newWorld() {
   fieldE.set({ w: { seed: seed[0] } });
   texE.set({ s: { seed } });
   seedE.set({ d: { seed } });
+  starE.set({ u: { seed: seed[0] } });
   texDirty = true;
   reseed = true;
   if (!playing) frame(gpu, render);
@@ -855,8 +1064,9 @@ function step(dt) {
   fieldE.set({ w: { span: s, center, time: flowT, smR: 0.18 * s[1], smudge: smudges } });
   texE.set({ s: { time: flowT * 0.8 } });
   camera();
-  starE.set({ u: { spin, time: t } });
+  starE.set({ u: { spin, time: t % 1000 } });
   finE.set({ f: { time: t % 1000 } });
+  starFinE.set({ f: { time: t % 1000 } });
 }
 
 function camera() {
@@ -868,7 +1078,11 @@ function camera() {
   const pos = [sy * cp * d, sp * d, cy * cp * d];
   const fw = [-sy * cp, -sp, -cy * cp], rt = [cy, 0, -sy], up = [-sy * sp, cp, -cy * sp];
   cam = { pos, fw, rt, up };
-  starE.set({ u: { camPos: pos, fw, rt, up, rho0: FOCAL / Math.sqrt(d * d - 1) } });
+  const rho0 = FOCAL / Math.sqrt(d * d - 1);
+  starE.set({ u: { camPos: pos, fw, rt, up, rho0, dist: d } });
+  // The nearer the star, the more of the screen it fills: stop down a
+  // little, as a camera would, so its face doesn't burn out.
+  starFinE.set({ f: { exposure: 1 / (0.6 + 0.9 * rho0) } });
 }
 
 function render(f) {
@@ -899,6 +1113,11 @@ function render(f) {
       f.pass(chemA, chemBA);
     }
     f.pass(sceneT, starE);
+    // The bloom, down the chain and back up, then the tone mapping.
+    for (let i = 0; i < LEVELS; i++) f.pass(bloomT[i], bloomDown[i]);
+    for (let i = LEVELS - 2; i >= 0; i--) f.pass({ target: bloomT[i], clear: false }, bloomUp[i]);
+    f.pass(surf, starFinE);
+    return;
   }
   f.pass(glowB, downE);
   f.pass(glowA, blurH);
