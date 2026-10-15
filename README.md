@@ -2,7 +2,7 @@
 
 Browser-based generative art: fractals, Perlin noise, swarm intelligence, reaction-diffusion, emergent systems, and WebGPU light. No build step: every experiment is a single HTML file, and the WebGPU ones import a prebuilt [vgpu](https://github.com/vercel-labs/vgpu) bundle from `lib/vgpu.js` (its first line records how it was built).
 
-**[Live →](https://chriscooning.github.io/visual-experiments/)**
+**[Live →](https://chriscooning.com/visual-experiments/)**
 
 ## Experiments
 

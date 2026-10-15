@@ -4,7 +4,7 @@
 
 Browser-based generative art experiments. All self-contained single HTML files, no dependencies, no build step. Dark theme (#0a0a0c), Space Mono + Outfit fonts, fullscreen canvas with floating glassmorphism control panel (H key toggle), hint pill, FPS counter, Play/Pause + Generate + Save PNG buttons, auto-play on load.
 
-Live at: `https://chriscooning.github.io/visual-experiments/`
+Live at: `https://chriscooning.com/visual-experiments/`
 
 ---
 

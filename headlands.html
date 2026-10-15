@@ -60,6 +60,7 @@
   .nogpu.on{display:flex}
 </style>
 <script src="controls.js" defer></script>
+<link rel="canonical" href="https://chriscooning.com/visual-experiments/headlands.html">
 </head>
 <body>
 <div class="vx-spin" id="vxSpin" role="img" aria-label="Loading"><span class="p"></span><span class="t"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><span></span></span></div>
@@ -1363,6 +1364,10 @@ document.addEventListener('keydown', (e) => {
 
 // The viewer may already have pressed Play while WebGPU was starting up.
 if (!playing) togglePlay();
+</script>
+<!-- GoatCounter: cookie-free page counts (chriscooning.goatcounter.com). Counts inside the experiments viewer's frames too; skips automated browsers. -->
+<script>
+if(!navigator.webdriver){window.goatcounter={allow_frame:true,path:function(){return location.pathname}};var gc=document.createElement('script');gc.async=true;gc.dataset.goatcounter='https://chriscooning.goatcounter.com/count';gc.src='//gc.zgo.at/count.js';document.body.appendChild(gc);}
 </script>
 </body>
 </html>
