@@ -52,7 +52,7 @@
     </select>
   </div>
   <div class="control-group"><label>Speed <span class="val" id="speedVal">30</span></label><input type="range" id="speed" min="0" max="100" value="30"></div>
-  <div class="control-group"><label>Strands <span class="val" id="scaleVal">60</span></label><input type="range" id="scale" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Strands <span class="val" id="scaleVal">50</span></label><input type="range" id="scale" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Thickness <span class="val" id="thickVal">50</span></label><input type="range" id="thick" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Refraction <span class="val" id="refrVal">55</span></label><input type="range" id="refr" min="0" max="100" value="55"></div>
   <div class="control-group"><label>Chroma <span class="val" id="chromaVal">55</span></label><input type="range" id="chroma" min="0" max="100" value="55"></div>
@@ -156,16 +156,37 @@ float field(vec2 p,float s,float t,float k){
 // the field crosses zero and is nearly flat elsewhere, so the fold lines are
 // the zero lines: curves that loop, merge and split as the field evolves.
 // Returns the sheet's slope (x, y) and how far into a fold this is (z).
-vec3 fold(vec2 p,float s,float t,float k,float w){
+struct Fold{vec2 slope;float edge;float band;vec3 caustic;};
+// The shape of a fold across its line: a broad bend (weight .7) and inside
+// it a narrow, sharp step (.3), the glass's edge. Its first derivative is
+// the slope; its second is how the slope turns, which is what gathers or
+// spreads the light passing through.
+float step1(float f,float w,float wn){
+  float u=clamp((f+w)/(2.*w),0.,1.),un=clamp((f+wn)/(2.*wn),0.,1.);
+  return 6.*u*(1.-u)/(2.*w)*.7+6.*un*(1.-un)/(2.*wn)*.3;
+}
+float step2(float f,float w,float wn){
+  float u=(f+w)/(2.*w),un=(f+wn)/(2.*wn);
+  float a=u>0.&&u<1.?6.*(1.-2.*u)/(4.*w*w):0.,b=un>0.&&un<1.?6.*(1.-2.*un)/(4.*wn*wn):0.;
+  return a*.7+b*.3;
+}
+Fold fold(vec2 p,float s,float t,float k,float w){
   float e=.0015;
   float f=field(p,s,t,k);
   vec2 g=vec2(field(p+vec2(e,0.),s,t,k)-f,field(p+vec2(0.,e),s,t,k)-f)/e;
-  // A broad bend, and inside it a narrow, sharp step: the glass's edge.
-  float u=clamp((f+w)/(2.*w),0.,1.);
   float wn=w*.16;
-  float un=clamp((f+wn)/(2.*wn),0.,1.);
-  float ds=6.*u*(1.-u)/(2.*w)*.7+6.*un*(1.-un)/(2.*wn)*.3;
-  return vec3(g*(ds+.12),4.*un*(1.-un));
+  Fold o;
+  o.slope=g*(step1(f,w,wn)+.12);
+  float un=clamp((f+wn)/(2.*wn),0.,1.),u=clamp((f+w)/(2.*w),0.,1.);
+  o.edge=4.*un*(1.-un);
+  o.band=4.*u*(1.-u);
+  // Caustics: light through the fold is gathered on one side of its line
+  // and spread on the other, by how sharply the slope turns there. Each
+  // wavelength bends a little differently, so its line lands a little
+  // apart: the bright lines come out edged with colour.
+  float g2=dot(g,g),dc=uChroma*wn*.9;
+  o.caustic=vec3(step2(f+dc,w,wn),step2(f,w,wn),step2(f-dc,w,wn))*g2;
+  return o;
 }
 vec3 spectral(float w){
   return vec3(exp(-pow((w-.08)/.26,2.)),exp(-pow((w-.5)/.22,2.)),exp(-pow((w-.92)/.26,2.)));
@@ -180,12 +201,14 @@ void main(){
   float s=.45+1.3*uScale;
   float w=.2+.5*uThick;
   // Two layers of folds, broad and fine; the fine lie over the broad.
-  vec3 A=fold(p,s,t,0.,w);
-  vec3 B=fold(p,s*1.35,t*1.15,1.,w*.85);
-  vec3 C=fold(p,s*2.2,t*1.3,2.,w*.45);
-  vec2 slope=(A.xy*.85+B.xy*.65+C.xy*.3)*.11;
-  float top=max(B.z,C.z*.7);
-  float tz=max(A.z,top);
+  Fold A=fold(p,s,t,0.,w);
+  Fold B=fold(p,s*1.35,t*1.15,1.,w*.85);
+  Fold C=fold(p,s*2.2,t*1.3,2.,w*.45);
+  vec2 slope=(A.slope*.85+B.slope*.65+C.slope*.3)*.11;
+  float top=max(B.edge,C.edge*.7);
+  float tz=max(A.edge,top);
+  // How much glass the light passes through here: thickest in the bands.
+  float thick=max(A.band,max(B.band*.8,C.band*.5));
   vec3 N=normalize(vec3(-slope,1.));
 
   // Through the glass, at seven wavelengths.
@@ -194,10 +217,17 @@ void main(){
   for(int k=0;k<7;k++){
     float w=float(k)/6.,sc=1.+uChroma*.8*(w-.5);
     vec3 sp=spectral(w);
-    acc+=base(p-N.xy*refr*sc,t)*sp;wsum+=sp;
+    acc+=base(p-N.xy*refr*sc*(1.+.9*thick),t)*sp;wsum+=sp;
   }
   vec3 col=acc/wsum;
   col*=mix(vec3(1.),vec3(.9,.95,.97),tz*.3);
+  // The light that came through: gathered into bright lines where folds
+  // focus it, thinned beside them, and a soft glow carried inside the
+  // thick glass.
+  vec3 cau=(A.caustic*.85+B.caustic*.6+C.caustic*.15)*(.0016+.004*uRefr);
+  vec3 lit=clamp(vec3(1.)-cau,vec3(.35),vec3(4.));
+  col*=lit;
+  col+=mix(col,vec3(.9,.95,1.),.35)*thick*.13;
   // Steep glass mirrors the room: silver above, dark below; the steepest
   // sides go nearly black.
   float steep=1.-N.z;
@@ -207,7 +237,7 @@ void main(){
   col*=mix(1.,.45,smoothstep(.7,.92,steep));
   // Each strand's two edges: a hairline of light just inside, a dark line
   // just outside it, as the glass turns away.
-  float edge=max(max(A.z*A.z*(1.-.5*top),B.z*B.z),C.z*C.z*.6)*smoothstep(.2,.6,steep);
+  float edge=max(max(A.edge*A.edge*(1.-.5*top),B.edge*B.edge),C.edge*C.edge*.6)*smoothstep(.2,.6,steep);
   col=mix(col,vec3(.9,.93,.97),edge*.55);
   // Two lights: a sharp key up and to the left, a softer fill to the right.
   col+=vec3(1.)*pow(max(dot(rv,normalize(vec3(-.35,-.45,.82))),0.),110.)*1.8;
