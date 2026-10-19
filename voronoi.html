@@ -56,7 +56,8 @@
   </div>
   <div class="control-group"><label>Style</label>
     <select id="drawMode">
-      <option value="soap" selected>Soap Bubbles</option>
+      <option value="glass" selected>Liquid Glass</option>
+      <option value="soap">Soap Bubbles</option>
       <option value="oil">Oil Slick</option>
       <option value="cells">Cells</option>
     </select>
@@ -70,6 +71,7 @@
   <div class="control-group"><label>Size Variety <span class="val" id="varietyVal">60</span></label><input type="range" id="variety" min="0" max="100" value="60"></div>
   <div class="control-group"><label>Roundness <span class="val" id="roundVal">50</span></label><input type="range" id="round" min="0" max="100" value="50"></div>
   <div class="control-group"><label>Film Flow <span class="val" id="flowVal">12</span></label><input type="range" id="flow" min="0" max="100" value="12"></div>
+  <div class="control-group"><label>Chroma <span class="val" id="chromaVal">60</span></label><input type="range" id="chroma" min="0" max="100" value="60"></div>
   <div class="control-group"><label>Edge Width <span class="val" id="edgeWVal">1.0</span></label><input type="range" id="edgeW" min="5" max="40" value="10"></div>
   <div class="btn-row">
     <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
@@ -285,9 +287,9 @@ uniform sampler2D uSeeds;   // x, y, phase, size   (1024 per row)
 uniform sampler2D uGrid;    // start, count        (gw × gh)
 uniform vec2 uRes;uniform float uDpr;
 uniform float uG;uniform ivec2 uGridSize;
-uniform float uTime,uWobble,uRound,uEdge;
+uniform float uTime,uWobble,uRound,uEdge,uChroma;
 const float WK=float(${WK});
-uniform int uMode;          // 0 soap, 1 oil, 2 cells
+uniform int uMode;          // 0 soap, 1 oil, 2 cells, 3 liquid glass
 uniform int uFilm;          // 1: true thin-film colour, 0: the cosine palette
 uniform vec3 uPa,uPb,uPc,uPd;
 out vec4 outColor;
@@ -341,6 +343,33 @@ vec3 env(vec3 r){
   return c;
 }
 
+// The gradient the liquid glass looks through: soft, slow pools of saturated
+// colour (magenta, blue, teal-green, orange) with blurred silver spheres
+// floating in it, each ringed dark at its edge. Nothing in it is sharp; the
+// glass brings all the detail.
+vec3 glassRamp(float h){
+  vec3 c[6]=vec3[6](vec3(.86,.1,.66),vec3(.14,.36,.86),vec3(.18,.82,.62),vec3(.74,.74,.77),vec3(1.,.42,.08),vec3(.94,.18,.32));
+  float x=fract(h)*6.;int i=int(x);float f=smoothstep(0.,1.,fract(x));
+  return pow(mix(c[i],c[(i+1)%6],f),vec3(2.2));
+}
+vec3 gradientBase(vec2 p,float t){
+  vec2 uv=p/(uRes.y/uDpr)*1.5;
+  vec2 w=vec2(vnoise(uv*1.1+vec2(t*.02,0.)),vnoise(uv*1.1+vec2(5.2,t*.017)));
+  vec2 u2=uv+w*.55;
+  float h=.5+.5*vnoise(u2*.9)+.12*vnoise(u2*2.1+7.);
+  vec3 c=(uFilm==1?glassRamp(h*1.3+t*.004):pal(h))*.85;
+  vec3 ce=cellular(u2*1.3+vec2(3.,t*.008));
+  float on=smoothstep(.62,.72,ce.z);
+  float sph=sqrt(max(0.,1.-pow(ce.x/.42,2.)));
+  vec3 g=pow(vec3(.66,.66,.7)*(.12+.88*sph),vec3(2.2))+vec3(.06)*pow(sph,8.);
+  c=mix(c,g,on*smoothstep(0.,.25,sph));
+  c*=1.-.9*on*exp(-pow((ce.x-.42)/.045,2.));
+  return c;
+}
+vec3 spectral(float w){
+  return vec3(exp(-pow((w-.08)/.26,2.)),exp(-pow((w-.5)/.22,2.)),exp(-pow((w-.92)/.26,2.)));
+}
+
 vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
 
 void main(){
@@ -367,7 +396,7 @@ void main(){
   float R=uG*.5*s1.w,ph=s1.z;
   // Pass 2: the cell's two nearest walls, and a smooth minimum over all of
   // them (with its gradient) to raise a smooth dome over the cell.
-  float wa=1e20,wb=1e20,ks=R*.22,se=0.;vec2 sg=vec2(0.);
+  float wa=1e20,wb=1e20,ks=R*(uMode==3?.5:.22),se=0.;vec2 sg=vec2(0.);
   for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
     ivec2 c=gc+ivec2(dx,dy);
     if(c.x<0||c.y<0||c.x>=uGridSize.x||c.y>=uGridSize.y)continue;
@@ -397,7 +426,57 @@ void main(){
   float aa=.8/uDpr;
   vec3 col;
 
-  if(uMode==0){
+  if(uMode==3){
+    // ── Liquid glass over a moving gradient ──
+    // The glass is one smooth surface over all the seeds: each adds a soft
+    // mound (sized by its bubble), and where mounds meet they melt into one,
+    // like metaballs. The surface stands up steeply around a level of that
+    // field, so each merged blob has a curved rim of thick glass that bends
+    // the light hardest, and stays gently curved on top. The gradient behind
+    // is seen through it, bent by the slope; seven wavelengths bend by
+    // different amounts, so every rim is fringed with colour. Steep glass
+    // mirrors the dark room, so rims read dark with sharp glints.
+    float H=0.;vec2 gH=vec2(0.);
+    for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
+      ivec2 c=gc+ivec2(dx,dy);
+      if(c.x<0||c.y<0||c.x>=uGridSize.x||c.y>=uGridSize.y)continue;
+      vec4 g=texelFetch(uGrid,c,0);int st=int(g.x),cn=int(g.y);
+      for(int k=0;k<64;k++){
+        if(k>=cn)break;
+        vec4 sb=seedAt(st+k);vec2 o=q-sb.xy;
+        float sg=uG*.5*sb.w*(.58+.36*uRound);
+        float e=exp(-dot(o,o)/(2.*sg*sg));
+        H+=e;gH-=e*o/(sg*sg);
+      }
+    }
+    float iso=.5,lo=iso-.22,hi=iso+.55;
+    float tz=clamp((H-lo)/(hi-lo),0.,1.);
+    vec2 grad=gH*(6.*tz*(1.-tz)/(hi-lo)+.4)*uG*.4;
+    vec2 fq=q/(uG*2.2)+vec2(t*.015,-t*.01);
+    float fe=.05;
+    float f0=vnoise(fq),fx=vnoise(fq+vec2(fe,0.)),fy=vnoise(fq+vec2(0.,fe));
+    grad+=uWobble*.35*vec2(fx-f0,fy-f0)/fe;
+    vec3 N=normalize(vec3(-grad,1.));
+    float refr=uG*.9;
+    vec3 acc=vec3(0.),wsum=vec3(0.);
+    for(int k=0;k<7;k++){
+      float w=float(k)/6.,sc=1.+uChroma*1.3*(w-.5);
+      vec3 sw=spectral(w);
+      acc+=gradientBase(p-N.xy*refr*sc,t)*sw;wsum+=sw;
+    }
+    col=acc/wsum;
+    // Thick glass takes a little light and a teal cast.
+    col*=mix(vec3(1.),vec3(.72,.86,.88),tz*.7);
+    float steep=1.-N.z;
+    col*=mix(1.,.15,smoothstep(.25,.62,steep));
+    vec3 rv=vec3(2.*N.z*N.xy,2.*N.z*N.z-1.);
+    col+=vec3(1.)*pow(max(dot(rv,normalize(vec3(-.35,-.45,.82))),0.),90.)*1.5;
+    col+=vec3(.95,.97,1.)*pow(max(dot(rv,normalize(vec3(.55,.3,.78))),0.),35.)*.35;
+    vec2 vg=p/vec2(uRes/uDpr)-.5;
+    col*=1.-.3*dot(vg,vg);
+    col=aces(col*1.15);
+    col+=(hash(gl_FragCoord.xy+fract(t*7.)*91.)-.5)*.02;
+  }else if(uMode==0){
     // ── Soap foam, as in a macro photograph under a softbox ──
     // Each bubble is a dome: steep at its walls, flat on top.
     float Rd=R*.8,x=clamp(ds/Rd,0.,1.),u=1.-x;
@@ -510,7 +589,7 @@ function initGL(){
   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
   const loc=gl.getAttribLocation(prog,'aPos');
   gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-  ['uSeeds','uGrid','uRes','uDpr','uG','uGridSize','uTime','uWobble','uRound','uEdge','uMode','uFilm','uPa','uPb','uPc','uPd']
+  ['uSeeds','uGrid','uRes','uDpr','uG','uGridSize','uTime','uWobble','uRound','uEdge','uChroma','uMode','uFilm','uPa','uPb','uPc','uPd']
     .forEach(n=>U[n]=gl.getUniformLocation(prog,n));
   const mk=()=>{const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
@@ -522,7 +601,7 @@ function initGL(){
 // ═══════════════════════════════════════
 // RENDER
 // ═══════════════════════════════════════
-const MODES={soap:0,oil:1,cells:2};
+const MODES={soap:0,oil:1,cells:2,glass:3};
 function render(){
   buildGrid();
   const {G,gw,gh,start,count,order}=grid,n=seeds.length;
@@ -545,6 +624,7 @@ function render(){
   gl.uniform1f(U.uWobble,+$('wobble').value/100);
   gl.uniform1f(U.uRound,+$('round').value/100);
   gl.uniform1f(U.uEdge,+$('edgeW').value/10*0.5);
+  gl.uniform1f(U.uChroma,+$('chroma').value/100);
   gl.uniform1i(U.uFilm,$('palette').value==='film'?1:0);
   gl.uniform1i(U.uMode,MODES[$('drawMode').value]??0);
   gl.viewport(0,0,canvas.width,canvas.height);
@@ -604,7 +684,7 @@ $('playPause').addEventListener('click',togglePlay);
 $('generate').addEventListener('click',()=>{
   randomizeSelect('palette');
   randomizeSelect('drawMode');
-  randomizeControls(['relax','noise','nSpeed','coarsen','variety','wobble','round','flow','edgeW']);
+  randomizeControls(['relax','noise','nSpeed','coarsen','variety','wobble','round','flow','chroma','edgeW']);
   $('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);
   perlin=new PerlinNoise((Math.random()*1e5)|0);
   time=0;
@@ -613,7 +693,7 @@ $('generate').addEventListener('click',()=>{
 });
 $('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='voronoi-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
 
-['count','relax','noise','nSpeed','coarsen','variety','wobble','round','flow'].forEach(id=>{
+['count','relax','noise','nSpeed','coarsen','variety','wobble','round','flow','chroma'].forEach(id=>{
   const el=$(id),vEl=$(id+'Val');
   el.addEventListener('input',()=>{vEl.textContent=el.value;if(!playing)render();});
 });
