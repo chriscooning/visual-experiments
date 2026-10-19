@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Liquid Glass</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Outfit:wght@300;500&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{overflow:hidden;margin:0;background:#0a0a0c;font-family:'Outfit',sans-serif;color:#e0e0e0}
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block}
+  .panel{
+    position:fixed;bottom:20px;right:20px;
+    backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:rgba(10,10,12,0.8);border:1px solid rgba(255,255,255,0.06);border-radius:12px;
+    padding:18px 16px;width:220px;max-height:calc(100vh - 40px);overflow-y:auto;
+    display:flex;flex-direction:column;gap:10px;transition:transform 0.3s ease;z-index:10;
+  }
+  .panel.hidden{transform:translateX(calc(100% + 40px))}
+  .panel::-webkit-scrollbar{width:4px}.panel::-webkit-scrollbar-track{background:transparent}.panel::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+  .control-group{display:flex;flex-direction:column;gap:3px}
+  .control-group label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:2px;text-transform:uppercase;color:#555}
+  .control-group .val{font-family:'Space Mono',monospace;font-size:9px;color:#777;float:right;letter-spacing:0}
+  input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:#222;border-radius:2px;outline:none;touch-action:none}
+  input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:pointer;border:3px solid #0a0a0c}
+  select{background:#151518;color:#ccc;border:1px solid #2a2a2f;padding:8px 10px;border-radius:6px;font-family:'Outfit',sans-serif;font-size:13px;cursor:pointer;outline:none;width:100%}
+  select:hover{border-color:#444}
+  .btn-row{display:flex;gap:6px;flex-wrap:wrap;padding-top:6px;border-top:1px solid rgba(255,255,255,0.05)}
+  .btn{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:8px 12px;border:1px solid #333;background:transparent;color:#ccc;border-radius:6px;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:4px;min-height:36px}
+  .btn:hover{background:#fff;color:#000;border-color:#fff}.btn:active{transform:scale(.97)}
+  .btn.primary{background:#fff;color:#000;border-color:#fff}.btn.primary:hover{background:transparent;color:#fff}
+  .btn.playing{background:#2ecc40;color:#000;border-color:#2ecc40}.btn.playing:hover{background:#27ae60;border-color:#27ae60}
+  .btn svg{width:12px;height:12px;fill:currentColor;flex-shrink:0}
+  .hint-pill{position:fixed;bottom:20px;left:20px;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#444;border:1px solid #2a2a2f;padding:6px 14px;border-radius:20px;background:rgba(10,10,12,0.6);z-index:10;pointer-events:none;animation:fadeHint 4s forwards}
+  @keyframes fadeHint{0%,60%{opacity:1}100%{opacity:0}}
+  .hint-pill.show{animation:fadeHint 4s forwards}
+  .fps{position:fixed;top:8px;right:8px;font-family:'Space Mono',monospace;font-size:10px;color:#333;pointer-events:none;z-index:10}
+</style>
+<script src="controls.js" defer></script>
+<link rel="canonical" href="https://chriscooning.com/visual-experiments/liquid-glass.html">
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="panel" id="panel">
+  <div class="control-group"><label>Palette</label>
+    <select id="palette">
+      <option value="glasslands" selected>GlassLands</option>
+      <option value="ember">Ember</option>
+      <option value="lagoon">Lagoon</option>
+      <option value="mono">Silver</option>
+    </select>
+  </div>
+  <div class="control-group"><label>Speed <span class="val" id="speedVal">30</span></label><input type="range" id="speed" min="0" max="100" value="30"></div>
+  <div class="control-group"><label>Strands <span class="val" id="scaleVal">60</span></label><input type="range" id="scale" min="0" max="100" value="60"></div>
+  <div class="control-group"><label>Thickness <span class="val" id="thickVal">50</span></label><input type="range" id="thick" min="0" max="100" value="50"></div>
+  <div class="control-group"><label>Refraction <span class="val" id="refrVal">55</span></label><input type="range" id="refr" min="0" max="100" value="55"></div>
+  <div class="control-group"><label>Chroma <span class="val" id="chromaVal">55</span></label><input type="range" id="chroma" min="0" max="100" value="55"></div>
+  <div class="btn-row">
+    <button class="btn" id="playPause"><svg id="playIcon" viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg><svg id="pauseIcon" viewBox="0 0 24 24" style="display:none"><rect x="5" y="3" width="4" height="18"/><rect x="15" y="3" width="4" height="18"/></svg><span id="playLabel">Play</span></button>
+    <button class="btn primary" id="generate">Generate</button>
+    <button class="btn" id="save">PNG</button>
+  </div>
+</div>
+<div class="hint-pill" id="hintPill">Drag to pull the glass · H controls</div>
+<div class="fps" id="fps"></div>
+
+<script>
+// ═══════════════════════════════════════
+// Liquid glass over a moving gradient.
+//
+// Underneath, an animated gradient: slow pools of saturated colour, blurred
+// silver shapes ringed dark, dark hollows between.
+//
+// In front, glass. Its strands are the zero lines of two smooth noise fields
+// that keep evolving: a zero line of a smooth field is a curve that loops,
+// and as the field changes, loops grow, pinch, merge and split, so the glass
+// morphs as one piece with no cells or seams. Each strand is a round tube
+// of glass laid along its line (two fields at two scales, so strands cross,
+// the finer on top), with a gentle swell of glass everywhere between.
+//
+// Each pixel looks through the glass at the gradient, bent by the surface's
+// slope; seven wavelengths bend by slightly different amounts, so the sides
+// of each strand fringe with colour. Steep glass mirrors a silver room and
+// its steepest sides go nearly black; the crests catch two lights as long
+// streaks. A finger pulls the first field up, so a new loop of glass grows
+// under it and melts into the strands around.
+// ═══════════════════════════════════════
+const VS=`#version 300 es
+in vec2 aPos;void main(){gl_Position=vec4(aPos,0.,1.);}`;
+
+const FS=`#version 300 es
+precision highp float;
+uniform vec2 uRes;uniform float uDpr,uTime;
+uniform float uScale,uThick,uRefr,uChroma,uSeed;
+uniform vec3 uPtr;            // x, y (screen-height units), strength
+uniform vec3 uRamp[6];
+out vec4 outColor;
+
+// 3D simplex noise (Ashima Arts / Stefan Gustavson, MIT): smooth, so its
+// zero lines are smooth curves, and its third axis is time.
+vec3 mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
+vec4 mod289(vec4 x){return x-floor(x*(1./289.))*289.;}
+vec4 permute(vec4 x){return mod289(((x*34.)+1.)*x);}
+vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-.85373472095314*r;}
+float snoise(vec3 v){
+  const vec2 C=vec2(1./6.,1./3.);const vec4 D=vec4(0.,.5,1.,2.);
+  vec3 i=floor(v+dot(v,C.yyy));vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz);vec3 l=1.-g;vec3 i1=min(g.xyz,l.zxy);vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx;vec3 x2=x0-i2+C.yyy;vec3 x3=x0-D.yyy;
+  i=mod289(i);
+  vec4 p=permute(permute(permute(i.z+vec4(0.,i1.z,i2.z,1.))+i.y+vec4(0.,i1.y,i2.y,1.))+i.x+vec4(0.,i1.x,i2.x,1.));
+  float n_=.142857142857;vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z);vec4 y_=floor(j-7.*x_);
+  vec4 x=x_*ns.x+ns.yyyy;vec4 y=y_*ns.x+ns.yyyy;vec4 h=1.-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy);vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.+1.;vec4 s1=floor(b1)*2.+1.;vec4 sh=-step(h,vec4(0.));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x);vec3 p1=vec3(a0.zw,h.y);vec3 p2=vec3(a1.xy,h.z);vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
+  vec4 m=max(.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.);m=m*m;
+  return 42.*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+
+vec3 ramp(float h){
+  float x=fract(h)*6.;int i=int(x);float f=smoothstep(0.,1.,fract(x));
+  return mix(uRamp[i],uRamp[(i+1)%6],f);
+}
+// The animated gradient behind the glass.
+vec3 base(vec2 p,float t){
+  vec3 o=vec3(uSeed,uSeed*.7,0.);
+  vec2 w=vec2(snoise(vec3(p*.55,t*.05)+o),snoise(vec3(p*.55+11.,t*.05)+o));
+  vec2 u=p+w*.35;
+  vec3 c=ramp(.5+.5*snoise(vec3(u*.95,t*.04)+o)+.25*snoise(vec3(u*2.1+3.,t*.05)+o)+t*.006);
+  float gb=snoise(vec3(u*.9+5.,t*.06)+o);
+  float grey=smoothstep(.18,.42,gb);
+  vec3 g=vec3(.78,.78,.82)*(.18+.82*smoothstep(.18,.85,gb));
+  c=mix(c,g*g,grey);
+  c*=1.-.85*exp(-pow((gb-.2)/.07,2.));
+  c*=mix(.25,1.,smoothstep(-.55,.1,snoise(vec3(u*.5+21.,t*.03)+o)));
+  return c;
+}
+
+// A strand field: smooth noise, its domain warped by more noise, so its
+// zero lines curl. The finger lifts the first field into a mound.
+float field(vec2 p,float s,float t,float k){
+  vec3 o=vec3(uSeed*1.3+k*31.,uSeed+k*17.,k*7.);
+  vec2 w=vec2(snoise(vec3(p*s*.55,t*.07)+o),snoise(vec3(p*s*.55+9.,t*.07)+o));
+  float f=snoise(vec3(p*s+w*.55,t*.09)+o.yzx);
+  if(k<.5&&uPtr.z>0.){vec2 d=p-uPtr.xy;f+=uPtr.z*1.6*exp(-dot(d,d)/(.018+.02*uThick));}
+  return f;
+}
+// One layer of folds. The glass is a sheet that steps up sharply wherever
+// the field crosses zero and is nearly flat elsewhere, so the fold lines are
+// the zero lines: curves that loop, merge and split as the field evolves.
+// Returns the sheet's slope (x, y) and how far into a fold this is (z).
+vec3 fold(vec2 p,float s,float t,float k,float w){
+  float e=.0015;
+  float f=field(p,s,t,k);
+  vec2 g=vec2(field(p+vec2(e,0.),s,t,k)-f,field(p+vec2(0.,e),s,t,k)-f)/e;
+  // A broad bend, and inside it a narrow, sharp step: the glass's edge.
+  float u=clamp((f+w)/(2.*w),0.,1.);
+  float wn=w*.16;
+  float un=clamp((f+wn)/(2.*wn),0.,1.);
+  float ds=6.*u*(1.-u)/(2.*w)*.7+6.*un*(1.-un)/(2.*wn)*.3;
+  return vec3(g*(ds+.12),4.*un*(1.-un));
+}
+vec3 spectral(float w){
+  return vec3(exp(-pow((w-.08)/.26,2.)),exp(-pow((w-.5)/.22,2.)),exp(-pow((w-.92)/.26,2.)));
+}
+vec3 aces(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+
+void main(){
+  vec2 px=vec2(gl_FragCoord.x,uRes.y-gl_FragCoord.y);
+  vec2 p=px/uRes.y;
+  float t=uTime;
+  float s=.45+1.3*uScale;
+  float w=.2+.5*uThick;
+  // Two layers of folds, broad and fine; the fine lie over the broad.
+  vec3 A=fold(p,s,t,0.,w);
+  vec3 B=fold(p,s*1.35,t*1.15,1.,w*.85);
+  vec3 C=fold(p,s*2.2,t*1.3,2.,w*.45);
+  vec2 slope=(A.xy*.85+B.xy*.65+C.xy*.3)*.11;
+  float top=max(B.z,C.z*.7);
+  float tz=max(A.z,top);
+  vec3 N=normalize(vec3(-slope,1.));
+
+  // Through the glass, at seven wavelengths.
+  float refr=.05+.2*uRefr;
+  vec3 acc=vec3(0.),wsum=vec3(0.);
+  for(int k=0;k<7;k++){
+    float w=float(k)/6.,sc=1.+uChroma*.8*(w-.5);
+    vec3 sp=spectral(w);
+    acc+=base(p-N.xy*refr*sc,t)*sp;wsum+=sp;
+  }
+  vec3 col=acc/wsum;
+  col*=mix(vec3(1.),vec3(.9,.95,.97),tz*.3);
+  // Steep glass mirrors the room: silver above, dark below; the steepest
+  // sides go nearly black.
+  float steep=1.-N.z;
+  vec3 rv=vec3(2.*N.z*N.xy,2.*N.z*N.z-1.);
+  vec3 room=mix(vec3(.03,.035,.045),vec3(.82,.86,.92),smoothstep(-.6,.5,-rv.y));
+  col=mix(col,room,(.02+.98*pow(steep,4.))*.4);
+  col*=mix(1.,.45,smoothstep(.7,.92,steep));
+  // Each strand's two edges: a hairline of light just inside, a dark line
+  // just outside it, as the glass turns away.
+  float edge=max(max(A.z*A.z*(1.-.5*top),B.z*B.z),C.z*C.z*.6)*smoothstep(.2,.6,steep);
+  col=mix(col,vec3(.9,.93,.97),edge*.55);
+  // Two lights: a sharp key up and to the left, a softer fill to the right.
+  col+=vec3(1.)*pow(max(dot(rv,normalize(vec3(-.35,-.45,.82))),0.),110.)*1.8;
+  col+=vec3(.95,.97,1.)*pow(max(dot(rv,normalize(vec3(.55,.3,.78))),0.),35.)*.35;
+  vec2 vg=px/uRes-.5;
+  col*=1.-.35*dot(vg,vg);
+  col=pow(aces(col*.95),vec3(1.12));
+  col+=(hash(gl_FragCoord.xy+fract(t*7.)*91.)-.5)*.02;
+  outColor=vec4(pow(clamp(col,0.,1.),vec3(1./2.2)),1.);
+}`;
+
+// ═══════════════════════════════════════
+// PALETTES: six colours the gradient cycles through (as written, sRGB).
+// ═══════════════════════════════════════
+const PALETTES={
+  glasslands:['#ff5a1f','#17b3a3','#e8283c','#c9c9d0','#ff7a3d','#3fd6b0'],
+  ember:['#ff3d1f','#ff9a1a','#ffd27a','#b9b2a8','#c2185b','#5a1a8c'],
+  lagoon:['#0fa3b1','#2ed29e','#b5e8f0','#c0c4cc','#2460dc','#6a3fd1'],
+  mono:['#f2f2f4','#9a9aa2','#d4d4da','#5c5c64','#b8b8c0','#e6e6ea'],
+};
+const lin=(h)=>[1,3,5].map((i)=>Math.pow(parseInt(h.slice(i,i+2),16)/255,2.2));
+
+const $=(id)=>document.getElementById(id);
+const canvas=$('canvas');
+const gl=canvas.getContext('webgl2',{antialias:false,alpha:false,preserveDrawingBuffer:false});
+let W,H,DPR,dprScale=1;
+function resize(){
+  W=innerWidth;H=innerHeight;
+  DPR=Math.min(devicePixelRatio||1,2,Math.sqrt(3e6/(W*H)))*dprScale;
+  canvas.width=Math.round(W*DPR);canvas.height=Math.round(H*DPR);
+}
+resize();
+
+function compile(type,src){
+  const sh=gl.createShader(type);gl.shaderSource(sh,src);gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+let U={};
+function initGL(){
+  const prog=gl.createProgram();
+  gl.attachShader(prog,compile(gl.VERTEX_SHADER,VS));gl.attachShader(prog,compile(gl.FRAGMENT_SHADER,FS));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,'aPos');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  ['uRes','uDpr','uTime','uScale','uThick','uRefr','uChroma','uSeed','uPtr','uRamp'].forEach((n)=>U[n]=gl.getUniformLocation(prog,n));
+}
+
+// ═══════════════════════════════════════
+// STATE, POINTER, RENDER
+// ═══════════════════════════════════════
+const AT=new URLSearchParams(location.search).get('at');
+let time=AT!==null?+AT:20+Math.random()*40,seed=AT!==null?3:Math.random()*50;
+let playing=false,animId=null,last=0;
+// The finger: where it is, and how hard it pulls (eases in while held,
+// out after), so a loop of glass swells under it and then melts away.
+const ptr={x:0,y:0,s:0,down:false};
+function toP(e){return[e.clientX/innerHeight,e.clientY/innerHeight];}
+canvas.addEventListener('pointerdown',(e)=>{ptr.down=true;[ptr.x,ptr.y]=toP(e);canvas.setPointerCapture(e.pointerId);if(!playing)render();});
+canvas.addEventListener('pointermove',(e)=>{if(ptr.down){[ptr.x,ptr.y]=toP(e);if(!playing)render();}});
+const up=()=>{ptr.down=false;};
+canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);
+
+const v=(id)=>+$(id).value/100;
+function render(){
+  gl.viewport(0,0,canvas.width,canvas.height);
+  gl.uniform2f(U.uRes,canvas.width,canvas.height);gl.uniform1f(U.uDpr,DPR);
+  gl.uniform1f(U.uTime,time);gl.uniform1f(U.uSeed,seed);
+  gl.uniform1f(U.uScale,v('scale'));gl.uniform1f(U.uThick,v('thick'));
+  gl.uniform1f(U.uRefr,v('refr'));gl.uniform1f(U.uChroma,v('chroma'));
+  gl.uniform3f(U.uPtr,ptr.x,ptr.y,ptr.s);
+  gl.uniform3fv(U.uRamp,new Float32Array(PALETTES[$('palette').value].flatMap(lin)));
+  gl.drawArrays(gl.TRIANGLES,0,3);
+}
+// On a slow GPU, drop the drawing resolution a step at a time until the
+// frame rate holds (down to about half), rather than stutter.
+let slow=0;
+function frame(ts){
+  const dt=Math.min(.1,(ts-last)/1000||0);
+  if(last&&ts-last>0){
+    $('fps').textContent=Math.round(1000/(ts-last))+' fps';
+    slow=ts-last>28?slow+1:Math.max(0,slow-1);
+    if(slow>40&&dprScale>.5){dprScale*=.8;slow=0;resize();}
+  }
+  last=ts;
+  if(AT===null)time+=dt*(.1+1.9*v('speed'));
+  ptr.s+=((ptr.down?1:0)-ptr.s)*Math.min(1,dt*(ptr.down?2.5:.8));
+  render();
+  if(playing)animId=requestAnimationFrame(frame);
+}
+function togglePlay(){
+  playing=!playing;
+  $('playPause').classList.toggle('playing',playing);
+  $('playIcon').style.display=playing?'none':'block';$('pauseIcon').style.display=playing?'block':'none';
+  $('playLabel').textContent=playing?'Pause':'Play';
+  if(playing){last=0;animId=requestAnimationFrame(frame);}else{cancelAnimationFrame(animId);$('fps').textContent='';}
+}
+
+['speed','scale','thick','refr','chroma'].forEach((id)=>{
+  $(id).addEventListener('input',()=>{$(id+'Val').textContent=$(id).value;if(!playing)render();});
+});
+$('palette').addEventListener('change',()=>{if(!playing)render();});
+$('playPause').addEventListener('click',togglePlay);
+$('generate').addEventListener('click',()=>{
+  seed=Math.random()*50;
+  const pick=(id,a,b)=>{$(id).value=Math.round(a+Math.random()*(b-a));$(id+'Val').textContent=$(id).value;};
+  pick('scale',20,80);pick('thick',25,80);pick('refr',30,85);pick('chroma',25,90);
+  const pal=$('palette');pal.selectedIndex=Math.floor(Math.random()*pal.options.length);
+  if(!playing)render();
+});
+$('save').addEventListener('click',()=>{render();const a=document.createElement('a');a.download='liquid-glass-'+Date.now()+'.png';a.href=canvas.toDataURL('image/png');a.click();});
+
+const panel=$('panel'),hintPill=$('hintPill');
+document.addEventListener('keydown',(e)=>{if(e.key==='h'||e.key==='H'){panel.classList.toggle('hidden');hintPill.classList.remove('show');void hintPill.offsetWidth;hintPill.classList.add('show');}});
+let rT;
+addEventListener('resize',()=>{clearTimeout(rT);rT=setTimeout(()=>{resize();if(!playing)render();},100);});
+
+if(!gl){hintPill.textContent='This piece needs WebGL2';hintPill.style.animation='none';hintPill.style.color='#aaa';}
+else{initGL();togglePlay();}
+</script>
+<!-- GoatCounter: cookie-free page counts (chriscooning.goatcounter.com). Counts inside the experiments viewer's frames too; skips automated browsers. -->
+<script>
+if(!navigator.webdriver){window.goatcounter={allow_frame:true,path:function(){return location.pathname}};var gc=document.createElement('script');gc.async=true;gc.dataset.goatcounter='https://chriscooning.goatcounter.com/count';gc.src='//gc.zgo.at/count.js';document.body.appendChild(gc);}
+</script>
+</body>
+</html>
