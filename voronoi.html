@@ -62,7 +62,7 @@
       <option value="cells">Cells</option>
     </select>
   </div>
-  <div class="control-group"><label>Points <span class="val" id="countVal">90</span></label><input type="range" id="count" min="10" max="500" value="90"></div>
+  <div class="control-group"><label>Points <span class="val" id="countVal">36</span></label><input type="range" id="count" min="10" max="500" value="36"></div>
   <div class="control-group"><label>Relax Speed <span class="val" id="relaxVal">12</span></label><input type="range" id="relax" min="0" max="100" value="12"></div>
   <div class="control-group"><label>Noise Amount <span class="val" id="noiseVal">4</span></label><input type="range" id="noise" min="0" max="100" value="4"></div>
   <div class="control-group"><label>Noise Speed <span class="val" id="nSpeedVal">6</span></label><input type="range" id="nSpeed" min="0" max="100" value="6"></div>
@@ -160,7 +160,7 @@ function newSeed(x,y,g=gauss(),m=1,mT=1){return{x,y,ph:Math.random(),g,m,mT};}
 function baseSize(s){const v=+$('variety').value/100;return Math.min(3,Math.max(.35,Math.exp(s.g*.6*v)));}
 function seedSize(s){return Math.min(MAX_SIZE,baseSize(s)*s.m);}
 function initSeeds(n){seeds=[];for(let i=0;i<n;i++)seeds.push(newSeed(Math.random()*W,Math.random()*H));}
-initSeeds(90);
+initSeeds(36);
 
 let grid={G:1,gw:1,gh:1,start:null,count:null,order:null};
 function buildGrid(){
@@ -357,7 +357,9 @@ vec3 gradientBase(vec2 p,float t){
   vec2 w=vec2(vnoise(uv*1.1+vec2(t*.02,0.)),vnoise(uv*1.1+vec2(5.2,t*.017)));
   vec2 u2=uv+w*.55;
   float h=.5+.5*vnoise(u2*.9)+.12*vnoise(u2*2.1+7.);
-  vec3 c=(uFilm==1?glassRamp(h*1.3+t*.004):pal(h))*.85;
+  vec3 c=(uFilm==1?glassRamp(h*1.3+t*.004):pal(h));
+  c=mix(c,vec3(dot(c,vec3(.3,.5,.2))),.15)*.62;
+  c*=mix(.05,1.,smoothstep(-.3,.35,vnoise(u2*.75+vec2(9.,t*.01))));
   vec3 ce=cellular(u2*1.3+vec2(3.,t*.008));
   float on=smoothstep(.62,.72,ce.z);
   float sph=sqrt(max(0.,1.-pow(ce.x/.42,2.)));
@@ -377,7 +379,7 @@ void main(){
   float t=uTime;
   // Wobble: bend space a little so the walls sway like soap, not ruled lines.
   vec2 wq=p/(uG*.9);
-  vec2 q=p+uWobble*uG*.22*vec2(vnoise(wq+vec2(0.,t*.04)),vnoise(wq+vec2(5.2,1.3)-vec2(t*.035,0.)));
+  vec2 q=p+uWobble*uG*(uMode==3?.6:.22)*vec2(vnoise(wq+vec2(0.,t*.04)),vnoise(wq+vec2(5.2,1.3)-vec2(t*.035,0.)));
 
   ivec2 gc=ivec2(floor(q/uG));
   // Pass 1: nearest seed (power distance, so bigger bubbles reach further).
@@ -418,7 +420,7 @@ void main(){
   vec2 gds=se>0.?-sg/se:vec2(0.);
   // Rounded corners: a fillet where two walls meet. Past the fillet (d < 0)
   // is the Plateau border, the pocket of liquid where three walls join.
-  float rc=uRound*uG*.3;
+  float rc=uMode==3?R*(.35+.55*uRound):uRound*uG*.3;
   vec2 m=max(vec2(rc)-vec2(wa,wb),0.);
   float d=min(wa,wb)>=rc?min(wa,wb):rc-length(m);
   float di=max(d,0.);
@@ -428,53 +430,47 @@ void main(){
 
   if(uMode==3){
     // ── Liquid glass over a moving gradient ──
-    // The glass is one smooth surface over all the seeds: each adds a soft
-    // mound (sized by its bubble), and where mounds meet they melt into one,
-    // like metaballs. The surface stands up steeply around a level of that
-    // field, so each merged blob has a curved rim of thick glass that bends
-    // the light hardest, and stays gently curved on top. The gradient behind
-    // is seen through it, bent by the slope; seven wavelengths bend by
-    // different amounts, so every rim is fringed with colour. Steep glass
-    // mirrors the dark room, so rims read dark with sharp glints.
-    float H=0.;vec2 gH=vec2(0.);
-    for(int dy=-${SEARCH};dy<=${SEARCH};dy++)for(int dx=-${SEARCH};dx<=${SEARCH};dx++){
-      ivec2 c=gc+ivec2(dx,dy);
-      if(c.x<0||c.y<0||c.x>=uGridSize.x||c.y>=uGridSize.y)continue;
-      vec4 g=texelFetch(uGrid,c,0);int st=int(g.x),cn=int(g.y);
-      for(int k=0;k<64;k++){
-        if(k>=cn)break;
-        vec4 sb=seedAt(st+k);vec2 o=q-sb.xy;
-        float sg=uG*.5*sb.w*(.58+.36*uRound);
-        float e=exp(-dot(o,o)/(2.*sg*sg));
-        H+=e;gH-=e*o/(sg*sg);
-      }
-    }
-    float iso=.5,lo=iso-.22,hi=iso+.55;
-    float tz=clamp((H-lo)/(hi-lo),0.,1.);
-    vec2 grad=gH*(6.*tz*(1.-tz)/(hi-lo)+.4)*uG*.4;
-    vec2 fq=q/(uG*2.2)+vec2(t*.015,-t*.01);
-    float fe=.05;
-    float f0=vnoise(fq),fx=vnoise(fq+vec2(fe,0.)),fy=vnoise(fq+vec2(0.,fe));
-    grad+=uWobble*.35*vec2(fx-f0,fy-f0)/fe;
+    // The glass is strands: thick round tubes of glass, one loop round the
+    // inside of each cell's rounded outline, so neighbouring loops lie side
+    // by side; space is warped hard here, so the loops sway and bend. A tube is steep at its sides and flat
+    // along its crest. The gradient behind is seen through it, bent by the
+    // slope; seven wavelengths bend by different amounts, so every strand's
+    // sides fringe with colour. Steep glass mirrors the dark room, so the
+    // sides read dark; the crests catch the lights as long streaks.
+    // Each cell's loop runs just inside its rounded outline, so the loops of
+    // neighbouring cells lie side by side and press together at the walls.
+    float rA=uG*(.13+.1*uEdge);
+    vec2 nIn=length(gds)>1e-4?normalize(gds):vec2(0.);
+    float ua=(d-rA)/rA;
+    float zA=sqrt(max(0.,1.-ua*ua));
+    vec2 grad=-nIn*(ua/max(zA,.08))*(abs(ua)<1.?1.:0.)*1.2;
+    float tz=zA;
     vec3 N=normalize(vec3(-grad,1.));
-    float refr=uG*.9;
+    float refr=uG*1.25;
     vec3 acc=vec3(0.),wsum=vec3(0.);
     for(int k=0;k<7;k++){
-      float w=float(k)/6.,sc=1.+uChroma*1.3*(w-.5);
+      float w=float(k)/6.,sc=1.+uChroma*.45*(w-.5);
       vec3 sw=spectral(w);
       acc+=gradientBase(p-N.xy*refr*sc,t)*sw;wsum+=sw;
     }
     col=acc/wsum;
     // Thick glass takes a little light and a teal cast.
-    col*=mix(vec3(1.),vec3(.72,.86,.88),tz*.7);
+    col*=mix(vec3(1.),vec3(.8,.9,.92),tz*.45);
     float steep=1.-N.z;
-    col*=mix(1.,.15,smoothstep(.25,.62,steep));
+    // Steep glass mirrors the room: silver, bright above, dark below; the
+    // very steepest sides go nearly black.
+    vec3 rvv=vec3(2.*N.z*N.xy,2.*N.z*N.z-1.);
+    vec3 room=mix(vec3(.04,.05,.06),vec3(.8,.85,.9),smoothstep(-.6,.5,-rvv.y));
+    float F=.04+.96*pow(steep,2.5);
+    col=mix(col,room,F*.75);
+    col*=mix(1.,.3,smoothstep(.6,.85,steep));
     vec3 rv=vec3(2.*N.z*N.xy,2.*N.z*N.z-1.);
-    col+=vec3(1.)*pow(max(dot(rv,normalize(vec3(-.35,-.45,.82))),0.),90.)*1.5;
+    col+=vec3(1.)*pow(max(dot(rv,normalize(vec3(-.35,-.45,.82))),0.),110.)*1.8;
     col+=vec3(.95,.97,1.)*pow(max(dot(rv,normalize(vec3(.55,.3,.78))),0.),35.)*.35;
     vec2 vg=p/vec2(uRes/uDpr)-.5;
     col*=1.-.3*dot(vg,vg);
-    col=aces(col*1.15);
+    col=aces(col*.95);
+    col=pow(col,vec3(1.12));
     col+=(hash(gl_FragCoord.xy+fract(t*7.)*91.)-.5)*.02;
   }else if(uMode==0){
     // ── Soap foam, as in a macro photograph under a softbox ──
@@ -699,7 +695,14 @@ $('save').addEventListener('click',()=>{render();const a=document.createElement(
 });
 $('edgeW').addEventListener('input',()=>{$('edgeWVal').textContent=(+$('edgeW').value/10).toFixed(1);if(!playing)render();});
 $('palette').addEventListener('change',()=>{if(!playing)render();});
-$('drawMode').addEventListener('change',()=>{if(!playing)render();});
+// Each style has its own natural density: big sweeping loops of glass, a
+// finer foam of bubbles. Switching style moves Points to it.
+const STYLE_POINTS={glass:36,soap:90,oil:90,cells:90};
+$('drawMode').addEventListener('change',()=>{
+  const n=STYLE_POINTS[$('drawMode').value];
+  if(n){$('count').value=n;$('count').dispatchEvent(new Event('input'));}
+  if(!playing)render();
+});
 
 // Adjust seed count dynamically
 $('count').addEventListener('input',()=>{
